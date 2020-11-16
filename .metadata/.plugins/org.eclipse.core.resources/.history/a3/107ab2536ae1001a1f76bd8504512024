@@ -1,0 +1,53 @@
+// Copyright 2020 (C), Oracle and/or its affiliates. All rights reserved.
+package com.oracle.cgbu.cne.nrf.hooks.releases;
+
+import java.sql.SQLException;
+import java.util.Arrays;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import com.oracle.cgbu.cne.nrf.domain.NrfSystemOptions;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.eclipse.jetty.http.HttpMethod;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Component;
+
+import com.oracle.cgbu.cne.nrf.domain.NrfSystemOptions;
+import com.oracle.cgbu.cne.nrf.hooks.postinstall.ConfigurationClient;
+import com.oracle.releasemanagement.Release;
+import com.oracle.releasemanagement.ReleaseHooks;
+import com.oracle.releasemanagement.ReleaseVersion;
+
+@Component
+public class ReleaseHelmHook_1_8_0 extends Release implements ReleaseHooks {
+
+	private static final Logger logger = LogManager.getLogger(ReleaseHelmHook_1_8_0.class);
+	@Autowired
+	ConfigurationClient configureNrf;
+	/*
+     * Assigned the release-version (1,8,0) based on the ReadMe file mentioned
+     * in the upgrade-common jar.
+     */
+	@Override
+	public ReleaseVersion getReleaseVersion() {
+		// TODO Auto-generated method stub
+		return new ReleaseVersion(1, 8, 0);
+	}
+
+	
+	@Override
+	public void postUpgrade()
+	{
+		Object retVal = configureNrf.sendRequest( "GET",null);
+		if((retVal !=null) && (retVal instanceof NrfSystemOptions))
+		{
+			NrfSystemOptions nrfSystemOptions = (NrfSystemOptions)retVal;
+		}
+		//modify it
+		//modify
+		configureNrf.sendRequest( "PUT",nrfSystemOptions);
+	}
+	
+	
+
+}

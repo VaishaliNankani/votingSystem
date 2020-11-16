@@ -1,0 +1,21 @@
+package com.oracle.oci.votingservice.domain;
+
+import javax.validation.constraints.NotNull;
+
+import com.fasterxml.jackson.annotation.JsonInclude;
+@JsonInclude(JsonInclude.Include.NON_NULL)
+public class CandidateData {
+	
+	@NotNull
+	private long candidateId;	
+	@NotNull
+	private String  candidateName = null;
+	@NotNull
+	private String  party = null;
+	@NotNull
+	private String constituency  = null;	
+	@NotNull
+	private Gender gender  = null;
+	
+	private long numVotes;
+}

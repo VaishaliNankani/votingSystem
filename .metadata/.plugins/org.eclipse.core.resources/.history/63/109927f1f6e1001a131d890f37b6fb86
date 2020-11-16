@@ -1,0 +1,259 @@
+package com.oracle.cgbu.cne.nrf.service.helper;
+// Copyright 2020 (C), Oracle and/or its affiliates. All rights reserved.
+
+
+
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+import javax.servlet.http.HttpServletRequest;
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.stereotype.Component;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.oracle.cgbu.cne.nrf.NrfException;
+import com.oracle.cgbu.cne.nrf.dao.NfInstance;
+import com.oracle.cgbu.cne.nrf.dao.NfInstancesRepository;
+import com.oracle.cgbu.cne.nrf.domain.ErrorCondition;
+import com.oracle.cgbu.cne.nrf.domain.ErrorInfo;
+import com.oracle.cgbu.cne.nrf.domain.ForwardingData;
+import com.oracle.cgbu.cne.nrf.domain.GenericResponse;
+import com.oracle.cgbu.cne.nrf.domain.NfProfile;
+import com.oracle.cgbu.cne.nrf.domain.NrfEngSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.NrfSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.ProblemDetails;
+import com.oracle.cgbu.cne.nrf.service.NfUpgradeServiceImpl;
+
+@Component
+public class ValidationHelper {
+	private static Logger logger = LogManager.getLogger(ValidationHelper.class);
+	private static final  String VERSION = "v1";
+	
+	@Autowired
+	NfInstancesRepository nfInstancesRepository;
+	
+	private ForwardingData forwardingData;
+	
+	private HttpServletRequest request;
+	
+	private NrfSystemOptions nrfSystemOptions;
+	
+	private NrfEngSystemOptions nrfEngSystemOptions;
+	
+	private static final ObjectMapper objectMapper= new ObjectMapper();
+
+	@Autowired
+	NfUpgradeServiceImpl nfUpgradeServiceImpl;
+	
+	public NfUpgradeServiceImpl getNfUpgradeServiceImpl() {
+		return nfUpgradeServiceImpl;
+	}
+
+	public void setNfUpgradeServiceImpl(NfUpgradeServiceImpl nfUpgradeServiceImpl) {
+		this.nfUpgradeServiceImpl = nfUpgradeServiceImpl;
+	}
+
+	public GenericResponse performNfAuthenticationBasedOnNfInstance(NfInstance nfInstance) throws NrfException {
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		String ocXfccDnsHeaderValue = parseOcXfccDnsHeader();
+		logMsg.clear();
+		logMsg.put("logMsg", "Entering performNfAuthenticationBasedOnNfInstance function");
+		logMsg.put("nfInstance", nfInstance);
+		logMsg.put("ocXfccDnsHeaderValue", ocXfccDnsHeaderValue);
+		logMsg.put("isforwardedRequest", forwardingData.isForwarded());
+		logger.info(logMsg.toString());
+		GenericResponse genericResponse = new GenericResponse();
+		if(!forwardingData.isForwarded()) {
+			//Authentication to be performed at Forwarding NRF
+			return validateOriginalRequest(nfInstance,ocXfccDnsHeaderValue);
+		}else {
+			//Authentication to be performed in the case of forwarded request
+			//Function implementation to be done
+			genericResponse.setResponse("ForwardedRequest");
+			return genericResponse;
+		}		
+	}
+		
+	public String parseOcXfccDnsHeader() {
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		logMsg.clear();
+		logMsg.put("logMsg", "Parsing OC-XFCC-DNS  header");
+		logger.info(logMsg.toString());	
+		String ocDnsHeaderValue = this.request.getHeader("OC-XFCC-DNS");
+		logMsg.put("OC-XFCC-DNS header recieved with value", ocDnsHeaderValue);
+		if(ocDnsHeaderValue == null) {
+			logMsg.clear();
+			logger.warn(logMsg.toString());
+		}else {
+			logger.info(logMsg.toString());
+		}		
+		return ocDnsHeaderValue;
+	}
+	
+	public GenericResponse getNfAuthenticationFailureRespByErrorCond(ErrorCondition errorCondition){
+		List<ErrorInfo> errorInfoList = nrfSystemOptions.getNfAuthenticationSystemOptions().getNfAuthenticationErrorResponses();		
+		ProblemDetails problemDetails = null;		
+		GenericResponse genericResponse = new GenericResponse();
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		logMsg.clear();
+		logMsg.put("logMsg", "Entering getNfAuthenticationFailureRespByErrorCond function");
+		logMsg.put("errorCondition", errorCondition);
+		logMsg.put("errorInfoList", errorInfoList);
+		logger.info(logMsg.toString());
+		for(ErrorInfo errorInfo : errorInfoList)
+		{
+			if(errorInfo.getErrorCondition().equals(errorCondition)){
+				logMsg.clear();
+				logMsg.put("logMsg","errorInfo selected for errorCondition: "+errorCondition);
+				logMsg.put("errorInfo.errorCode", errorInfo.getErrorCode());
+				logMsg.put("errorInfo.errorResponse", errorInfo.getErrorResponse());
+				logger.info(logMsg.toString());				
+				List<String> retryAfterErrorCodesList = nrfEngSystemOptions.getGeneralEngSystemOptions().getRetryAfterErrorCodes();		
+				List<String> redirectURLErrorCodesList = nrfEngSystemOptions.getGeneralEngSystemOptions().getRedirectUrlErrorCodes();
+				int errorCode = errorInfo.getErrorCode();
+				String errorCodeGroup = null;
+				if(HttpStatus.valueOf(errorCode).is3xxRedirection()) {
+					errorCodeGroup = "3xx";
+				}else if(HttpStatus.valueOf(errorCode).is4xxClientError()) {
+					errorCodeGroup = "4xx";
+				}else if(HttpStatus.valueOf(errorCode).is5xxServerError() ) {
+					errorCodeGroup = "5xx";
+				}
+				//Setting the RetryAfter and Location headers by comparing with ErrorCodes in EngSystemOptions
+				HttpHeaders httpHeaders = new HttpHeaders();
+				if(retryAfterErrorCodesList!=null && (retryAfterErrorCodesList.contains(String.valueOf(errorCode)) || retryAfterErrorCodesList.contains(errorCodeGroup))) {
+					httpHeaders.add(HttpHeaders.RETRY_AFTER, String.valueOf(errorInfo.getRetryAfter().toSeconds()));
+					logMsg.clear();
+					logMsg.put("logMsg", "Setting HttpHeaders.RETRY_AFTER");
+					logger.info(logMsg.toString());
+				}
+				if(redirectURLErrorCodesList!=null && (redirectURLErrorCodesList.contains(String.valueOf(errorCode)) || redirectURLErrorCodesList.contains(errorCodeGroup))) {	
+					httpHeaders.add(HttpHeaders.LOCATION, errorInfo.getRedirectUrl());
+					logMsg.clear();
+					logMsg.put("logMsg", "Setting HttpHeaders.LOCATION");
+					logger.info(logMsg.toString());
+					
+				}					
+				problemDetails = new ProblemDetails();
+				problemDetails.setStatus((int)errorInfo.getErrorCode());
+				problemDetails.setDetail(errorInfo.getErrorResponse());
+				problemDetails.setTitle(errorInfo.getErrorResponse());
+				problemDetails.setCause(errorInfo.getErrorResponse());
+				genericResponse.setResponse(problemDetails);
+				genericResponse.setHeaders(httpHeaders);
+				logMsg.clear();
+				logMsg.put("logMsg", "Exit from getNfAuthenticationFailureRespByErrorCond function");
+				logMsg.put("genericResponse", genericResponse);
+				logger.info(logMsg.toString());
+				return genericResponse;
+			}
+		}
+		logMsg.clear();
+		logMsg.put("logMsg", "Exit from getNfAuthenticationFailureRespByErrorCond function");
+		logMsg.put("genericResponse", genericResponse);
+		logger.info(logMsg.toString());
+		return genericResponse;		
+	}
+	
+	public GenericResponse validateOriginalRequest(NfInstance nfInstance, String ocXfccDnsHeaderValue) {
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		logMsg.clear();
+		logMsg.put("logMsg", "Entering validateOriginalRequest function");
+		logMsg.put("nfInstance", nfInstance);
+		logMsg.put("ocXfccDnsHeaderValue", ocXfccDnsHeaderValue);
+		logger.info(logMsg.toString());
+		GenericResponse genericResponse = new GenericResponse();
+		boolean nfFqdnAuthenticationFailure = false;
+		String failureCondition = null;
+		NfProfile nfProfile = null;
+		if(nfInstance==null) {
+			nfFqdnAuthenticationFailure = true;
+			failureCondition = "Could not find nfInstance";
+		}
+		else {
+			//Retrieve nfProfile from fetched nfInstance
+			try {
+				String doc = nfUpgradeServiceImpl.findNfProfileWithVersion(VERSION, nfInstance);
+				nfProfile = objectMapper.readValue(doc, NfProfile.class);
+			}
+			catch (Exception e) {
+				logMsg.clear();
+				logMsg.put("logMsg", "Unexpected error while retrieving nfProfile from nfInstance");
+				logMsg.put("nfInstance", nfInstance);
+				logMsg.put("Message", e.getMessage());
+				logger.error(logMsg.toString());
+				ProblemDetails problemDetails = ProblemDetails.forInternalError();
+				problemDetails.setCause("Unexpected error while retrieving nfProfile from nfInstance");
+				genericResponse.setResponse(problemDetails);
+				return genericResponse;
+			}
+			if(nfProfile.getFqdn()==null) {
+				logMsg.clear();
+				logMsg.put("logMsg", "Fqdn not present in nfProfile");
+				logMsg.put("nfProfile", nfProfile);
+				logger.error(logMsg.toString());
+				//Return NfAuthentication Failure Error
+				nfFqdnAuthenticationFailure = true;
+				failureCondition = "Fqdn not present in nfProfile";
+			}else {
+				//Validate profile fqdn with ocXfccDnsHeaderValue
+				if (!nfProfile.getFqdn().equals(ocXfccDnsHeaderValue)) {
+					logMsg.clear();
+					logMsg.put("logMsg", "Fqdn in nfProfile does not match with ocXfccDnsHeaderValue");
+					logMsg.put("nfProfile.getFqdn", nfProfile.getFqdn());
+					logMsg.put("ocXfccDnsHeaderValue", ocXfccDnsHeaderValue);
+					logger.error(logMsg.toString());
+					//Return NfAuthentication Failure Error
+					nfFqdnAuthenticationFailure = true;
+					failureCondition = "Fqdn in nfProfile does not match with ocXfccDnsHeaderValue";
+				}					
+			}
+		}
+		if(nfFqdnAuthenticationFailure) {
+			genericResponse = getNfAuthenticationFailureRespByErrorCond(ErrorCondition.Nf_Fqdn_Authentication_Failure);
+			ProblemDetails problemDetails = (ProblemDetails)genericResponse.getResponse();
+			problemDetails.setCause(failureCondition);
+			genericResponse.setResponse(problemDetails);
+			logMsg.clear();
+			logMsg.put("logMsg", "Returning from validateOriginalRequest()");
+			logMsg.put("Generic Response", genericResponse);
+			logger.error(logMsg.toString());
+			return genericResponse;
+		}
+		//If NfAuthentication is successful
+		logMsg.clear();
+		logMsg.put("logMsg", "Fqdn in nfProfile matches with ocXfccDnsHeaderValue");
+		logMsg.put("nfProfile.getFqdn()", nfProfile.getFqdn());
+		logMsg.put("ocXfccDnsHeaderValue", ocXfccDnsHeaderValue);
+		logger.info(logMsg.toString());
+		//Return NfAuthentication success
+		genericResponse.setResponse("Success");
+		logMsg.clear();
+		logMsg.put("logMsg", "Returning from validateOriginalRequest()");
+		logMsg.put("Msg", "Nf Authentication successful");
+		logMsg.put("Generic Response", genericResponse);
+		logger.info(logMsg.toString());
+		return (genericResponse);
+	}
+
+	public void setValidationParameters(ForwardingData forwardingData,HttpServletRequest request,NrfSystemOptions nrfSystemOptions,NrfEngSystemOptions nrfEngSystemOptions) {
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		logMsg.put("logMsg", "setValidationParameters called");
+		logMsg.put("forwardingData", forwardingData);
+		logMsg.put("request", request);
+		logMsg.put("nrfSystemOptions", nrfSystemOptions);
+		logMsg.put("nrfEngSystemOptions", nrfEngSystemOptions);
+		logger.info(logMsg.toString());
+
+		this.forwardingData = forwardingData;
+		this.request = request;
+		this.nrfSystemOptions = nrfSystemOptions;
+		this.nrfEngSystemOptions = nrfEngSystemOptions;
+	}
+}

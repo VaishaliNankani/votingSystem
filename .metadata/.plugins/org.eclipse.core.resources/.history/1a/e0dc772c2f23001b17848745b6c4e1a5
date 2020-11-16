@@ -1,0 +1,56 @@
+package com.oracle.oci.votingservice.domain;
+
+import javax.validation.constraints.NotNull;
+
+public class CandidateData {
+	public RegistrationData(long voterId, String voterName, String address, 
+			long phoneNumber, boolean voteCasted) {
+		super();
+		this.voterId = voterId;
+		this.voterName = voterName;
+		this.address = address;
+		this.phoneNumber = phoneNumber;
+		this.voteCasted = voteCasted;
+	}
+	@NotNull
+	private long voterId;	
+	@NotNull
+	private String  voterName = null;
+	@NotNull
+	private String address  = null;
+	@NotNull
+	private long phoneNumber  ;
+	//wont be received as input
+	private boolean voteCasted ;
+	
+	public String getVoterName() {
+		return voterName;
+	}
+	public void setVoterName(String voterName) {
+		this.voterName = voterName;
+	}
+	public String getAddress() {
+		return address;
+	}
+	public void setAddress(String address) {
+		this.address = address;
+	}
+	public long getPhoneNumber() {
+		return phoneNumber;
+	}
+	public void setPhoneNumber(long phoneNumber) {
+		this.phoneNumber = phoneNumber;
+	}
+	public boolean getVoteCasted() {
+		return voteCasted;
+	}
+	public void setVoteCasted(boolean voteCasted) {
+		this.voteCasted = voteCasted;
+	}
+	public long getVoterId() {
+		return voterId;
+	}
+	public void setVoterId(long voterId) {
+		this.voterId = voterId;
+	}
+}

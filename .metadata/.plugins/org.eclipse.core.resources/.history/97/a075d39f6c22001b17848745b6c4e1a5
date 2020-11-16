@@ -1,0 +1,11 @@
+package com.oracle.oci.votingservice.domain;
+
+public class VoteData {
+	 private String  name = null;
+	  
+      private String  = null;
+
+      
+     
+
+}

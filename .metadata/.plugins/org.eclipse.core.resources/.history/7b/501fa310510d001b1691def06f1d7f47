@@ -1,0 +1,251 @@
+package com.oracle.cgbu.cne.nrf.metrics;
+
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.TimeUnit;
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.springframework.beans.factory.InitializingBean;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
+import org.springframework.stereotype.Component;
+import org.springframework.web.bind.annotation.RequestMethod;
+import io.micrometer.core.instrument.Metrics;
+import io.micrometer.core.instrument.Timer;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+
+@Component
+public class CommonNrfMetrics implements InitializingBean{
+	private static Logger logger = LogManager.getLogger(CommonNrfMetrics.class);
+	
+	@Value("${nrf.global-config.nrf-level}")
+	private String nrfLevel;
+	private static String NRF_DB_PROCESS_TIME = "ocnrf.dbmetrics.round.trip.time";
+ 
+	private static long CONST_TIME = 5111;
+	
+    @Value("${nrf.global-config.vendor}")
+    private String vendor;
+  
+    @Value("${nrf.global-config.app_name}")
+    private String appname;
+
+    
+	@Override
+	public void afterPropertiesSet() throws Exception {
+		if(this.nrfLevel == null) {
+			this.nrfLevel = "default-ocnrf";
+		}
+		Metrics.globalRegistry.config().commonTags("NrfLevel",this.nrfLevel, "vendor", this.vendor, "application", this.appname);
+	}
+	
+	public CommonNrfMetrics() {
+		Metrics.addRegistry(new SimpleMeterRegistry());
+	}
+	
+	public long getCurrentTime() {
+		return System.currentTimeMillis();
+	}
+
+		public void pegNrfDbMetricsNotFoundTotal(RequestMethod method,String dbOperation,String serviceOperation,String tableName) {
+		
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		HttpStatus httpStatus = HttpStatus.NOT_FOUND;
+		String NOT_APPLICABLE="NotApplicable";
+		
+		logMsg.clear();
+		logMsg.put("logMsg", "Pegged pegNrfDbMetricsNotFoundTotal for DB Operation");
+		logMsg.put("method",(method == null) ? NOT_APPLICABLE  : String.valueOf(method));
+		logMsg.put("dbOperation", dbOperation);
+		logMsg.put("serviceOperation",serviceOperation);
+		logMsg.put("HttpStatus", httpStatus);
+		logMsg.put("tableName",tableName);
+		logger.trace(logMsg.toString());
+		Metrics.counter("ocnrf.dbmetrics", "method",(method==null) ? NOT_APPLICABLE : String.valueOf(method),
+				"dbOperation",dbOperation,
+				"serviceOperation",serviceOperation,
+				"HttpStatusCode",String.valueOf(httpStatus.value()),
+				"tableName",tableName).increment();
+		
+	}
+	public void pegNrfDbMetricsSuccessTotal(RequestMethod method,String dbOperation,String serviceOperation,String tableName) {
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+
+		HttpStatus httpStatus = HttpStatus.OK;
+	
+		if(dbOperation.contentEquals("create"))
+			httpStatus = HttpStatus.CREATED;
+		String NOT_APPLICABLE="NotApplicable";
+		logMsg.clear();
+		logMsg.put("logMsg", "Pegged pegNrfDbMetricsSuccessTotal for DB Operation");
+		logMsg.put("method",(method == null) ? NOT_APPLICABLE  : String.valueOf(method));
+		logMsg.put("dbOperation", dbOperation);
+		logMsg.put("serviceOperation",serviceOperation);
+		logMsg.put("HttpStatus", httpStatus);
+		logMsg.put("tableName",tableName);
+		logger.trace(logMsg.toString());
+		
+		Metrics.counter("ocnrf.dbmetrics", "method",(method==null) ? NOT_APPLICABLE : String.valueOf(method),
+				"dbOperation",dbOperation,
+				"serviceOperation",serviceOperation,
+				"HttpStatusCode",String.valueOf(httpStatus.value()),
+				"tableName",tableName).increment();
+
+		
+	}
+	public void pegNrfDbMetricsFailuresTotal(RequestMethod method,String dbOperation,String serviceOperation,Exception e,String tableName) {
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+
+		
+		HttpStatus statusCode=HttpStatus.INTERNAL_SERVER_ERROR;
+		String exception=null;
+		if (e != null) {
+			exception=e.toString();
+			if(exception.contains("InvalidDataAccessResourceUsageException"))
+				statusCode=HttpStatus.BAD_REQUEST;
+			else if(exception.contains("CommunicationsException"))
+				statusCode=HttpStatus.SERVICE_UNAVAILABLE;
+			else if(exception.contains(".RollbackException"))
+				statusCode=HttpStatus.UNPROCESSABLE_ENTITY;
+			else if(exception.contains("ConstraintViolationException"))
+				statusCode=HttpStatus.BAD_REQUEST;
+			else
+				statusCode=HttpStatus.INTERNAL_SERVER_ERROR;
+		}
+		
+		String NOT_APPLICABLE="NotApplicable";
+		
+		logMsg.clear();
+		logMsg.put("logMsg", "Pegged pegNrfDbMetricsFailuresTotal for DB Operation");
+		logMsg.put("method",(method == null) ? NOT_APPLICABLE  : String.valueOf(method));
+		logMsg.put("dbOperation", dbOperation);
+		logMsg.put("serviceOperation",serviceOperation);
+		logMsg.put("HttpStatus",statusCode);
+		logMsg.put("Exception ", e);
+		logMsg.put("tableName",tableName);
+		logger.trace(logMsg.toString());
+
+		Metrics.counter("ocnrf.dbmetrics", "method",(method == null) ? NOT_APPLICABLE  : String.valueOf(method),
+				"dbOperation",dbOperation,
+				"serviceOperation",serviceOperation,
+				"HttpStatusCode",String.valueOf(statusCode.value()),
+				"tableName",tableName).increment();
+
+		
+	}
+	
+	public void pegNrfDbMetricsSuccessRoundTripTime(long time,RequestMethod method,String dbOperation,String serviceOperation,String tableName) {	
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		HttpStatus httpStatus = HttpStatus.OK;
+		if(dbOperation.contentEquals("create"))
+			httpStatus = HttpStatus.CREATED;
+		String NOT_APPLICABLE="NotApplicable";
+		
+		logMsg.clear();
+		logMsg.put("logMsg", "Pegged ocnrf_dbmetrics_round_trip_time");
+		logMsg.put("method",(method == null) ? NOT_APPLICABLE  : String.valueOf(method));
+		logMsg.put("dbOperation", dbOperation);
+		logMsg.put("serviceOperation",serviceOperation);
+		logMsg.put("tableName",tableName);
+		logMsg.put("HttpStatusCode",httpStatus);
+		logMsg.put("Time taken",time);
+		logger.trace(logMsg.toString());
+		// Temporary fix for random metric failure
+		if(time <= 0) {
+			time = CONST_TIME;
+		}
+		if(time > 0) {
+			Timer.builder(NRF_DB_PROCESS_TIME)
+			.tags("method",(method == null) ? NOT_APPLICABLE  : String.valueOf(method)).tags("dbOperation",dbOperation)
+			.tags("serviceOperation",serviceOperation)
+			.tags("tableName",tableName)
+			.tags("HttpStatusCode",String.valueOf(httpStatus.value()))
+			.maximumExpectedValue(Duration.ofSeconds(5))
+			.publishPercentiles(0.50,0.90,0.95,0.99)
+			.publishPercentileHistogram().register(Metrics.globalRegistry)
+			.record(time, TimeUnit.MICROSECONDS);
+		}
+	}
+	
+	public void pegNrfDbMetricsNotFoundRoundTripTime(long time,RequestMethod method,String dbOperation,String serviceOperation,String tableName) {	
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		HttpStatus statusCode = HttpStatus.NOT_FOUND;
+		String NOT_APPLICABLE="NotApplicable";
+		
+		logMsg.clear();
+		logMsg.put("logMsg", "Pegged ocnrf_dbmetrics_round_trip_time");
+		logMsg.put("method",(method == null) ? NOT_APPLICABLE  : String.valueOf(method));
+		logMsg.put("dbOperation", dbOperation);
+		logMsg.put("serviceOperation",serviceOperation);
+		logMsg.put("tableName",tableName);
+		logMsg.put("HttpStatusCode",statusCode);
+		logMsg.put("Time taken",time);
+		logger.trace(logMsg.toString());
+		// Temporary fix for random metric failure
+		if(time <= 0) {
+			time = CONST_TIME;
+		}
+		if(time > 0) {
+			Timer.builder(NRF_DB_PROCESS_TIME)
+			.tags("method",(method == null) ? NOT_APPLICABLE  : String.valueOf(method)).tags("dbOperation",dbOperation)
+			.tags("serviceOperation",serviceOperation)
+			.tags("tableName",tableName)
+			.tags("HttpStatusCode",String.valueOf(statusCode.value()))
+			.maximumExpectedValue(Duration.ofSeconds(5))
+			.publishPercentiles(0.50,0.90,0.95,0.99)
+			.publishPercentileHistogram().register(Metrics.globalRegistry)
+			.record(time, TimeUnit.MICROSECONDS);
+		}
+	}
+	
+	public void pegNrfDbMetricsFailureRoundTripTime(long time,RequestMethod method,String dbOperation,String serviceOperation,String tableName,Exception e) {	
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		
+		HttpStatus statusCode=HttpStatus.INTERNAL_SERVER_ERROR;
+		String exception=e.toString();
+		if(exception.contains("InvalidDataAccessResourceUsageException"))
+			  statusCode=HttpStatus.BAD_REQUEST;
+		else if(exception.contains("CommunicationsException"))
+			  statusCode=HttpStatus.SERVICE_UNAVAILABLE;
+		else if(exception.contains(".RollbackException"))
+			   statusCode=HttpStatus.UNPROCESSABLE_ENTITY;
+		else if(exception.contains("ConstraintViolationException"))
+			   statusCode=HttpStatus.BAD_REQUEST;
+		else
+			 statusCode=HttpStatus.INTERNAL_SERVER_ERROR;
+		String NOT_APPLICABLE="NotApplicable";
+		
+		logMsg.clear();
+		logMsg.put("logMsg", "Pegged ocnrf_dbmetrics_round_trip_time");
+		logMsg.put("method",(method == null) ? NOT_APPLICABLE  : String.valueOf(method));
+		logMsg.put("dbOperation", dbOperation);
+		logMsg.put("serviceOperation",serviceOperation);
+		logMsg.put("tableName",tableName);
+		logMsg.put("Time taken",time);
+		logMsg.put("HttpStatusCode",statusCode);
+		logMsg.put("Exception ", e);
+		logger.trace(logMsg.toString());
+		// Temporary fix for random metric failure
+		if(time <= 0) {
+			time = CONST_TIME;
+		}
+		if(time > 0) {
+			Timer.builder(NRF_DB_PROCESS_TIME)
+			.tags("method",(method == null) ? NOT_APPLICABLE  : String.valueOf(method)).tags("dbOperation",dbOperation)
+			.tags("serviceOperation",serviceOperation)
+			.tags("tableName",tableName)
+			.tags("HttpStatusCode",String.valueOf(statusCode.value()))
+			.maximumExpectedValue(Duration.ofSeconds(5))
+			.publishPercentiles(0.50,0.90,0.95,0.99)
+			.publishPercentileHistogram().register(Metrics.globalRegistry)
+			.record(time, TimeUnit.MICROSECONDS);
+		}
+	}
+
+}    

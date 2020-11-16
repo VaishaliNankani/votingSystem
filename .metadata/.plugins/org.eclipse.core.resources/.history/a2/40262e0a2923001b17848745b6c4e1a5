@@ -1,0 +1,16 @@
+package com.oracle.oci.votingservice;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+
+import com.oracle.oci.votingservice.dao.testSODA;
+
+@SpringBootApplication
+public class OciVotingServiceApplication {
+
+	public static void main(String[] args) {
+	//	SpringApplication.run(OciVotingServiceApplication.class, args);
+		testSODA.soda(); 
+	}
+
+}

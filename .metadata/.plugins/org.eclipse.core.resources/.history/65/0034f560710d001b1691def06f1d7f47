@@ -1,0 +1,59 @@
+// Copyright 2020 (C), Oracle and/or its affiliates. All rights reserved.
+
+package com.oracle.cgbu.cne.nrf.dao;
+
+import javax.persistence.Column;
+import javax.persistence.Entity;
+import javax.persistence.Id;
+import javax.persistence.IdClass;
+import javax.persistence.Table;
+
+import com.oracle.cgbu.cne.nrf.domain.SiteJsonSchemaVersionInfoId;
+
+@Entity
+@IdClass(SiteJsonSchemaVersionInfoId.class)
+@Table(name = "SiteJsonSchemaVersionInfo")
+public class SiteJsonSchemaVersionInfo {
+
+	@Id
+	@Column(name = "SiteId")
+	private String siteId;
+
+	@Id
+	@Column(name = "TableName")
+	private String tableName;
+
+	@Column(name = "Version")
+	private String version;
+
+	public String getSiteId() {
+		return siteId;
+	}
+
+	public void setSiteId(String siteId) {
+		this.siteId = siteId;
+	}
+
+	public String getTableName() {
+		return tableName;
+	}
+
+	public void setTableName(String tableName) {
+		this.tableName = tableName;
+	}
+
+	public String getVersion() {
+		return version;
+	}
+
+	public void setVersion(String version) {
+		this.version = version;
+	}
+
+	@Override
+	public String toString() {
+		return "SiteJsonSchemaVersionInfo [siteId=" + siteId + ", tableName=" + tableName + ", version=" + version
+				+ "]";
+	}
+
+}

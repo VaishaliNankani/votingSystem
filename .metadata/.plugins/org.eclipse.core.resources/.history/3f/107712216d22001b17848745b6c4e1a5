@@ -1,0 +1,15 @@
+package com.oracle.oci.votingservice.domain;
+
+public class VoteData {
+	
+	private String aadharId  = null;
+	private String  name = null;
+  
+     private String address  = null;
+     
+     private String phonenumber  = null;
+     //wont be received as input
+     private String voteCasted  = null;
+   
+
+}

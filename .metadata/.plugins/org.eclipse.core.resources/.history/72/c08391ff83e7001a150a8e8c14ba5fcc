@@ -1,0 +1,680 @@
+// Copyright 2018 (C), Oracle and/or its affiliates. All rights reserved.
+
+package com.oracle.cgbu.cne.nrf.audit;
+
+
+
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.CommandLineRunner;
+import org.springframework.core.annotation.Order;
+import org.springframework.stereotype.Component;
+
+import com.oracle.cgbu.cne.nrf.annotations.NFType;
+import com.oracle.cgbu.cne.nrf.dao.NfScreening;
+import com.oracle.cgbu.cne.nrf.dao.NfScreeningRepository;
+import com.oracle.cgbu.cne.nrf.dao.NrfSystemOptionsDao;
+import com.oracle.cgbu.cne.nrf.dao.NrfSystemOptionsRepository;
+import com.oracle.cgbu.cne.nrf.domain.AdditionalAttributes;
+import com.oracle.cgbu.cne.nrf.domain.AudienceType;
+import com.oracle.cgbu.cne.nrf.domain.AuthConfig;
+import com.oracle.cgbu.cne.nrf.domain.AuthFeatureConfig;
+import com.oracle.cgbu.cne.nrf.domain.AuthorizeRequesterNf;
+import com.oracle.cgbu.cne.nrf.domain.ErrorCondition;
+import com.oracle.cgbu.cne.nrf.domain.ErrorInfo;
+import com.oracle.cgbu.cne.nrf.domain.ErrorResponses;
+import com.oracle.cgbu.cne.nrf.domain.FeatureStatus;
+import com.oracle.cgbu.cne.nrf.domain.ForwardingSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.GeneralEngSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.GeneralSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.GeoRedundancyEngSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.GeoRedundancySystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.HeartbeatInfo;
+import com.oracle.cgbu.cne.nrf.domain.LoggingLevelSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.LogicalOperatorForScope;
+import com.oracle.cgbu.cne.nrf.domain.NfAccessTokenEngSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.NfAccessTokenSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.NfAuthenticationSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.NfConfig;
+import com.oracle.cgbu.cne.nrf.domain.NfDiscoverSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.NfDiscoveryEngSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.NfManagementEngSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.NfManagementSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.NfRegistrationEngSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.NfScreeningFeatureStatus;
+import com.oracle.cgbu.cne.nrf.domain.NfScreeningRules;
+import com.oracle.cgbu.cne.nrf.domain.NfScreeningRulesListStatus;
+import com.oracle.cgbu.cne.nrf.domain.NfScreeningRulesListType;
+import com.oracle.cgbu.cne.nrf.domain.NfScreeningSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.NfScreeningType;
+import com.oracle.cgbu.cne.nrf.domain.NfSubscriptionEngSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.NrfAuditorEngSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.NrfEngSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.NrfSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.OauthTokenAlgorithm;
+import com.oracle.cgbu.cne.nrf.domain.ResponseHttpStatusCodes;
+import com.oracle.cgbu.cne.nrf.domain.SlfFeatureStatus;
+import com.oracle.cgbu.cne.nrf.domain.SlfSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.SubscriberIdType;
+import com.oracle.cgbu.cne.nrf.domain.TimeRange;
+import com.oracle.cgbu.cne.nrf.domain.VersionedJsonDoc;
+import com.oracle.cgbu.cne.nrf.domain.VersionedJsonDocList;
+import com.oracle.cgbu.cne.nrf.metrics.CommonNrfMetrics;
+import com.oracle.cgbu.cne.nrf.metrics.MetricsDimension;
+
+	@Component
+	@Order(1)
+	public class InitializeDb implements CommandLineRunner{	
+	private static Logger logger = LogManager.getLogger(InitializeDb.class);
+
+	@Autowired
+	CommonNrfMetrics commonNrfMetrics;
+	
+	@Autowired
+	MetricsDimension metricsDimension;
+
+	@Autowired
+	NfScreeningRepository nfScreeningRepository;
+	
+	@Autowired
+	private NrfSystemOptionsRepository nrfSystemOptionsRepository;
+
+	public MetricsDimension getMetricsDimension() {
+		return metricsDimension;
+	}
+
+	public void setMetricsDimension(MetricsDimension metricsDimension) {
+		this.metricsDimension = metricsDimension;
+	}
+	
+	public CommonNrfMetrics getCommonNrfMetrics() {
+		return commonNrfMetrics;
+	}
+
+	public void setCommonNrfMetrics(CommonNrfMetrics commonNrfMetrics) {
+		this.commonNrfMetrics = commonNrfMetrics;
+	}
+	
+	@Value("${nrf.global-config.nrf-instance-id}")
+	private String nrfInstanceId;
+	  private String version = "v1";
+	private String serviceOperation="NrfAuditor";
+	private String FIND="find";
+	private String NF_SCREENING="NfScreening";
+	private String NRF_SYSTEMOPTIONS="NrfSystemOptions";
+	private String DELETE="delete";
+	private String UPDATE="update";
+	private String CREATE="create";
+	private String UNKNOWN_HOST_EXCEPTION="UnknownHostException";
+	private String SOCKET_TIMEOUT_EXCEPTION="SocketTimeoutException";
+	private String NO_ROUTE_TO_HOST_EXCEPTION="NoRouteToHostException";
+
+	
+	@Override
+	public void run(String... args) throws Exception {
+		initializeDb();
+	}
+	
+	public void initializeDb() {
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		// If the database does not contain any rules, Add the NfScreening rules.
+		List<NfScreening> fetchedList=null;
+		try {
+			fetchedList=nfScreeningRepository.findByRecordOwner(this.nrfInstanceId);
+			commonNrfMetrics.pegNrfDbMetricsSuccessTotal(null, FIND, serviceOperation, NF_SCREENING);
+		}catch(Exception e) {
+			commonNrfMetrics.pegNrfDbMetricsFailuresTotal(null, FIND, serviceOperation, e, NF_SCREENING);
+		}
+		
+		if ((fetchedList == null) || fetchedList.isEmpty()) {
+			logMsg.clear();
+			logMsg.put("logMsg", "Adding Rules in db for nrfInstanceId");
+			logMsg.put("nrfInstanceId", this.nrfInstanceId);
+			logger.info(logMsg);
+			NfScreeningRules nfFqdnRule = new NfScreeningRules();
+			nfFqdnRule.setNfScreeningType(NfScreeningType.BLACKLIST);
+			nfFqdnRule.setNfScreeningRulesListType(NfScreeningRulesListType.NF_FQDN);
+			nfFqdnRule.setNfScreeningRulesListStatus(NfScreeningRulesListStatus.DISABLED);
+
+			metricsDimension.setDbOperation("create");
+			try {
+				NfScreening screen = new NfScreening(nfFqdnRule,this.nrfInstanceId);
+				nfScreeningRepository.saveAndFlush(screen);
+				commonNrfMetrics.pegNrfDbMetricsSuccessTotal(null, CREATE, serviceOperation, NF_SCREENING);
+			} catch (Exception e) {
+				commonNrfMetrics.pegNrfDbMetricsFailuresTotal(null, CREATE, serviceOperation, e, NF_SCREENING);
+				logMsg.clear();
+				logMsg.put("logMsg", "Error During Database initialization for NfScreeningRule");
+				logMsg.put("NfScreeningRule", "NF_FQDN");
+				logger.error(logMsg.toString());
+			}
+			
+			NfScreeningRules ipEndpointRule = new NfScreeningRules();
+			ipEndpointRule.setNfScreeningType(NfScreeningType.BLACKLIST);
+			ipEndpointRule.setNfScreeningRulesListType(NfScreeningRulesListType.NF_IP_ENDPOINT);
+			ipEndpointRule.setNfScreeningRulesListStatus(NfScreeningRulesListStatus.DISABLED);
+			metricsDimension.setDbOperation("create");
+			try {
+				NfScreening screen = new NfScreening(ipEndpointRule,this.nrfInstanceId);
+				nfScreeningRepository.saveAndFlush(screen);
+				commonNrfMetrics.pegNrfDbMetricsSuccessTotal(null, CREATE, serviceOperation, NF_SCREENING);
+			} catch (Exception e) {
+				commonNrfMetrics.pegNrfDbMetricsFailuresTotal(null, CREATE, serviceOperation, e, NF_SCREENING);
+				logMsg.clear();
+				logMsg.put("logMsg", "Error During Database initialization for NfScreeningRule");
+				logMsg.put("NfScreeningRule", "NF_IP_ENDPOINT");
+				logger.error(logMsg.toString());
+			}
+			
+			NfScreeningRules callbackUriRule = new NfScreeningRules();
+			callbackUriRule.setNfScreeningType(NfScreeningType.BLACKLIST);
+			callbackUriRule.setNfScreeningRulesListType(NfScreeningRulesListType.CALLBACK_URI);
+			callbackUriRule.setNfScreeningRulesListStatus(NfScreeningRulesListStatus.DISABLED);
+			metricsDimension.setDbOperation("create");
+			try {
+				NfScreening screen = new NfScreening(callbackUriRule,this.nrfInstanceId);
+				nfScreeningRepository.saveAndFlush(screen);
+				commonNrfMetrics.pegNrfDbMetricsSuccessTotal(null, CREATE, serviceOperation, NF_SCREENING);
+			} catch (Exception e) {
+				commonNrfMetrics.pegNrfDbMetricsFailuresTotal(null, CREATE, serviceOperation, e, NF_SCREENING);
+				logMsg.clear();
+				logMsg.put("logMsg", "Error During Database initialization for NfScreeningRule");
+				logMsg.put("NfScreeningRule", "NF_FQDN");
+				logger.error(logMsg.toString());
+			}
+			
+			NfScreeningRules plmnIdRule = new NfScreeningRules();
+			plmnIdRule.setNfScreeningType(NfScreeningType.BLACKLIST);
+			plmnIdRule.setNfScreeningRulesListType(NfScreeningRulesListType.PLMN_ID);
+			plmnIdRule.setNfScreeningRulesListStatus(NfScreeningRulesListStatus.DISABLED);
+			metricsDimension.setDbOperation("create");
+			try {
+				NfScreening screen = new NfScreening(plmnIdRule,this.nrfInstanceId);
+				nfScreeningRepository.saveAndFlush(screen);
+				commonNrfMetrics.pegNrfDbMetricsSuccessTotal(null, CREATE, serviceOperation, NF_SCREENING);
+			} catch (Exception e) {
+				commonNrfMetrics.pegNrfDbMetricsFailuresTotal(null, CREATE, serviceOperation, e, NF_SCREENING);
+				logMsg.clear();
+				logMsg.put("logMsg", "Error During Database initialization for NfScreeningRule");
+				logMsg.put("NfScreeningRule", "PLMN_ID");
+				logger.error(logMsg.toString());
+			}
+			
+			NfScreeningRules nfTypeRegister = new NfScreeningRules();
+			nfTypeRegister.setNfScreeningType(NfScreeningType.BLACKLIST);
+			nfTypeRegister.setNfScreeningRulesListType(NfScreeningRulesListType.NF_TYPE_REGISTER);
+			nfTypeRegister.setNfScreeningRulesListStatus(NfScreeningRulesListStatus.DISABLED);
+			metricsDimension.setDbOperation("create");
+			try {
+				NfScreening screen = new NfScreening(nfTypeRegister,this.nrfInstanceId);
+				nfScreeningRepository.saveAndFlush(screen);
+				commonNrfMetrics.pegNrfDbMetricsSuccessTotal(null, CREATE, serviceOperation, NF_SCREENING);
+			} catch (Exception e) {
+				commonNrfMetrics.pegNrfDbMetricsFailuresTotal(null, CREATE, serviceOperation, e, NF_SCREENING);
+				logMsg.clear();
+				logMsg.put("logMsg", "Error During Database initialization for NfScreeningRule");
+				logMsg.put("NfScreeningRule", "NF_FQDN");
+				logger.error(logMsg.toString());
+			}
+
+			
+		}
+		List<NrfSystemOptionsDao> listRetrieved=null;
+		try {
+			listRetrieved =nrfSystemOptionsRepository.findbyRecordOwner(this.nrfInstanceId);
+			commonNrfMetrics.pegNrfDbMetricsSuccessTotal(null, FIND, serviceOperation, NRF_SYSTEMOPTIONS);
+		}catch(Exception e){
+			commonNrfMetrics.pegNrfDbMetricsFailuresTotal(null, FIND, serviceOperation, e, NRF_SYSTEMOPTIONS);
+		}
+		if((listRetrieved == null)|| listRetrieved.isEmpty()) {
+			NrfSystemOptionsDao nrfSystemOptionsDao = new NrfSystemOptionsDao();
+			nrfSystemOptionsDao.setRecordOwner(this.nrfInstanceId);
+			nrfSystemOptionsDao.setConfigType("OCNRF_ERROR_RESPONSES");
+			
+			List<ErrorInfo> errorInfoList= new ArrayList<ErrorInfo>();
+			ErrorInfo slfmissingSubc = new ErrorInfo();
+			slfmissingSubc.setErrorCondition(ErrorCondition.SLF_Missing_Mandatory_Parameters);
+			slfmissingSubc.setErrorCode(400);
+			slfmissingSubc.setErrorResponse("Mandatory parameter missing for SLF Lookup");
+			errorInfoList.add(slfmissingSubc);
+			
+			ErrorInfo slfGroupIdNotFound = new ErrorInfo();
+			slfGroupIdNotFound.setErrorCondition(ErrorCondition.SLF_GroupId_NotFound);
+			slfGroupIdNotFound.setErrorCode(404);
+			slfGroupIdNotFound.setErrorDetectionResultCode("404");
+			slfGroupIdNotFound.setErrorResponse("Group Id Not found from SLF");
+			slfGroupIdNotFound.setUseErrorCodeReturned(true);
+			errorInfoList.add(slfGroupIdNotFound);
+			
+			ErrorInfo slfNotReachable = new ErrorInfo();
+			slfNotReachable.setErrorCondition(ErrorCondition.SLF_Not_Reachable);
+			slfNotReachable.setErrorCode(504);
+			slfNotReachable.setErrorDetectionResultCode("503");
+			slfNotReachable.setErrorResponse("SLF not reachable");
+			slfNotReachable.setUseErrorCodeReturned(false);
+			errorInfoList.add(slfNotReachable);
+			
+			List<ErrorInfo> nrfForwardingErrorInfoList= new ArrayList<ErrorInfo>();
+			ErrorInfo nrfNotReachable = new ErrorInfo();
+			nrfNotReachable.setErrorCondition(ErrorCondition.NRF_Not_Reachable);
+			nrfNotReachable.setErrorCode(504);
+			nrfNotReachable.setErrorDetectionResultCode("503");
+			nrfNotReachable.setErrorResponse("NRF not reachable");
+			nrfNotReachable.setUseErrorCodeReturned(false);
+			nrfForwardingErrorInfoList.add(nrfNotReachable);
+			
+			ErrorInfo nrfForwardingLoopDetection = new ErrorInfo();
+			nrfForwardingLoopDetection.setErrorCondition(ErrorCondition.NRF_Forwarding_Loop_Detection);
+			nrfForwardingLoopDetection.setErrorCode(508);
+			nrfForwardingLoopDetection.setErrorResponse("Loop Detected");
+			nrfForwardingLoopDetection.setUseErrorCodeReturned(false);
+			nrfForwardingErrorInfoList.add(nrfForwardingLoopDetection);
+					    
+//			List<ErrorInfo> generalErrorInfoList= new ArrayList<ErrorInfo>();
+//			ErrorInfo generalErrorInfo = new ErrorInfo();
+//			generalErrorInfo.setErrorCondition("Service_Unavailable");
+//			generalErrorInfo.setErrorCode(503);
+//			generalErrorInfoList.add(generalErrorInfo);
+//			generalErrorInfo = new ErrorInfo();
+//			generalErrorInfo.setErrorCondition("Service_Degraded_Or_Congested");
+//			generalErrorInfo.setErrorCode(503);
+//			generalErrorInfoList.add(generalErrorInfo);
+//			generalErrorInfo = new ErrorInfo();
+//			generalErrorInfo.setErrorCondition("Service_Internal_Error");
+//			generalErrorInfo.setErrorCode(503);
+//			generalErrorInfoList.add(generalErrorInfo);
+//			generalErrorInfo = new ErrorInfo();
+//			generalErrorInfo.setErrorCondition("Exception_In_Service_Request_Processing");
+//			generalErrorInfo.setErrorCode(503);
+//			generalErrorInfoList.add(generalErrorInfo);
+//			generalErrorInfo = new ErrorInfo();
+//			generalErrorInfo.setErrorCondition("Network_Error");
+//			generalErrorInfo.setErrorCode(503);
+//			generalErrorInfoList.add(generalErrorInfo);
+			Date currDate = new Date();
+			ErrorResponses errorResponses = new ErrorResponses();
+			errorResponses.setSlfErrorResponses(errorInfoList);
+			errorResponses.setNrfForwardingErrorResponses(nrfForwardingErrorInfoList);
+			//errorResponses.setGeneralErrorResponses(generalErrorInfoList);
+			NrfSystemOptions nrfSystemOptionsErrorResponses = new NrfSystemOptions();
+			nrfSystemOptionsErrorResponses.setErrorResponses(errorResponses);
+			AdditionalAttributes additionalAttributes = new AdditionalAttributes();
+			additionalAttributes.setCreationTimestamp(currDate);
+			additionalAttributes.setRecordCreator(this.nrfInstanceId);
+			nrfSystemOptionsErrorResponses.setAdditionalAttributes(additionalAttributes);
+			List<VersionedJsonDoc> list = new ArrayList<>();
+            VersionedJsonDoc versionJsonDoc = new VersionedJsonDoc();
+            versionJsonDoc.setVersion(version);
+            versionJsonDoc.setDoc(nrfSystemOptionsErrorResponses.toString());
+            list.add(versionJsonDoc);
+            VersionedJsonDocList versionJsonDocList = new VersionedJsonDocList();
+            versionJsonDocList.setVersionedJsonDocList(list);
+            nrfSystemOptionsDao.setConfigurationJsonDocList(versionJsonDocList.toString());
+			nrfSystemOptionsDao.setLastUpdateTimestamp(currDate);
+			metricsDimension.setDbOperation("create");
+			try {
+				nrfSystemOptionsRepository.saveAndFlush(nrfSystemOptionsDao);
+				commonNrfMetrics.pegNrfDbMetricsSuccessTotal(null, CREATE, serviceOperation, NRF_SYSTEMOPTIONS);
+				}catch (Exception e) {
+					commonNrfMetrics.pegNrfDbMetricsFailuresTotal(null, CREATE, serviceOperation, e, NRF_SYSTEMOPTIONS);
+					logMsg.clear();
+					logMsg.put("logMsg", "Error During Database initialization for nrfSystemOptionsDaoErrorResponses");
+					logger.error(logMsg.toString());
+				}
+			
+			
+			NrfSystemOptions nrfSystemOptions = new NrfSystemOptions();
+			NfScreeningSystemOptions nfScreeningSystemOptions = new NfScreeningSystemOptions();
+			nfScreeningSystemOptions.setNfScreeningFeatureStatus(NfScreeningFeatureStatus.DISABLED);
+			nfScreeningSystemOptions.setNfScreeningFailureHttpCode(403);
+			nrfSystemOptions.setNfScreeningSystemOptions(nfScreeningSystemOptions);
+			
+			HeartbeatInfo heartbeatInfo = new HeartbeatInfo();
+			heartbeatInfo.setNfType("ALL_NF_TYPE");
+			heartbeatInfo.setMinHbTimer(Duration.ofSeconds(30));
+			heartbeatInfo.setMaxHbTimer(Duration.ofMinutes(5));
+			heartbeatInfo.setDefaultHbTimer(Duration.ofSeconds(30));
+			heartbeatInfo.setNfHeartbeatMissAllowed(3);
+			List<HeartbeatInfo> nfHeartbeatTimers = new ArrayList<HeartbeatInfo>();
+			nfHeartbeatTimers.add(heartbeatInfo);
+			NfManagementSystemOptions nfManagement = new NfManagementSystemOptions();
+			nfManagement.setNfHeartbeatTimers(nfHeartbeatTimers);
+			nfManagement.setNfNotifyLoadThreshold(5);
+			nfManagement.setNrfSupportForProfileChangesInResponse(true);
+			nfManagement.setNrfSupportForProfileChangesInNotification(false);
+			nfManagement.setSubscriptionValidityDuration(Duration.ofHours(24));
+			nfManagement.setNfProfileSuspendDuration(Duration.ofHours(168));
+			nfManagement.setAcceptAdditionalAttributes(false);
+			nfManagement.setErrorResponseCodeForServiceUnavailable(503);
+			nfManagement.setRetryAfter(10);
+			nfManagement.setAllowDuplicateSubscriptions(true);
+			nrfSystemOptions.setNfManagementSystemOptions(nfManagement);
+		
+			GeneralSystemOptions generalOptions = new GeneralSystemOptions();
+			//List<Plmn> plmnList = new ArrayList<>();
+			//plmnList.add(new Plmn("310","14"));
+			//generalOptions.setNrfPlmnList(plmnList);
+			generalOptions.setEnableF5(true);
+			generalOptions.setEnableF3(true);
+			generalOptions.setMaximumHopCount(3);
+			generalOptions.setDefaultLoad(5);
+			generalOptions.setDefaultPriority(100);
+			generalOptions.setAddLoadInNFProfile(false);
+			generalOptions.setAddPriorityInNFProfile(false);
+			generalOptions.setOcnrfEndPointHost("ocnrf-ingressgateway.ocnrf.svc.cluster.local");
+			generalOptions.setOcnrfEndPointPort(80);
+			nrfSystemOptions.setGeneralSystemOptions(generalOptions);
+			
+			NfDiscoverSystemOptions nfDiscoverOptions = new NfDiscoverSystemOptions();
+			nfDiscoverOptions.setDiscoveryValidityPeriod(Duration.ofHours(1));
+			nfDiscoverOptions.setProfilesCountInDiscoveryResponse(3);
+			nfDiscoverOptions.setDiscoveryResultLoadThreshold(0);
+			nrfSystemOptions.setNfDiscoverSystemOptions(nfDiscoverOptions);
+			
+			NfAccessTokenSystemOptions nfAccessToken = new NfAccessTokenSystemOptions();
+			nfAccessToken.setOauthTokenAlgorithm(OauthTokenAlgorithm.ES256);
+			nfAccessToken.setOauthTokenExpiryTime(Duration.ofHours(1));
+			nfAccessToken.setAuthorizeRequesterNf(AuthorizeRequesterNf.ENABLED);
+			nfAccessToken.setAudienceType(AudienceType.NF_INSTANCE_ID);
+			nfAccessToken.setLogicalOperatorForScope(LogicalOperatorForScope.AND);
+			AuthFeatureConfig authFeatureConfig = new AuthFeatureConfig();
+			authFeatureConfig.setAuthFeatureStatus(FeatureStatus.DISABLED);
+			List<ErrorInfo> authErrorResponsesList = new ArrayList<ErrorInfo>();
+			ErrorInfo authErrorResponse = new ErrorInfo();
+			authErrorResponse.setErrorCode(400);
+			authErrorResponse.setErrorCondition(ErrorCondition.RequesterNf_Unauthorized);
+			authErrorResponse.setErrorResponse("The Consumer NfType is not authorized to receive access token for the requested Nftype.");
+			authErrorResponsesList.add(authErrorResponse);
+			authFeatureConfig.setAuthErrorResponses(authErrorResponsesList);
+			nfAccessToken.setAuthFeatureConfig(authFeatureConfig);
+			nrfSystemOptions.setNfAccessTokenSystemOptions(nfAccessToken);
+			
+			LoggingLevelSystemOptions loggingLevel = new LoggingLevelSystemOptions();
+			loggingLevel.setNfAccessTokenLogLevel("WARN");
+			loggingLevel.setNfDiscoveryLogLevel("WARN");
+			loggingLevel.setNfRegistrationLogLevel("WARN");
+			loggingLevel.setNfSubscriptionLogLevel("WARN");
+			loggingLevel.setNrfAuditorLogLevel("WARN");
+			loggingLevel.setNrfConfigurationLogLevel("WARN");
+			nrfSystemOptions.setLoggingLevelSystemOptions(loggingLevel);
+			
+			SlfSystemOptions slfSystemOptions = new SlfSystemOptions();
+			List<@NFType String> supportedNfTypeList = new ArrayList<@NFType String>();
+			slfSystemOptions.setSupportedNfTypeList(supportedNfTypeList);
+			List<NfConfig> slfHostConfigList=new ArrayList<NfConfig>();
+			slfSystemOptions.setSlfHostConfig(slfHostConfigList);
+			slfSystemOptions.setPreferredSubscriberIdType(SubscriberIdType.SUPI);
+			slfSystemOptions.setSlfFeatureStatus(SlfFeatureStatus.DISABLED);
+			ResponseHttpStatusCodes rerouteOnResponseHttpStatusCodes = new ResponseHttpStatusCodes();
+			rerouteOnResponseHttpStatusCodes.setPattern("^[3,5][0-9]{2}$");
+			slfSystemOptions.setRerouteOnResponseHttpStatusCodes(rerouteOnResponseHttpStatusCodes);
+			nrfSystemOptions.setSlfSystemOptions(slfSystemOptions);
+			
+			ForwardingSystemOptions forwardingSystemOptions = new ForwardingSystemOptions();
+			List<NfConfig> nrffHostConfigList=new ArrayList<NfConfig>();
+			forwardingSystemOptions.setNrfHostConfig(nrffHostConfigList);
+			forwardingSystemOptions.setAccessTokenForwardingStatus(FeatureStatus.DISABLED);
+			forwardingSystemOptions.setDiscoveryForwardingStatus(FeatureStatus.DISABLED);
+			forwardingSystemOptions.setProfileRetreivalForwardingStatus(FeatureStatus.DISABLED);
+			forwardingSystemOptions.setSubscriptionForwardingStatus(FeatureStatus.DISABLED);
+			ResponseHttpStatusCodes nrfRerouteOnResponseHttpStatusCodes = new ResponseHttpStatusCodes();
+			nrfRerouteOnResponseHttpStatusCodes.setPattern("^[3,5][0-9]{2}$");
+			forwardingSystemOptions.setNrfRerouteOnResponseHttpStatusCodes(rerouteOnResponseHttpStatusCodes);
+			nrfSystemOptions.setForwardingSystemOptions(forwardingSystemOptions);
+			
+			GeoRedundancySystemOptions geoRedundancySystemOptions = new GeoRedundancySystemOptions();
+			geoRedundancySystemOptions.setGeoRedundancyFeatureStatus(FeatureStatus.DISABLED);
+			geoRedundancySystemOptions.setReplicationLatency(Duration.ofSeconds(5));
+			geoRedundancySystemOptions.setMonitorNrfServiceStatusInterval(Duration.ofSeconds(5));
+			geoRedundancySystemOptions.setMonitorDBReplicationStatusInterval(Duration.ofSeconds(5));
+			nrfSystemOptions.setGeoRedundancySystemOptions(geoRedundancySystemOptions);
+			
+			ErrorInfo nfAuthenticationErrorResponse = new ErrorInfo();
+			nfAuthenticationErrorResponse.setErrorCondition(ErrorCondition.Nf_Fqdn_Authentication_Failure);
+			nfAuthenticationErrorResponse.setErrorCode(401);
+			nfAuthenticationErrorResponse.setErrorResponse("Failed to authenticate NF using FQDN");
+			nfAuthenticationErrorResponse.setRetryAfter(Duration.ofMinutes(5));
+			List<ErrorInfo> nfAuthenticationErrorInfoList = new ArrayList<ErrorInfo>();
+			nfAuthenticationErrorInfoList.add(nfAuthenticationErrorResponse);
+			
+			NfAuthenticationSystemOptions nfAuthenticationSystemOptions = new NfAuthenticationSystemOptions();
+			nfAuthenticationSystemOptions.setNfRegistrationAuthenticationStatus(FeatureStatus.DISABLED);
+			nfAuthenticationSystemOptions.setNfSubscriptionAuthenticationStatus(FeatureStatus.DISABLED);
+			nfAuthenticationSystemOptions.setNfDiscoveryAuthenticationStatus(FeatureStatus.DISABLED);
+			nfAuthenticationSystemOptions.setAccessTokenAuthenticationStatus(FeatureStatus.DISABLED);
+			nfAuthenticationSystemOptions.setNfProfileRetrievalAuthenticationStatus(FeatureStatus.DISABLED);
+			nfAuthenticationSystemOptions.setNfListRetrievalAuthenticationStatus(FeatureStatus.DISABLED);
+			nfAuthenticationSystemOptions.setCheckIfNfIsRegistered(FeatureStatus.DISABLED);
+			nfAuthenticationSystemOptions.setNfAuthenticationErrorResponses(nfAuthenticationErrorInfoList);
+			nrfSystemOptions.setNfAuthenticationSystemOptions(nfAuthenticationSystemOptions);
+			
+			currDate = new Date();
+			additionalAttributes = new AdditionalAttributes();
+			additionalAttributes.setCreationTimestamp(currDate);
+			additionalAttributes.setRecordCreator(this.nrfInstanceId);
+			nrfSystemOptions.setAdditionalAttributes(additionalAttributes);
+			nrfSystemOptionsDao.setConfigType("OCNRF_SYSTEM_OPTIONS");
+			nrfSystemOptionsDao.setRecordOwner(this.nrfInstanceId);
+            list = new ArrayList<>();
+            versionJsonDoc = new VersionedJsonDoc();
+            versionJsonDoc.setVersion(version);
+            versionJsonDoc.setDoc(nrfSystemOptions.toString());
+            list.add(versionJsonDoc);
+            versionJsonDocList = new VersionedJsonDocList();
+            versionJsonDocList.setVersionedJsonDocList(list);
+            nrfSystemOptionsDao.setConfigurationJsonDocList(versionJsonDocList.toString());
+			nrfSystemOptionsDao.setLastUpdateTimestamp(currDate);
+			metricsDimension.setDbOperation("create");
+			try {
+			nrfSystemOptionsRepository.saveAndFlush(nrfSystemOptionsDao);
+			commonNrfMetrics.pegNrfDbMetricsSuccessTotal(null, CREATE, serviceOperation, NRF_SYSTEMOPTIONS);
+			}catch (Exception e) {
+				commonNrfMetrics.pegNrfDbMetricsFailuresTotal(null, CREATE, serviceOperation, e, NRF_SYSTEMOPTIONS);
+				logMsg.clear();
+				logMsg.put("logMsg", "Error During Database initialization for NrfSystemOptions");
+				logger.error(logMsg.toString());
+			}
+			
+			
+			List<ErrorInfo> errorInfoList_nrfEngSystemOptions = new ArrayList<ErrorInfo>();
+			ErrorInfo slf3xxErrorInfo = new ErrorInfo();
+			slf3xxErrorInfo.setErrorCondition(ErrorCondition.SLF_3xx_responses);
+			slf3xxErrorInfo.setErrorCode(504);
+			slf3xxErrorInfo.setErrorResponse("Received 3xx responses from SLF");
+			slf3xxErrorInfo.setErrorDetectionResultCode("3xx");
+			slf3xxErrorInfo.setUseErrorCodeReturned(false);
+			ErrorInfo slf4xxErrorInfo = new ErrorInfo();
+			slf4xxErrorInfo.setErrorCondition(ErrorCondition.SLF_4xx_responses);
+			slf4xxErrorInfo.setErrorCode(500);
+			slf4xxErrorInfo.setErrorResponse("Received 4xx responses from SLF");
+			slf4xxErrorInfo.setErrorDetectionResultCode("4xx");
+			slf4xxErrorInfo.setUseErrorCodeReturned(false);
+			ErrorInfo slf5xxErrorInfo = new ErrorInfo();
+			slf5xxErrorInfo.setErrorCondition(ErrorCondition.SLF_5xx_responses);
+			slf5xxErrorInfo.setErrorCode(500);
+			slf5xxErrorInfo.setErrorResponse("Received 5xx responses from SLF");
+			slf5xxErrorInfo.setErrorDetectionResultCode("5xx");
+			slf5xxErrorInfo.setUseErrorCodeReturned(true);
+			
+			//egress gateway error
+			ErrorInfo egressGatewayErrorInfo = new ErrorInfo();
+			egressGatewayErrorInfo.setErrorCondition(ErrorCondition.Egress_Gateway_Error);
+			egressGatewayErrorInfo.setErrorCode(500);
+			egressGatewayErrorInfo.setErrorResponse("NRF Internal Error");
+			egressGatewayErrorInfo.setUseErrorCodeReturned(false);
+			errorInfoList_nrfEngSystemOptions.add(slf3xxErrorInfo);
+			errorInfoList_nrfEngSystemOptions.add(slf4xxErrorInfo);
+			errorInfoList_nrfEngSystemOptions.add(slf5xxErrorInfo);
+			
+			errorResponses.setSlfErrorResponses(errorInfoList_nrfEngSystemOptions);
+			
+			//generalErrorResponses
+			List<ErrorInfo> errorInfoList_general_nrfEngSystemOptions = new ArrayList<ErrorInfo>();
+			//egress gateway error
+			ErrorInfo egressGatewayErrorInfoGeneral = new ErrorInfo();
+			egressGatewayErrorInfoGeneral.setErrorCondition(ErrorCondition.Egress_Gateway_Error);
+			egressGatewayErrorInfoGeneral.setErrorCode(500);
+			egressGatewayErrorInfoGeneral.setErrorResponse("NRF Internal Error");
+			egressGatewayErrorInfoGeneral.setUseErrorCodeReturned(false);
+			errorInfoList_general_nrfEngSystemOptions.add(egressGatewayErrorInfoGeneral);
+			
+			errorResponses.setGeneralErrorResponses(errorInfoList_general_nrfEngSystemOptions);
+			
+			NrfEngSystemOptions nrfEngSystemOptions = new NrfEngSystemOptions();
+			nrfEngSystemOptions.setErrorResponses(errorResponses);
+			//errorResponses.setGeneralErrorResponses(null);
+			
+			currDate = new Date();
+			nrfEngSystemOptions.setErrorResponses(errorResponses);
+			//errorResponses.setGeneralErrorResponses(null);
+		    additionalAttributes = new AdditionalAttributes();
+			additionalAttributes.setCreationTimestamp(currDate);
+			additionalAttributes.setRecordCreator(this.nrfInstanceId);
+			nrfEngSystemOptions.setAdditionalAttributes(additionalAttributes);
+            nrfSystemOptionsDao.setConfigType("OCNRF_ENG_ERROR_RESPONSES");
+            nrfSystemOptionsDao.setRecordOwner(this.nrfInstanceId);
+            list = new ArrayList<>();
+            versionJsonDoc = new VersionedJsonDoc();
+            versionJsonDoc.setVersion(version);
+            versionJsonDoc.setDoc(nrfEngSystemOptions.toString());
+            list.add(versionJsonDoc);
+            versionJsonDocList = new VersionedJsonDocList();
+            versionJsonDocList.setVersionedJsonDocList(list);
+            nrfSystemOptionsDao.setConfigurationJsonDocList(versionJsonDocList.toString());
+			nrfSystemOptionsDao.setLastUpdateTimestamp(currDate);
+			metricsDimension.setDbOperation("create");
+			try {
+				nrfSystemOptionsRepository.saveAndFlush(nrfSystemOptionsDao);
+				commonNrfMetrics.pegNrfDbMetricsSuccessTotal(null, CREATE, serviceOperation, NRF_SYSTEMOPTIONS);
+				}catch (Exception e) {
+					commonNrfMetrics.pegNrfDbMetricsFailuresTotal(null, CREATE, serviceOperation, e, NRF_SYSTEMOPTIONS);
+					logMsg.clear();
+					logMsg.put("logMsg", "Error During Database initialization for NrfSystemOptions");
+					logger.error(logMsg.toString());
+				}
+			//start adding nrf eng system options here
+			NfRegistrationEngSystemOptions nfRegistrationEngSystemOptions = new NfRegistrationEngSystemOptions();
+			nfRegistrationEngSystemOptions.setMaxRetriesToPeer((short) 3);
+			nfRegistrationEngSystemOptions.setRetryInterval(Duration.ofMillis(2));
+			ArrayList<String> retryOnErrorList = new ArrayList<String>() { 
+	            { 
+	            	add(UNKNOWN_HOST_EXCEPTION); 
+	                add(SOCKET_TIMEOUT_EXCEPTION); 
+	                add(NO_ROUTE_TO_HOST_EXCEPTION);
+	            } 
+	        }; 
+			nfRegistrationEngSystemOptions.setRetryOnErrorList(retryOnErrorList);
+			nfRegistrationEngSystemOptions.setHttpClientPingInterval(Duration.ofSeconds(60));
+			
+			
+			NfSubscriptionEngSystemOptions nfSubscriptionEngSystemOptions = new NfSubscriptionEngSystemOptions();
+			nfSubscriptionEngSystemOptions.setSubscriptionValidityDurationMaxValue(Duration.ofHours(720));
+			nfSubscriptionEngSystemOptions.setSubscriptionValidityDurationMinValue(Duration.ofSeconds(10));
+			nfSubscriptionEngSystemOptions.setMaxRetriesToPeer(1);
+			nfSubscriptionEngSystemOptions.setHttpClientPingInterval(Duration.ofSeconds(60));
+			
+			NfDiscoveryEngSystemOptions nfDiscoveryEngSystemOptions = new NfDiscoveryEngSystemOptions();
+			nfDiscoveryEngSystemOptions.setProfilesCountInDiscoveryResponseMaxValue(20);
+			nfDiscoveryEngSystemOptions.setProfilesCountInDiscoveryResponseMinValue(0);
+			nfDiscoveryEngSystemOptions.setResultLoadThresholdMaxValue(100);
+			nfDiscoveryEngSystemOptions.setResultLoadThresholdMinValue(0);
+			nfDiscoveryEngSystemOptions.setValidityPeriodMaxValue(Duration.ofHours(168));
+			nfDiscoveryEngSystemOptions.setValidityPeriodMinValue(Duration.ofSeconds(1));
+			nfDiscoveryEngSystemOptions.setMaxRetriesToPeer(2);
+			nfDiscoveryEngSystemOptions.setHttpClientPingInterval(Duration.ofSeconds(60));
+			
+			NfAccessTokenEngSystemOptions nfAccessTokenEngSystemOptions = new NfAccessTokenEngSystemOptions();
+			nfAccessTokenEngSystemOptions.setTokenExpiryTimeMaxRange(Duration.ofHours(168));
+			nfAccessTokenEngSystemOptions.setTokenExpiryTimeMinRange(Duration.ofSeconds(1));
+			nfAccessTokenEngSystemOptions.setHttpClientPingInterval(Duration.ofSeconds(60));
+			
+			NrfAuditorEngSystemOptions nrfAuditorEngSystemOptions = new NrfAuditorEngSystemOptions();
+			nrfAuditorEngSystemOptions.setMaxRetriesToPeer((short) 3);
+			nrfAuditorEngSystemOptions.setRetryInterval(Duration.ofMillis(2));
+			nrfAuditorEngSystemOptions.setRetryOnErrorList(retryOnErrorList);
+			nrfAuditorEngSystemOptions.setHttpClientPingInterval(Duration.ofSeconds(60));
+			
+			GeneralEngSystemOptions generalEngSystemOptions = new GeneralEngSystemOptions();
+			generalEngSystemOptions.setNfNotifyLoadThresholdMaxValue(99);
+			generalEngSystemOptions.setNfNotifyLoadThresholdMinValue(0);
+			generalEngSystemOptions.setNfHeartbeatMissAllowedMinValue(0);
+			generalEngSystemOptions.setNfHeartbeatMissAllowedMaxValue(15);
+			generalEngSystemOptions.setNfProfileSuspendDurationMaxValue(Duration.ofHours(744));
+			generalEngSystemOptions.setNfProfileSuspendDurationMinValue(Duration.ofSeconds(10));
+			generalEngSystemOptions.setMaximumHopCountRangeMinValue(1);
+			generalEngSystemOptions.setMaximumHopCountRangeMaxValue(5);
+			generalEngSystemOptions.setMaxEventRetentionTime(Duration.ofHours(240));
+			generalEngSystemOptions.setRetryAfterMinValue(Duration.ofSeconds(60));
+			generalEngSystemOptions.setRetryAfterMaxValue(Duration.ofHours(1));
+			List<String> retryAfterErrorCodes = new ArrayList<>(List.of("3xx","413","429","503"));
+			generalEngSystemOptions.setRetryAfterErrorCodes(retryAfterErrorCodes);
+			List<String> redirectURLErrorCodes = new ArrayList<>(List.of("3xx"));
+			generalEngSystemOptions.setRedirectUrlErrorCodes(redirectURLErrorCodes);
+			
+			GeoRedundancyEngSystemOptions geoRedundancyEngSystemOptions = new GeoRedundancyEngSystemOptions();
+			geoRedundancyEngSystemOptions.setReplicationLatencyMinValue(Duration.ofSeconds(1));
+			geoRedundancyEngSystemOptions.setReplicationLatencyMaxValue(Duration.ofMinutes(10));
+			geoRedundancyEngSystemOptions.setMonitorNrfServiceStatusIntervalMinValue(Duration.ofSeconds(1));
+			geoRedundancyEngSystemOptions.setMonitorNrfServiceStatusIntervalMaxValue(Duration.ofSeconds(10));
+			geoRedundancyEngSystemOptions.setMonitorDBReplicationStatusIntervalMinValue(Duration.ofSeconds(1));
+			geoRedundancyEngSystemOptions.setMonitorDBReplicationStatusIntervalMaxValue(Duration.ofSeconds(10));
+			
+			NfManagementEngSystemOptions nfManagementEngSystemOptions = new NfManagementEngSystemOptions();
+			TimeRange timeRange = new TimeRange();
+			timeRange.setMinValue(Duration.ofSeconds(10));
+			timeRange.setMaxValue(Duration.ofHours(24));
+			nfManagementEngSystemOptions.setMaxAllowedHbRange(timeRange);
+			nfManagementEngSystemOptions.setMinAllowedHbRange(timeRange);
+			
+			NrfEngSystemOptions nrfRestEngSystemOptions = new NrfEngSystemOptions();
+			nrfRestEngSystemOptions.setGeneralEngSystemOptions(generalEngSystemOptions);
+			nrfRestEngSystemOptions.setNfAccessTokenEngSystemOptions(nfAccessTokenEngSystemOptions);
+			nrfRestEngSystemOptions.setNfDiscoveryEngSystemOptions(nfDiscoveryEngSystemOptions);
+			nrfRestEngSystemOptions.setNfRegistrationEngSystemOptions(nfRegistrationEngSystemOptions);
+			nrfRestEngSystemOptions.setNfSubscriptionEngSystemOptions(nfSubscriptionEngSystemOptions);
+			nrfRestEngSystemOptions.setNrfAuditorEngSystemOptions(nrfAuditorEngSystemOptions);
+			nrfRestEngSystemOptions.setGeoRedundancyEngSystemOptions(geoRedundancyEngSystemOptions);
+			nrfRestEngSystemOptions.setNfManagementEngSystemOptions(nfManagementEngSystemOptions);
+			
+			currDate = new Date();
+	        additionalAttributes = new AdditionalAttributes();
+			additionalAttributes.setCreationTimestamp(currDate);
+			additionalAttributes.setRecordCreator(this.nrfInstanceId);
+			nrfRestEngSystemOptions.setAdditionalAttributes(additionalAttributes);
+            nrfSystemOptionsDao.setConfigType("OCNRF_ENG_SYSTEM_OPTIONS");
+            nrfSystemOptionsDao.setRecordOwner(this.nrfInstanceId);
+            list = new ArrayList<>();
+            versionJsonDoc = new VersionedJsonDoc();
+            versionJsonDoc.setVersion(version);
+            versionJsonDoc.setDoc(nrfRestEngSystemOptions.toString());
+            list.add(versionJsonDoc);
+            versionJsonDocList = new VersionedJsonDocList();
+            versionJsonDocList.setVersionedJsonDocList(list);
+            nrfSystemOptionsDao.setConfigurationJsonDocList(versionJsonDocList.toString());
+			nrfSystemOptionsDao.setLastUpdateTimestamp(currDate);
+			metricsDimension.setDbOperation("create");
+			try {
+				nrfSystemOptionsRepository.saveAndFlush(nrfSystemOptionsDao);
+				}catch (Exception e) {
+					logMsg.clear();
+					logMsg.put("logMsg", "Error During Database initialization for NrfSystemOptions");
+					logger.error(logMsg.toString());
+				}
+			
+		}
+		
+
+			
+		}
+		
+		
+	}

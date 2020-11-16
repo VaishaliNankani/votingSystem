@@ -1,0 +1,17 @@
+package com.oracle.oci.votingservice.domain;
+
+import javax.validation.constraints.NotNull;
+
+public class CandidateData {
+	
+	@NotNull
+	private long candidateId;	
+	@NotNull
+	private String  candidateName = null;
+	@NotNull
+	private String  party = null;
+	@NotNull
+	private String constituency  = null;	
+	@NotNull
+	private Gender gender  = null;
+}

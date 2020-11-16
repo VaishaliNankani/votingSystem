@@ -1,0 +1,42 @@
+package com.oracle.oci.votingservice.domain;
+
+import javax.validation.constraints.NotNull;
+
+public class VoteData extends AbstractDto{
+	
+	@NotNull
+	private long voterId;	
+	
+	
+	
+	public String getVoterName() {
+		return voterName;
+	}
+	public void setVoterName(String voterName) {
+		this.voterName = voterName;
+	}
+	public String getAddress() {
+		return address;
+	}
+	public void setAddress(String address) {
+		this.address = address;
+	}
+	public long getPhoneNumber() {
+		return phoneNumber;
+	}
+	public void setPhoneNumber(long phoneNumber) {
+		this.phoneNumber = phoneNumber;
+	}
+	public boolean getVoteCasted() {
+		return voteCasted;
+	}
+	public void setVoteCasted(boolean voteCasted) {
+		this.voteCasted = voteCasted;
+	}
+	public long getVoterId() {
+		return voterId;
+	}
+	public void setVoterId(long voterId) {
+		this.voterId = voterId;
+	}
+}

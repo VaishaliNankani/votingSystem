@@ -1,0 +1,171 @@
+// Copyright 2020 (C), Oracle and/or its affiliates. All rights reserved.
+
+package com.oracle.cgbu.cne.nrf.hooks.config;
+import java.util.List;
+
+import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.PropertySource;
+import com.oracle.cgbu.cne.nrf.domain.Plmn;
+
+@Configuration
+@PropertySource("classpath:application.properties")
+@ConfigurationProperties("hook")
+public class HookConfiguration {
+	private Configuration configuration;
+	private ConfigSvc configSvc;
+	private SiteInfo siteInfo;
+	public SiteInfo getSiteInfo() {
+		return siteInfo;
+	}
+
+	public void setSiteInfo(SiteInfo siteInfo) {
+		this.siteInfo = siteInfo;
+	}
+
+	public ConfigSvc getConfigSvc() {
+		return configSvc;
+	}
+
+	public void setConfigSvc(ConfigSvc configSvc) {
+		this.configSvc = configSvc;
+	}
+
+	public Configuration getConfiguration() {
+		return configuration;
+	}
+
+	public void setConfiguration(Configuration config) {
+		this.configuration = config;
+	}
+
+	public static class Configuration {		
+		List<Plmn>  plmnList;
+		String appEndpoint;
+		public String getAppEndpoint() {
+			return appEndpoint;
+		}
+		public void setAppEndpoint(String appEndpoint) {
+			this.appEndpoint = appEndpoint;
+		}
+		public int getAppEndpointPort() {
+			return appEndpointPort;
+		}
+		public void setAppEndpointPort(int appEndpointPort) {
+			this.appEndpointPort = appEndpointPort;
+		}
+		int appEndpointPort;
+		String tokenAlgorithm;
+		
+			
+		public String getTokenAlgorithm() {
+			return tokenAlgorithm;
+		}
+		public void setTokenAlgorithm(String tokenAlgorithm) {
+			this.tokenAlgorithm = tokenAlgorithm;
+		}
+		public List<Plmn> getPlmnList() {
+			return plmnList;
+		}
+		public void setPlmnList(List<Plmn> plmnList) {
+			this.plmnList = plmnList;
+		}
+		@Override
+		public String toString() {
+			return "HookConfiguration [plmnList=" + plmnList + ", appEndpoint =" + appEndpoint + ", appEndpointPort =" + appEndpointPort + ",tokenAlgorithm =" + tokenAlgorithm + "]";
+		}
+	}
+	
+	
+	public static class ConfigSvc {		
+		int maxRetries;
+		int readTimeout;
+		int waitTime;
+		int port;
+		String host;
+		String resourceUri;
+		public String getResourceUri() {
+			return resourceUri;
+		}
+		public void setResourceUri(String resourceUri) {
+			this.resourceUri = resourceUri;
+		}
+		public int getPort() {
+			return port;
+		}
+		public void setPort(int port) {
+			this.port = port;
+		}
+		
+		public String getHost() {
+			return host;
+		}
+		public void setHost(String host) {
+			this.host = host;
+		}
+		public int getReadTimeout() {
+			return readTimeout;
+		}
+		public void setReadTimeout(int readTimeout) {
+			this.readTimeout = readTimeout;
+		}
+		public int getMaxRetries() {
+			return maxRetries;
+		}
+		public void setMaxRetries(int maxRetries) {
+			this.maxRetries = maxRetries;
+		}
+		public int getWaitTime() {
+			return waitTime;
+		}
+		public void setWaitTime(int waitTime) {
+			this.waitTime = waitTime;
+		}
+		@Override
+		public String toString() {
+			return "ConfigSvc [maxRetries=" + maxRetries + ", readTimeout=" + readTimeout + ", waitTime=" + waitTime
+					+ ", port=" + port + ", host=" + host + ", resourceUri=" + resourceUri + "]";
+		}
+	}
+
+	public static class SiteInfo {		
+		String applicationDatabase;		
+		String networkDatabase;
+		String nrfInstanceId;
+		String hookType;
+		public String getHookType() {
+			return hookType;
+		}
+		public void setHookType(String hookType) {
+			this.hookType = hookType;
+		}
+		public String getNetworkDatabase() {
+			return networkDatabase;
+		}
+		public void setNetworkDatabase(String networkDatabase) {
+			this.networkDatabase = networkDatabase;
+		}		
+		
+		public String getApplicationDatabase() {
+			return applicationDatabase;
+		}
+		public void setApplicationDatabase(String applicationDatabase) {
+			this.applicationDatabase = applicationDatabase;
+		}
+		public String getNrfInstanceId() {
+			return nrfInstanceId;
+		}
+		public void setNrfInstanceId(String nrfInstanceId) {
+			this.nrfInstanceId = nrfInstanceId;
+		}
+		@Override
+		public String toString() {
+			return "siteInfo [applicationDatabase=" + applicationDatabase + ", networkDatabase =" + networkDatabase + ",networkDatabase =" + networkDatabase + ",nrfInstanceId =" + nrfInstanceId + "]";
+		}
+	}
+	
+	@Override
+	public String toString() {
+		return "HookConfiguration [config=" + configuration + ", configSvc =" + configSvc + ", siteInfo =" + siteInfo + "]";
+	}
+}

@@ -1,0 +1,315 @@
+// Copyright 2018 (C), Oracle and/or its affiliates. All rights reserved.
+
+package com.oracle.cgbu.cne.nrf.dao;
+
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Date;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+import javax.persistence.Column;
+import javax.persistence.Entity;
+import javax.persistence.EnumType;
+import javax.persistence.Enumerated;
+import javax.persistence.Id;
+import javax.persistence.IdClass;
+import javax.persistence.Table;
+import javax.persistence.Transient;
+import javax.validation.constraints.NotNull;
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.oracle.cgbu.cne.nrf.NrfException;
+import com.oracle.cgbu.cne.nrf.domain.AdditionalAttributes;
+import com.oracle.cgbu.cne.nrf.domain.EpochTime;
+import com.oracle.cgbu.cne.nrf.domain.NfScreeningId;
+import com.oracle.cgbu.cne.nrf.domain.NfScreeningRules;
+import com.oracle.cgbu.cne.nrf.domain.NfScreeningRulesListStatus;
+import com.oracle.cgbu.cne.nrf.domain.NfScreeningRulesListType;
+import com.oracle.cgbu.cne.nrf.domain.NfScreeningType;
+import com.oracle.cgbu.cne.nrf.domain.ProblemDetails;
+import com.oracle.cgbu.cne.nrf.domain.VersionedJsonDoc;
+import com.oracle.cgbu.cne.nrf.domain.VersionedJsonDocList;
+
+@Entity
+@IdClass(NfScreeningId.class)
+@Table(name = "NfScreening")
+public class NfScreening {
+	
+	
+	@Id
+	@NotNull
+	@Enumerated(value=EnumType.STRING)
+	@Column(name = "nfScreeningRulesListType", nullable = false, updatable = false)
+	private NfScreeningRulesListType nfScreeningRulesListType;
+
+	@Id
+	@NotNull
+	@Column(name = "recordOwner", nullable = false, updatable = false)
+	private String recordOwner;
+	
+	@NotNull
+	@Enumerated(value=EnumType.STRING)
+	@Column(name = "nfScreeningType", nullable = false)
+	private NfScreeningType nfScreeningType;
+	
+	@NotNull
+	@Enumerated(value=EnumType.STRING)
+	@Column(name = "nfScreeningRulesListStatus", nullable = false)
+	private NfScreeningRulesListStatus nfScreeningRulesListStatus;
+	
+	@NotNull
+	@Column(name = "nfScreeningJsonDocList", columnDefinition = "json")
+	private String nfScreeningJsonDocList;
+	
+	@NotNull
+	@Column(name="lastUpdateTimestamp", nullable=false)
+	private long lastUpdateTimestamp;
+	
+	
+	private static Logger logger = LogManager.getLogger(NrfSystemOptionsDao.class);
+	
+	@Transient
+	private static final ObjectMapper objectMapper = new ObjectMapper();
+	
+	@Transient
+	private static final String VERSION = "v1";
+	
+	public NfScreening() {
+		super();
+	}
+	
+	public NfScreening(NfScreeningRules nfScreeningRules,String nrfInstanceId) throws JsonProcessingException {
+		super();
+		this.setNfScreeningRulesListType(nfScreeningRules.getNfScreeningRulesListType());
+		this.setNfScreeningType(nfScreeningRules.getNfScreeningType());
+		this.setNfScreeningRulesListStatus(nfScreeningRules.getNfScreeningRulesListStatus());
+		this.setRecordOwner(nrfInstanceId);
+		Date currDate = new Date();
+		AdditionalAttributes additionalAttributes = new AdditionalAttributes();
+		additionalAttributes.setCreationTimestamp(currDate);
+		additionalAttributes.setRecordCreator(this.recordOwner);
+		nfScreeningRules.setAdditionalAttributes(additionalAttributes);
+		this.setLastUpdateTimestamp(currDate);
+		List<VersionedJsonDoc> versionedDocList = new ArrayList<>();
+		VersionedJsonDoc versionJsonDoc = new VersionedJsonDoc();
+		versionJsonDoc.setVersion(VERSION);
+		versionJsonDoc.setDoc(nfScreeningRules.toString());
+		versionedDocList.add(versionJsonDoc);
+		VersionedJsonDocList versionJsonDocList = new VersionedJsonDocList();
+		versionJsonDocList.setVersionedJsonDocList(versionedDocList);
+		this.nfScreeningJsonDocList = versionJsonDocList.toString();
+	}
+	
+	/* constructor to be used while updating nfScreeningRules */ 
+	public NfScreening(NfScreening nfScreening,NfScreeningRules nfScreeningRules) throws JsonProcessingException {
+		super();
+		this.setNfScreeningRulesListType(nfScreeningRules.getNfScreeningRulesListType());
+		this.setNfScreeningType(nfScreeningRules.getNfScreeningType());
+		this.setNfScreeningRulesListStatus(nfScreeningRules.getNfScreeningRulesListStatus());
+		this.setRecordOwner(nfScreening.getRecordOwner());
+		Date currDate = new Date();
+		this.setLastUpdateTimestamp(currDate);
+		//for case where versionedJsonDocList is null explicitly set new additional attributes else retain old value
+		AdditionalAttributes additionalAttributes = null;
+		if(nfScreening.getNfScreeningJsonDocList() != null) {
+			additionalAttributes = ((NfScreeningRules)nfScreening.toDomain(VERSION)).getAdditionalAttributes();
+		}else {
+			additionalAttributes = new AdditionalAttributes();
+			additionalAttributes.setCreationTimestamp(currDate);
+			additionalAttributes.setRecordCreator(this.recordOwner);
+		}
+		nfScreeningRules.setAdditionalAttributes(additionalAttributes);
+		List<VersionedJsonDoc> versionedDocList = new ArrayList<>();
+		VersionedJsonDoc versionJsonDoc = new VersionedJsonDoc();
+		versionJsonDoc.setVersion(VERSION);
+		versionJsonDoc.setDoc(nfScreeningRules.toString());
+		versionedDocList.add(versionJsonDoc);
+		VersionedJsonDocList versionJsonDocList = new VersionedJsonDocList();
+		versionJsonDocList.setVersionedJsonDocList(versionedDocList);
+		this.nfScreeningJsonDocList = versionJsonDocList.toString();
+	}
+	
+	@Override
+	public int hashCode() {
+		final int prime = 31;
+		int result = 1;
+		result = prime * result + ((nfScreeningJsonDocList == null) ? 0 : nfScreeningJsonDocList.hashCode());
+		result = prime * result + ((nfScreeningRulesListType == null) ? 0 : nfScreeningRulesListType.hashCode());
+		result = prime * result + (int) (lastUpdateTimestamp ^ (lastUpdateTimestamp >>> 32));
+		result = prime * result + ((nfScreeningRulesListStatus == null) ? 0 : nfScreeningRulesListStatus.hashCode());
+		result = prime * result + ((nfScreeningType == null) ? 0 : nfScreeningType.hashCode());
+		return result;
+	}
+
+	@Override
+	public boolean equals(Object obj) {
+		if (this == obj)
+			return true;
+		if (obj == null)
+			return false;
+		if (getClass() != obj.getClass())
+			return false;
+		
+		NfScreening other = (NfScreening) obj;
+		
+		if (nfScreeningRulesListType == null) {
+			if (other.nfScreeningRulesListType != null)
+				return false;
+		} else if (!nfScreeningRulesListType.equals(other.nfScreeningRulesListType))
+			return false;
+		
+
+		
+		if (nfScreeningType == null) {
+			if (other.nfScreeningType != null)
+				return false;
+		} else if (!nfScreeningType.equals(other.nfScreeningType))
+			return false;
+		
+		if (nfScreeningJsonDocList == null) {
+			if (other.nfScreeningJsonDocList != null)
+				return false;
+		} else if (!nfScreeningJsonDocList.equals(other.nfScreeningJsonDocList))
+			return false;
+		
+		if (nfScreeningRulesListStatus == null) {
+			if (other.nfScreeningRulesListStatus != null)
+				return false;
+		} else if (!nfScreeningRulesListStatus.equals(other.nfScreeningRulesListStatus))
+			return false;
+		
+		return true;
+	}
+	
+	public NfScreeningRulesListType getNfScreeningRulesListType() {
+		return nfScreeningRulesListType;
+	}
+
+	public void setNfScreeningRulesListType(NfScreeningRulesListType nfScreeningRulesListType) {
+		this.nfScreeningRulesListType = nfScreeningRulesListType;
+	}
+
+	public NfScreeningType getNfScreeningType() {
+		return nfScreeningType;
+	}
+
+	public void setNfScreeningType(NfScreeningType nfScreeningType) {
+		this.nfScreeningType = nfScreeningType;
+	}
+
+	
+
+	public NfScreeningRulesListStatus getNfScreeningRulesListStatus() {
+		return nfScreeningRulesListStatus;
+	}
+
+	public void setNfScreeningRulesListStatus(NfScreeningRulesListStatus nfScreeningRulesListStatus) {
+		this.nfScreeningRulesListStatus = nfScreeningRulesListStatus;
+	}
+
+	
+
+	public long getLastUpdateTimestamp() {
+		return lastUpdateTimestamp;
+	}
+
+	public void setLastUpdateTimestamp(Object lastUpdateTimestamp) {
+		if(lastUpdateTimestamp instanceof Date) {
+			this.lastUpdateTimestamp = EpochTime.fetchEpochFromDate((Date) lastUpdateTimestamp);
+		}else{
+			this.lastUpdateTimestamp = (long)lastUpdateTimestamp;
+		}
+	}
+
+	public String getRecordOwner() {
+		return recordOwner;
+	}
+
+	public void setRecordOwner(String recordOwner) {
+		this.recordOwner = recordOwner;
+	}
+
+	public String getNfScreeningJsonDocList() {
+		return nfScreeningJsonDocList;
+	}
+
+	public void setNfScreeningJsonDocList(String nfScreeningJsonDocList) {
+		this.nfScreeningJsonDocList = nfScreeningJsonDocList;
+	}
+
+	@Override
+	public String toString() {
+		return "NfScreening [nfScreeningRulesListType=" + nfScreeningRulesListType + ", nfScreeningType=" + nfScreeningType
+				+ ", nfScreeningData=" + nfScreeningJsonDocList + ", nfScreeningRulesListStatus="+ nfScreeningRulesListStatus  
+				+ ", lastUpdateTimestamp= " + lastUpdateTimestamp + "]";
+	}
+	
+	public Object toDomain(String version) {
+		NfScreeningRules nfScreeningRules = null;
+		VersionedJsonDocList versionJsonDocList = null;
+		
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		logMsg.clear();
+		logMsg.put("logMsg", "Entering toDomain function");
+		logMsg.put("version",version);
+		logger.info(logMsg.toString());
+		
+		try {
+			versionJsonDocList = objectMapper.readValue(this.getNfScreeningJsonDocList(), VersionedJsonDocList.class);
+		} catch (Exception exception) {
+			ProblemDetails prob = ProblemDetails.forInternalError();
+			prob.setCause("Could not fetch VersionedJsonDocList due to an unexpected error.");
+			logMsg.clear();
+			logMsg.put("logMsg", exception.getMessage());
+			logMsg.put("stackTrace",Arrays.toString(exception.getStackTrace()));
+			logMsg.put("versionJsonDocList",this.getNfScreeningJsonDocList());
+			logger.error(logMsg.toString());
+			throw new NrfException(prob);
+			
+		}
+		List<VersionedJsonDoc> versionedDocList = versionJsonDocList.getVersionedJsonDocList();
+		if (!versionedDocList.isEmpty()) {
+			Iterator<VersionedJsonDoc> versionedDocIterator = versionedDocList.iterator();
+			VersionedJsonDoc jsonDoc;
+			while (versionedDocIterator.hasNext()) {
+				jsonDoc = versionedDocIterator.next();
+				if (jsonDoc.getVersion().equals(version)) {
+					logMsg.clear();
+					logMsg.put("logMsg", "Record");
+					logMsg.put("VersionedJsonDoc",jsonDoc.toString());
+					logger.info(logMsg.toString());
+					try {
+						nfScreeningRules = objectMapper.readValue(jsonDoc.getDoc(),
+								NfScreeningRules.class);
+					} catch (Exception e) {
+						
+						ProblemDetails prob = ProblemDetails.forInternalError();
+						prob.setCause("Could not fetch NrfEngSystemOptions due to an unexpected error.");
+						logMsg.clear();
+						logMsg.put("logMsg", e.getMessage());
+						logMsg.put("stackTrace", Arrays.toString(e.getStackTrace()));
+						logMsg.put("jsonDoc", jsonDoc.getDoc());
+						logger.error(logMsg.toString());
+						throw new NrfException(prob);
+					}
+
+				}
+			}
+		}
+		logMsg.clear();
+		logMsg.put("logMsg", "Exit from toDomain function");
+		logMsg.put("version",version);
+		logMsg.put("Doc", nfScreeningRules);
+		logger.info(logMsg.toString());
+		return nfScreeningRules;
+	}
+	
+	
+}

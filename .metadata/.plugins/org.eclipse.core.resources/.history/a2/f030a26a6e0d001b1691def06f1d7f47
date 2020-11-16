@@ -1,0 +1,455 @@
+package com.oracle.cgbu.cne.nrf.audit;
+
+import java.util.Date;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.apache.logging.log4j.ThreadContext;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Component;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.oracle.cgbu.cne.nrf.NrfException;
+import com.oracle.cgbu.cne.nrf.config.NrfConfigurations;
+import com.oracle.cgbu.cne.nrf.dao.NfSubscription;
+import com.oracle.cgbu.cne.nrf.dao.NfSubscriptionRepository;
+import com.oracle.cgbu.cne.nrf.dao.NrfSystemOptionsDao;
+import com.oracle.cgbu.cne.nrf.dao.NrfSystemOptionsRepository;
+import com.oracle.cgbu.cne.nrf.domain.EpochTime;
+import com.oracle.cgbu.cne.nrf.domain.ErrorResponses;
+import com.oracle.cgbu.cne.nrf.domain.Events;
+import com.oracle.cgbu.cne.nrf.domain.FeatureStatus;
+import com.oracle.cgbu.cne.nrf.domain.ForwardingOptions;
+import com.oracle.cgbu.cne.nrf.domain.GeneralOptions;
+import com.oracle.cgbu.cne.nrf.domain.GeoRedundancyOptions;
+import com.oracle.cgbu.cne.nrf.domain.LogLevelOptions;
+import com.oracle.cgbu.cne.nrf.domain.NfAccessTokenOptions;
+import com.oracle.cgbu.cne.nrf.domain.NfAuthenticationOptions;
+import com.oracle.cgbu.cne.nrf.domain.NfDiscoveryOptions;
+import com.oracle.cgbu.cne.nrf.domain.NfManagementOptions;
+import com.oracle.cgbu.cne.nrf.domain.NfScreeningOptions;
+import com.oracle.cgbu.cne.nrf.domain.NrfEngSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.NrfSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.ProblemDetails;
+import com.oracle.cgbu.cne.nrf.domain.SlfOptions;
+import com.oracle.cgbu.cne.nrf.domain.SubscriptionData;
+import com.oracle.cgbu.cne.nrf.domain.SubscriptionStatus;
+import com.oracle.cgbu.cne.nrf.metrics.CommonNrfMetrics;
+import com.oracle.cgbu.cne.nrf.metrics.MetricsDimension;
+import com.oracle.cgbu.cne.nrf.metrics.NrfMetrics;
+import com.oracle.cgbu.cne.nrf.service.NrfEventManager;
+
+@Component
+public class SubscriptionRemoteAuditor extends Thread{
+	private Logger logger = LogManager.getLogger(getClass());
+	
+	@Autowired
+	private NfSubscriptionRepository dbRepo;
+	
+	@Autowired
+	CommonNrfMetrics commonNrfMetrics;
+	
+	@Autowired
+	private NrfConfigurations config;
+	
+	@Autowired
+	MetricsDimension metricsDimension;
+	
+	@Autowired
+	NrfEventManager nrfEventManager;
+	
+	private NrfSystemOptions nrfSystemOptions;
+	
+	@Autowired
+	private NrfSystemOptionsRepository nrfSystemOptionsRepository;
+	
+	private ObjectMapper objectMapper = new ObjectMapper();
+	
+	private String serviceOperation="NrfAuditor";
+	private String FIND="find";
+	private String VERSION="v1";
+	private String NF_SUBSCRIPTION="NfSubscription";
+	private String CREATE="create";
+	private static String NRF_SYSTEMOPTIONS="NrfSystemOptions";
+	
+	@Autowired
+	private NrfMetrics nrfMetrics;
+	
+	public NrfMetrics getNrfMetrics() {
+		return nrfMetrics;
+	}
+
+	public void setNrfMetrics(NrfMetrics nrfMetrics) {
+		this.nrfMetrics = nrfMetrics;
+	}
+
+	public NrfConfigurations getConfig() {
+		return config;
+	}
+
+	public void setConfig(NrfConfigurations config) {
+		this.config = config;
+	}
+
+	public CommonNrfMetrics getCommonNrfMetrics() {
+		return commonNrfMetrics;
+	}
+
+	public void setCommonNrfMetrics(CommonNrfMetrics commonNrfMetrics) {
+		this.commonNrfMetrics = commonNrfMetrics;
+	}
+	
+	public MetricsDimension getMetricsDimension() {
+		return metricsDimension;
+	}
+
+	public void setMetricsDimension(MetricsDimension metricsDimension) {
+		this.metricsDimension = metricsDimension;
+	}
+
+	public void fillThreadContext(String ServiceOperation) {
+		String nrfTxId = "nrf-tx-" + (int)(Math.random()*Integer.MAX_VALUE);
+		ThreadContext.clearMap();
+		ThreadContext.put("nrfTxId", nrfTxId);
+		ThreadContext.put("subsystem",  ServiceOperation);
+		ThreadContext.put("hostname", System.getenv("HOSTNAME"));
+	}
+	
+	@Override
+	public void run() {
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		try {
+			setNrfSystemOptions();
+		}
+		catch (Exception e) {
+			logMsg.clear();
+			logMsg.put("logMsg", "Failed to load System Options. Skipping the audit cycle.");
+			logger.error(logMsg.toString());
+			return;
+		}		
+		while (!AuditManager.stopAudit) {
+			if (!AuditManager.pauseAudit && !AuditManager.pauseRemoteAuditor) {
+				auditCycle();
+				try {
+					Thread.sleep(config.getAudit().getSubscriptionRemoteAuditInterval().toMillis());
+				} catch (InterruptedException e) {
+					logMsg.clear();
+					logMsg.put("logMsg", "An exception occured");
+					logMsg.put("stackTrace", e.toString());
+					logger.error(logMsg.toString());
+					break;
+				}
+			} else {
+				try {
+					logMsg.clear();
+					if(AuditManager.pauseAudit) {
+						logMsg.put("logMsg", "Pausing subscription remote auditor as Nnrf_NfManagement service is down");
+						logger.warn(logMsg.toString());
+					} 
+					if(AuditManager.pauseRemoteAuditor && getNrfSystemOptions().getGeoRedundancyOptions().getGeoRedundancyFeatureStatus().equals(FeatureStatus.ENABLED)) {
+						logMsg.put("logMsg", "Pausing subscription remote auditor as replicationStatus is down");
+						logger.warn(logMsg.toString());
+					}
+					Thread.sleep(1000);
+				} catch (InterruptedException e) {
+					logMsg.clear();
+					logMsg.put("logMsg", "An exception occured");
+					logMsg.put("stackTrace", e.toString());
+					logger.error(logMsg.toString());
+				}
+			}
+		}
+	}
+	
+	public void auditCycle() {
+		fillThreadContext("SubscriptionRemoteAudit");
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		logMsg.clear();
+		logMsg.put("logMsg", "auditCycle() started");
+		logMsg.put("GlobalConfig.nrfInstanceId", config.getGlobalConfig().getNrfInstanceId());
+		logger.info(logMsg.toString());
+
+		List<NfSubscription> subscriptionsWithOtherNrfInstanceId = null;
+		List<String> subscriptionIdWithOwnNrfInstanceId = null;
+
+		// Using default value, 5 sec
+		Integer replicationLatency = 5;
+		
+		List<NrfSystemOptionsDao>  nrfSystemOptionsDaoList = null;
+		// Fetching ocnrfSystemOptions
+		try {
+			nrfSystemOptionsDaoList = nrfSystemOptionsRepository.findbyRecordOwner(config.getGlobalConfig().getNrfInstanceId());
+			commonNrfMetrics.pegNrfDbMetricsSuccessTotal(null,FIND,serviceOperation,NRF_SYSTEMOPTIONS);
+			logMsg.clear();
+			logMsg.put("logMsg", "OcnrfSystemOptions fetched successfully");
+			logMsg.put("value", nrfSystemOptionsDaoList);
+			logger.info(logMsg.toString());
+		}catch(Exception e) {
+			commonNrfMetrics.pegNrfDbMetricsFailuresTotal(null,FIND,serviceOperation,e,NRF_SYSTEMOPTIONS);
+			logMsg.clear();
+			logMsg.put("logMsg","Failed to load NrfSystemOptions. Skipping the audit cycle.");
+			logMsg.put("exception message", e.getMessage());
+			logger.error(logMsg.toString());
+			return;
+		}
+
+		// fetching replicationLatency
+		try {
+			NrfSystemOptions nrfSystemOptions = objectMapper.readValue(nrfSystemOptionsDao.getConfigurationJsonDocList(), NrfSystemOptions.class);
+			if(nrfSystemOptions!=null && nrfSystemOptions.getGeoRedundancyOptions()!=null) {
+				replicationLatency = (int) nrfSystemOptions.getGeoRedundancyOptions().getReplicationLatency().toSeconds();
+				logMsg.clear();
+				logMsg.put("logMsg", "replicationLatency fetched successfully");
+				logMsg.put("replication latency value", replicationLatency);
+				logger.info(logMsg.toString());
+			}
+		} catch (Exception e) {
+			logMsg.clear();
+			logMsg.put("logMsg","nrfSystemOptionsDao.Doc typeCasting to NrfSystemOptions failed");
+			logMsg.put("exception message", e.getMessage());
+			logMsg.put("stackTrace", (Object[]) e.getStackTrace());
+			logger.error(logMsg.toString());
+			return;
+		}
+
+		Date now = new Date();
+		// subtracting replicationLatency from currentTime in order to obtain validityTime + replicationLatency < currentTime
+		Date checkValidityAndRepLatencyDate = Date.from(now.toInstant().minusSeconds(replicationLatency));
+
+		// Fetch subscriptions with latest lastUpdateTimestamp whose nrfInstanceId not matches with its own nrfInstanceId and 
+		// subscription has crossed validityTime + replicationLatency
+		try {
+			subscriptionsWithOtherNrfInstanceId = dbRepo.
+					fetchSubscriptionsHavingOtherRecordOwner(config.getGlobalConfig().getNrfInstanceId(), EpochTime.fetchEpochFromDate(checkValidityAndRepLatencyDate));
+			commonNrfMetrics.pegNrfDbMetricsSuccessTotal(null, FIND, serviceOperation, NF_SUBSCRIPTION);
+			logMsg.clear();
+			logMsg.put("logMsg", "SubscriptionsHavingOtherNrfInstanceId() fetched successfully");
+			logMsg.put("value", subscriptionsWithOtherNrfInstanceId);
+			logger.info(logMsg.toString());
+		}catch (Exception e) {
+			commonNrfMetrics.pegNrfDbMetricsFailuresTotal(null, FIND, serviceOperation, e, NF_SUBSCRIPTION);
+			logMsg.clear();
+			logMsg.put("logMsg", "Exception in fetching subscriptionsHavingOtherNrfInstanceId : "+e.getMessage());
+			logMsg.put("stackTrace", e.toString());
+			logger.error(logMsg.toString());
+		}
+
+		// Fetch subscriptionIds whose nrfInstanceId matches with its own 
+		if( subscriptionsWithOtherNrfInstanceId!=null && !subscriptionsWithOtherNrfInstanceId.isEmpty()) {
+			try {
+				subscriptionIdWithOwnNrfInstanceId = dbRepo.fetchSubscriptionIdsHavingOwnRecordOwner(config.getGlobalConfig().getNrfInstanceId());
+				commonNrfMetrics.pegNrfDbMetricsSuccessTotal(null, FIND, serviceOperation, NF_SUBSCRIPTION);
+				logMsg.clear();
+				logMsg.put("logMsg", "subscriptionIdsWithOwnNrfInstanceId() fetched successfully");
+				logMsg.put("Subscriptions with own nrfInstanceId", subscriptionIdWithOwnNrfInstanceId);
+				logger.info(logMsg.toString());
+			}catch (Exception e) {
+				commonNrfMetrics.pegNrfDbMetricsFailuresTotal(null, FIND, serviceOperation, e, NF_SUBSCRIPTION);
+				logMsg.clear();
+				logMsg.put("logMsg", "Exception in fetching subscriptionIdsWithOwnNrfInstanceId : "+e.getMessage());
+				logMsg.put("stackTrace", e.toString());
+				logger.error(logMsg.toString());
+			}
+
+			for(NfSubscription nfSubscription : subscriptionsWithOtherNrfInstanceId) {
+				logMsg.clear();
+				logMsg.put("logMsg","NF subscription crossed validity time and replication latency");
+				logMsg.put("nrfInstanceId",nfSubscription.getRecordOwner());
+				logMsg.put("nfSubscription message",nfSubscription);
+				logger.warn(logMsg.toString());
+
+				// fetching subscriptionData from nfSubscription
+				if( subscriptionIdWithOwnNrfInstanceId!=null &&
+						!subscriptionIdWithOwnNrfInstanceId.contains(nfSubscription.getSubscriptionId()) ) {
+					SubscriptionData subscriptionData = null;
+					try {
+						subscriptionData = (SubscriptionData) nfSubscription.toDomain(VERSION);
+					} catch (Exception e) {
+						ProblemDetails prob = ProblemDetails.forInternalError();
+						prob.setCause("Could not cast nfSubscription.Doc to SubscriptionData");
+						logMsg.clear();
+						logMsg.put("logMsg","nfSubscription.Doc typeCasting failed with problemDetails");
+						logMsg.put("problem details",prob);
+						logMsg.put("exception message", e.getMessage());
+						logMsg.put("stackTrace", (Object[]) e.getStackTrace());
+						logger.error(logMsg.toString());
+						break;
+					} 
+					
+					nrfMetrics.pegSubscriptionExpired(nfSubscription);
+					
+					// creating new record to save in Db with own nrfInstanceId
+					NfSubscription modifiedNfSubscription = new NfSubscription(subscriptionData,config.getGlobalConfig().getNrfInstanceId());
+					modifiedNfSubscription.setSubscriptionStatus(SubscriptionStatus.SUSPENDED);
+					modifiedNfSubscription.setSubscriptionId(nfSubscription.getSubscriptionId());
+					logMsg.clear();
+					logMsg.put("logMsg", "NfSubscription status changed, subscriptionId=" +nfSubscription.getSubscriptionId()+ ", Previous status=SUBSCRIBED, Current status=SUSPENDED");
+					logger.warn(logMsg.toString());
+
+					ProblemDetails prob;
+					try {
+						NfSubscription saved_obj = dbRepo.saveAndFlush(modifiedNfSubscription);
+						if(saved_obj == null) {
+							commonNrfMetrics.pegNrfDbMetricsFailuresTotal(null,CREATE, serviceOperation,null,NF_SUBSCRIPTION);
+							prob = ProblemDetails.forInternalError();
+							prob.setCause("Could not create new record for the remote record");
+							prob.setDetail("Db value returned "+saved_obj);
+							logMsg.clear();
+							logMsg.put("logMsg","New record creation for remote record failed with problemDetails");
+							logMsg.put("problem details",prob);
+							logMsg.put("Remote record nrfInstanceId", nfSubscription.getRecordOwner());
+							logMsg.put("New record", modifiedNfSubscription);
+							logger.error(logMsg.toString());
+						}else {
+							nrfMetrics.pegNfSubscriptionsSwitchOver(nfSubscription.getSubscriptionId(), serviceOperation,nfSubscription.getRecordOwner(),"NotApplicable");
+							commonNrfMetrics.pegNrfDbMetricsSuccessTotal(null,CREATE, serviceOperation, NF_SUBSCRIPTION);
+							logMsg.clear();
+							logMsg.put("logMsg","New record created for the remote record");
+							logMsg.put("Remote record nrfInstanceId", nfSubscription.getRecordOwner());
+							logMsg.put("Remote record", nfSubscription);
+							logMsg.put("New record", modifiedNfSubscription);
+							logMsg.put("Db value returned", saved_obj);
+							logger.warn(logMsg.toString());
+							nrfEventManager.recordSubscriptionAuditEvent(nfSubscription, Events.AUDIT_REMOTE_SUBSCRIPTION_EXPIRED_EVENT);
+						}
+					}catch (Exception e) {
+						commonNrfMetrics.pegNrfDbMetricsFailuresTotal(null,CREATE, serviceOperation,e,NF_SUBSCRIPTION);
+						prob = ProblemDetails.forInternalError();
+						prob.setCause("Could not create new record record due to an unexpected error");
+						logMsg.clear();
+						logMsg.put("logMsg","New record creation for remote record failed with problemDetails");
+						logMsg.put("problem details",prob);
+						logMsg.put("remote record nrfInstanceId", nfSubscription.getRecordOwner());
+						logMsg.put("new record", modifiedNfSubscription);
+						logMsg.put("exception message", e.getMessage());
+						logMsg.put("stackTrace", (Object[]) e.getStackTrace());
+						logger.error(logMsg.toString());
+					}
+				}
+			}
+			}
+		}
+	
+	private NrfSystemOptions getNrfSystemOptions() {
+		return this.nrfSystemOptions;
+	}
+	
+	private void setNrfSystemOptions() {
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		logMsg.clear();
+		logMsg.put("logMsg", "setNrfSystemOptions() called");
+		logger.trace(logMsg.toString());
+		List<NrfSystemOptionsDao>  nrfSystemOptionsDaoList = null;
+		try {
+
+			nrfSystemOptionsDaoList = this.nrfSystemOptionsRepository.findbyRecordOwner(config.getGlobalConfig().getNrfInstanceId());
+			if(nrfSystemOptionsDaoList != null) {
+				prepareNrfSystemAndEngineeringOptions(nrfSystemOptionsDaoList);
+			}else {
+				ProblemDetails prob = ProblemDetails.forInternalError();
+				prob.setCause("Could not fetch NrfSystemOptions due to an unexpected error.");
+				logMsg.clear();
+				logMsg.put("logMsg", "setNrfSystemOptions failed. Unable to fetch NrfSystemOptions");
+				logger.error(logMsg.toString());
+				throw new NrfException(prob);
+			}		
+			commonNrfMetrics.pegNrfDbMetricsSuccessTotal(null, FIND, serviceOperation, NRF_SYSTEMOPTIONS);
+		}
+		catch(Exception e) {
+			commonNrfMetrics.pegNrfDbMetricsFailuresTotal(null,FIND , serviceOperation, e, NRF_SYSTEMOPTIONS);
+			ProblemDetails prob = ProblemDetails.forInternalError();
+			prob.setCause("Could not fetch NrfSystemOptions due to an unexpected error.");
+			logMsg.clear();
+			logMsg.put("logMsg", "setNrfSystemOptions() failed with the following error");
+			logMsg.put("Error", e.getMessage());
+			logger.error(logMsg.toString());
+			throw new NrfException(prob);
+		}
+	}
+	private void prepareNrfSystemAndEngineeringOptions( List<NrfSystemOptionsDao>  nrfSystemOptionsDaoList)
+	{
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		logMsg.clear();
+		logMsg.put("logMsg", "prepareNrfSystemAndEngineeringOptions() called");
+		logger.debug(logMsg.toString());
+		for(NrfSystemOptionsDao nrfSystemOptionsDao : nrfSystemOptionsDaoList) {
+			switch(nrfSystemOptionsDao.getConfigType())
+			{
+			case "FORWARDING_OPTIONS":	{
+				ForwardingOptions forwardingOptions = nrfSystemOptionsDao.toDomain(VERSION, ForwardingOptions.class);
+				nrfSystemOptions.setForwardingOptions(forwardingOptions);
+			}
+			break;
+
+			case "GENERAL_OPTIONS":	{
+				GeneralOptions generalOptions = nrfSystemOptionsDao.toDomain(VERSION, GeneralOptions.class);
+				nrfSystemOptions.setGeneralOptions(generalOptions);;
+			}
+			break;
+
+			case "GEOREDUNDANCY_OPTIONS":	{
+				GeoRedundancyOptions geoRedundancyOptions = nrfSystemOptionsDao.toDomain(VERSION, GeoRedundancyOptions.class);
+				nrfSystemOptions.setGeoRedundancyOptions(geoRedundancyOptions);
+			}
+			break;
+
+			case "LOG_LEVEL_OPTIONS":	{
+				LogLevelOptions logLevelOptions = nrfSystemOptionsDao.toDomain(VERSION, LogLevelOptions.class);
+				nrfSystemOptions.setLogLevelOptions(logLevelOptions);
+			}
+			break;
+
+			case "NF_ACCESSTOKEN_OPTIONS":	{
+				NfAccessTokenOptions nfAccessTokenOptions = nrfSystemOptionsDao.toDomain(VERSION, NfAccessTokenOptions.class);
+				nrfSystemOptions.setNfAccessTokenOptions(nfAccessTokenOptions);
+			}
+			break;
+
+			case "NF_AUTHENTICATION_OPTIONS":	{
+				NfAuthenticationOptions nfAuthenticationOptions = nrfSystemOptionsDao.toDomain(VERSION, NfAuthenticationOptions.class);
+				nrfSystemOptions.setNfAuthenticationOptions(nfAuthenticationOptions);
+			}
+			break;
+
+			case "NF_DISCOVERY_OPTIONS":	{
+				NfDiscoveryOptions nfDiscoveryOptions = nrfSystemOptionsDao.toDomain(VERSION, NfDiscoveryOptions.class);
+				nrfSystemOptions.setNfDiscoveryOptions(nfDiscoveryOptions);
+			}
+			break;
+
+			case "NF_MANAGEMENT_OPTIONS":	{
+				NfManagementOptions nfManagementOptions = nrfSystemOptionsDao.toDomain(VERSION, NfManagementOptions.class);
+				nrfSystemOptions.setNfManagementOptions(nfManagementOptions);
+			}
+			break;
+
+			case "NF_SCREENING_OPTIONS":	{
+				NfScreeningOptions nfScreeningOptions = nrfSystemOptionsDao.toDomain(VERSION, NfScreeningOptions.class);
+				nrfSystemOptions.setNfScreeningOptions(nfScreeningOptions);
+			}
+			break;
+
+			case "OCNRF_ERROR_RESPONSES":	{
+				ErrorResponses errorResponses = nrfSystemOptionsDao.toDomain(VERSION, ErrorResponses.class);
+				nrfSystemOptions.setErrorResponses(errorResponses);
+			}
+			break;
+
+			case "SLF_OPTIONS":	{
+				SlfOptions slfOptions = nrfSystemOptionsDao.toDomain(VERSION, SlfOptions.class);
+				nrfSystemOptions.setSlfOptions(slfOptions);
+			}
+			break;
+			case "OCNRF_ENG_SYSTEM_OPTIONS":
+			case "OCNRF_ENG_ERROR_RESPONSES":
+			break;
+			}
+		}	
+		logMsg.clear();
+		logMsg.put("logMsg", "Exit from prepareNrfSystemAndEngineeringOptions()");
+		logger.debug(logMsg.toString());
+	}
+}

@@ -1,0 +1,716 @@
+// Copyright 2018 (C), Oracle and/or its affiliates. All rights reserved.
+
+package com.oracle.cgbu.cne.nrf.rest;
+
+
+import java.net.URLDecoder;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.TimeUnit;
+
+import javax.servlet.http.HttpServletRequest;
+import javax.validation.ConstraintViolation;
+import javax.validation.Validator;
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.apache.logging.log4j.ThreadContext;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.CacheControl;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.RestController;
+
+import com.oracle.cgbu.cne.nrf.NrfException;
+import com.oracle.cgbu.cne.nrf.config.NrfConfigurations;
+import com.oracle.cgbu.cne.nrf.config.NrfSystemOptionsManager;
+import com.oracle.cgbu.cne.nrf.domain.ErrorCondition;
+import com.oracle.cgbu.cne.nrf.domain.ErrorInfo;
+import com.oracle.cgbu.cne.nrf.domain.FeatureStatus;
+import com.oracle.cgbu.cne.nrf.domain.ForwardingData;
+import com.oracle.cgbu.cne.nrf.domain.GenericResponse;
+import com.oracle.cgbu.cne.nrf.domain.InvalidParam;
+import com.oracle.cgbu.cne.nrf.domain.NfConfig;
+import com.oracle.cgbu.cne.nrf.domain.NfProfile;
+import com.oracle.cgbu.cne.nrf.domain.NrfEngSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.NrfSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.ProblemDetails;
+import com.oracle.cgbu.cne.nrf.domain.SearchData;
+import com.oracle.cgbu.cne.nrf.domain.SearchResult;
+import com.oracle.cgbu.cne.nrf.domain.UriScheme;
+import com.oracle.cgbu.cne.nrf.metrics.NrfMetrics;
+import com.oracle.cgbu.cne.nrf.service.NfDiscService;
+import com.oracle.cgbu.cne.nrf.serviceHelper.NrfServiceStatus;
+import com.oracle.cgbu.cne.nrf.serviceHelper.ValidationHelper;
+
+
+@RestController
+public class NFDiscoveryController implements NfDiscoveryApi{
+	private static Logger logger = LogManager.getLogger(NFDiscoveryController.class);
+	private final HttpServletRequest request;
+	private static String version = "v1";
+
+	@Autowired
+	private NrfMetrics nrfMetrics;
+	
+	@Autowired
+	ValidationHelper validationHelper;
+	
+	@Autowired
+	private NfDiscService nrfService;
+	
+	@Autowired
+	private NrfConfigurations nrfConfig;
+	
+	@Autowired
+	private NrfSystemOptionsManager nrfSystemOptionsManager;
+	
+	@Autowired
+	@Qualifier("defaultValidator")
+	private Validator validator;
+	
+	private NrfSystemOptions nrfSystemOptions;
+	
+	private NrfEngSystemOptions nrfEngSystemOptions;
+	
+	private static final String PRIMARY = "primary";
+	private static final String SECONDARY = "secondary";
+	public static final Integer HTTP_PORT = 80;
+	public static final Integer HTTPS_PORT = 443;
+	private static final int PRIMARY_NRF_INDEX = 0;
+	private static final int SECONDARY_NRF_INDEX = 1;
+	
+	@Value("${nrf.disc-svc.pod-name}")
+    private String podName;
+	
+	@Autowired
+	public NFDiscoveryController(HttpServletRequest request) {
+		this.request = request;
+	}
+	
+	public void fillThreadContext(String ServiceOperation) {
+		String nrfTxId = "nrf-tx-" + (int)(Math.random()*Integer.MAX_VALUE);
+		ThreadContext.clearMap();
+		ThreadContext.put("nrfTxId", nrfTxId);
+		ThreadContext.put("subsystem",  ServiceOperation);
+		ThreadContext.put("hostname", System.getenv("HOSTNAME"));
+		
+		//extract ocLogId from ingressgateway request header and add it in threadcontext for logging
+		String ocLogId = extractUUID();
+		ThreadContext.put("ocLogId", ocLogId);
+	}
+	
+
+	public String extractUUID() {
+    	Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+    	String ocLogIdGenerated = generateTraceId();
+    	if(this.request.getHeader("ocLogId") == null){
+    		logMsg.clear();
+    		logMsg.put("logMsg", "ocLogId not received in Header");
+    		logMsg.put("ocLogIdGenerated", ocLogIdGenerated);
+    		logger.warn(logMsg.toString());
+    		return ocLogIdGenerated;
+    	}
+		
+		String uuid = this.request.getHeader("ocLogId").toString();
+		
+		logMsg.clear();
+		logMsg.put("logMsg", "ocLogId extracted from Header");
+		logMsg.put("ocLogIdTriggered", uuid);
+		logMsg.put("ocLogIdGenerated", ocLogIdGenerated);
+		logger.info(logMsg.toString());
+		return uuid+":"+ocLogIdGenerated;
+	}
+	
+	private String generateTraceId() {
+        StringBuilder traceId = new StringBuilder().append(System.currentTimeMillis()).append("_")
+                        .append(Thread.currentThread().getId()).append("_").append(podName);
+        return traceId.toString();
+    }
+	
+	// Discover NfInstances based on Search URI Query Parameters
+	@Override
+	public ResponseEntity<Object> discoverNfInstances() {
+		fillThreadContext("discoveryNfInstances");
+		setNrfSystemAndEngineeringOptions();
+		nrfService.setNrfSystemAndEngineeringOptions(nrfSystemOptions, nrfEngSystemOptions);
+		boolean enableF3 = nrfSystemOptions.getGeneralSystemOptions().isEnableF3();
+		boolean enableF5 = nrfSystemOptions.getGeneralSystemOptions().getEnableF5();
+		
+		/*fetch nf authentication status for nfDiscovery */
+		FeatureStatus nfDiscoveryAuthenticationStatus =  nrfSystemOptions.getNfAuthenticationSystemOptions().getNfDiscoveryAuthenticationStatus();
+		
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		ProblemDetails problemDetails;
+		problemDetails = ProblemDetails.forBadRequest();
+		problemDetails.setDetail("Invalid input data");
+		long startTime = nrfMetrics.getCurrentTime();
+		logMsg.clear();
+		logMsg.put("logMsg", "NF discovery request received");
+		logMsg.put("discovery query", this.request.getQueryString());
+		logger.info(logMsg.toString());
+		
+		String req_type = "UNKNOWN";
+		String target_type = "UNKNOWN";
+		
+		// Uncomment when params that cannot be exploded should be informed to the client
+		//List<String> explodeFalseParams = Arrays.asList("service-names","nsi-list","group-id-list","dnai-list","pdu-session-types","required-features");
+		Map<String, String> params = null;
+		try {
+			params = new HashMap<String,String>();
+			String value = URLDecoder.decode(this.request.getQueryString(), "UTF8");
+			String[] keyValueArr = value.split("&");
+			String[] keyValue;
+			String keyAttribute,valueAttribute;
+			for(String str:keyValueArr) {
+				keyValue = str.split("=");
+				if(keyValue.length == 2) {
+					keyAttribute = keyValue[0];
+					valueAttribute = keyValue[1];
+					if(!keyAttribute.isBlank() && !keyAttribute.isEmpty() && !valueAttribute.isBlank() && !valueAttribute.isEmpty()) {
+						if(params.containsKey(keyAttribute)) {
+							// Uncomment when params that cannot be exploded should be informed to the client
+							// Change 'cause' according to the usage
+							//if(explodeFalseParams.contains(keyAttribute)) {
+								//problemDetails.setCause("Array of '"+keyAttribute+"' cannot be exploded");
+								//throw new NrfException(problemDetails);
+							//}
+							params.put(keyAttribute, params.get(keyAttribute)+","+valueAttribute);
+						}else {
+							params.put(keyAttribute, valueAttribute);
+						}
+					}else {
+						problemDetails.setCause("Invalid URI query parameters");
+						logMsg.clear();
+						logMsg.put("logMsg", "Invalid URI query parameters - key or attribute is not present ");
+						logMsg.put("Discovery Query", this.request.getQueryString());
+						logger.error(logMsg.toString());
+						throw new NrfException(problemDetails);
+					}
+				}else {
+					problemDetails.setCause("Invalid URI query parameters");
+					logMsg.clear();
+					logMsg.put("logMsg", "Invalid URI query parameters");
+					logMsg.put("Discovery Query", this.request.getQueryString());
+					logger.error(logMsg.toString());
+					throw new NrfException(problemDetails);
+				}
+			}
+		} catch (NrfException e) {
+			logMsg.clear();
+			logMsg.put("logMsg", "Invalid URI query parameters");
+			logMsg.put("Discovery Query", this.request.getQueryString());
+			logMsg.put("Exception Details", e.toString());
+			logger.error(logMsg.toString());
+			
+			req_type = params.get("requester-nf-type");
+			req_type = (req_type == null) ? "UNKNOWN" : req_type;
+			target_type = params.get("target-nf-type");
+			target_type = (target_type == null) ? "UNKNOWN" : target_type;
+			nrfMetrics.pegDiscoveryRequests(req_type, target_type);
+			nrfMetrics.pegDiscoveryResponse(req_type, target_type, HttpStatus.BAD_REQUEST,startTime);
+			return ResponseEntity.status(problemDetails.getStatus()).contentType(MediaType.APPLICATION_PROBLEM_JSON).body(problemDetails);
+		}catch (Exception e) {
+			logMsg.clear();
+			logMsg.put("logMsg", "Invalid URI query parameters");
+			logMsg.put("Discovery Query", this.request.getQueryString());
+			logMsg.put("Exception Details", e.toString());
+			logger.error(logMsg.toString());
+			req_type = (req_type == null) ? "UNKNOWN" : req_type;
+			target_type = params.get("target-nf-type");
+			target_type = (target_type == null) ? "UNKNOWN" : target_type;
+			nrfMetrics.pegDiscoveryRequests(req_type, target_type);
+			nrfMetrics.pegDiscoveryResponse(req_type, target_type, HttpStatus.BAD_REQUEST,startTime);
+			problemDetails.setCause("Invalid URI query parameters");
+			return ResponseEntity.status(problemDetails.getStatus()).contentType(MediaType.APPLICATION_PROBLEM_JSON).body(problemDetails);
+		}
+		boolean applyF3Validation = enableF5 ? true : enableF3;
+		logMsg.clear();
+		logMsg.put("enableF3", enableF3);
+		logMsg.put("enableF5", enableF5);
+		logMsg.put("applyF3Validation", applyF3Validation);
+		logger.info(logMsg.toString());
+        SearchData searchData = new SearchData(applyF3Validation);
+
+		// Mapping parameters into SearchData
+		for(Map.Entry<String, String> entry:params.entrySet()) {
+			String key = entry.getKey();
+			String value = entry.getValue();
+			try {
+				searchData.add(key, value);
+			} catch (NrfException e) {
+				logMsg.clear();
+				logMsg.put("logMsg", "Invalid URI query parameters");
+				logMsg.put("Discovery Query", this.request.getQueryString());
+				logMsg.put("Exception Details", e.toString());
+				logger.error(logMsg.toString());
+				
+				problemDetails.setInvalidParams(e.getProbDetails().getInvalidParams());
+				problemDetails.setCause(e.getProbDetails().getCause());
+			}
+		}
+		// Validating SearchData
+		if (!validator.validate(searchData).isEmpty()) {
+			for (ConstraintViolation<SearchData> err : validator.validate(searchData)) {
+				problemDetails.addInvalidParam(
+						new InvalidParam(err.getPropertyPath().toString(), err.getMessage().toString()));
+			}
+		}
+		nrfMetrics.pegDiscoveryRequests(searchData.getRequesterNfType(), searchData.getTargetNfType());
+		
+		// If any validation errors occur response is sent back with ProblemDetails
+		if((problemDetails.getInvalidParams() !=null) && (!problemDetails.getInvalidParams().isEmpty()))
+		{
+			logMsg.clear();
+			logMsg.put("logMsg", "NF discovery failed with problemDetails");
+			logMsg.put("problemDetails", problemDetails);
+			logMsg.put("Discovery Query", this.request.getQueryString());
+			logger.error(logMsg.toString());
+			nrfMetrics.pegDiscoveryResponse(searchData.getRequesterNfType(), searchData.getTargetNfType(),HttpStatus.valueOf(problemDetails.getStatus()),startTime);
+			return ResponseEntity.status(problemDetails.getStatus()).contentType(MediaType.APPLICATION_PROBLEM_JSON).body(problemDetails);
+		}
+		
+		List<NfConfig> nrfHostConfig = null;
+		if (nrfSystemOptions.getForwardingSystemOptions()!=null) {
+			nrfHostConfig = nrfSystemOptions.getForwardingSystemOptions().getNrfHostConfig();
+		}
+		ForwardingData forwardingData  = this.parseViaHeader(this.request, nrfHostConfig);
+		if(forwardingData.isLoop()) {
+			problemDetails = (ProblemDetails) getFailureResponseByErrorCondition(ErrorCondition.NRF_Forwarding_Loop_Detection);
+			logMsg.clear();
+			logMsg.put("logMsg", "NF discovery failed with errorCondition :"+
+					ErrorCondition.NRF_Forwarding_Loop_Detection);
+			logMsg.put("problemDetails", problemDetails);
+			logMsg.put("Discovery Query", this.request.getQueryString());
+			logger.error(logMsg.toString());
+			nrfMetrics.pegDiscoveryForwardingRequests(searchData.getTargetNfType(), searchData.getRequesterNfType());
+			nrfMetrics.pegDiscoveryForwardingResponses(searchData.getTargetNfType(), searchData.getRequesterNfType(), HttpStatus.LOOP_DETECTED.value(), "LoopDetected");
+			nrfMetrics.pegDiscoveryResponse(searchData.getRequesterNfType(), searchData.getTargetNfType(), HttpStatus.valueOf(problemDetails.getStatus()),startTime);
+			return ResponseEntity.status(problemDetails.getStatus()).contentType(MediaType.APPLICATION_PROBLEM_JSON).body(problemDetails);
+		}
+		
+		//code for nfAuth starts
+		String requesterNfInstanceFqdn = searchData.getRequesterNfInstanceFqdn();
+		logMsg.clear();
+		logMsg.put("logMsg", "Checking status for NF Authentication support");
+		logMsg.put("nfDiscoveryAuthenticationStatus", nfDiscoveryAuthenticationStatus);
+		logMsg.put("requesterNfInstanceFqdn",requesterNfInstanceFqdn);
+		logger.info(logMsg.toString());
+		/*
+		 * NRF with discoveryAuthentiation status set to true should perform
+		 * authentication
+		 */
+		if (nfDiscoveryAuthenticationStatus.equals(FeatureStatus.ENABLED)) {
+			
+			validationHelper.setValidationParameters(forwardingData, request, nrfSystemOptions, nrfEngSystemOptions);
+			GenericResponse genericResponse = validationHelper.performNfAuthentication(requesterNfInstanceFqdn);
+			if(genericResponse.getResponse() != null) {
+				problemDetails = (ProblemDetails)genericResponse.getResponse();
+				HttpHeaders httpHeaders = genericResponse.getHeaders();
+				String tlsFqdn = parseOcXfccDnsHeader();	
+				logMsg.clear();
+				logMsg.put("logMsg", "NF Authentication failed for service operation nfDiscover");
+				logMsg.put("nfDiscoveryAuthenticationStatus", nfDiscoveryAuthenticationStatus);
+				logMsg.put("problemDetails", problemDetails);
+				logMsg.put("RequesterNfType", req_type);
+				logMsg.put("TargetNfType", target_type);
+				logMsg.put("requesterNfInstanceFqdn",requesterNfInstanceFqdn);
+				logMsg.put("TLSFqdn", tlsFqdn);
+				logMsg.put("HttpStatusCode",HttpStatus.valueOf(problemDetails.getStatus()));
+				logMsg.put("headers", httpHeaders);
+				logMsg.put("getReplicationStatus",String.valueOf(NrfServiceStatus.getReplicationStatus()));
+				logger.error(logMsg.toString());
+				
+				if(httpHeaders.isEmpty()) {
+					return ResponseEntity.status(problemDetails.getStatus()).contentType(MediaType.APPLICATION_PROBLEM_JSON).body(problemDetails);
+				}else {
+					return ResponseEntity.status(problemDetails.getStatus()).contentType(MediaType.APPLICATION_PROBLEM_JSON).headers(httpHeaders).body(problemDetails);
+				}
+			}else {
+				logMsg.put("logMsg","Nf Fqdn Authentication successful");
+				logger.info(logMsg.toString());
+			}
+		}
+		//code for nfAuth ends	
+			
+		
+		if(searchData.getServiceNames() != null) {
+			nrfMetrics.pegDiscoveryRequestsPerService(searchData.getRequesterNfType(), searchData.getServiceNames());
+		}
+		
+		// If requiredFeatures list is present, then its size must be equal to the serviceNames list
+		if(searchData.getRequiredFeatures() != null) {
+			if(searchData.getServiceNames() == null || 
+				searchData.getServiceNames().size() != searchData.getRequiredFeatures().size()) {
+				problemDetails.addInvalidParam(new InvalidParam(SearchData.REQUIRED_FEATURES_KEY,
+						   		"The size of "+SearchData.REQUIRED_FEATURES_KEY+" must be the same as "
+						   		+SearchData.SERVICE_NAMES_KEY));
+				logMsg.clear();
+				logMsg.put("logMsg", "NF discovery failed with problemDetails");
+				logMsg.put("problemDetails", problemDetails);
+				logger.error(logMsg.toString());
+				nrfMetrics.pegDiscoveryResponse(searchData.getRequesterNfType(), searchData.getTargetNfType(),HttpStatus.valueOf( problemDetails.getStatus()),startTime);
+				return ResponseEntity.status(problemDetails.getStatus()).contentType(MediaType.APPLICATION_PROBLEM_JSON).body(problemDetails); 
+			}
+		}
+		// If no validation errors occur, SearchData is sent for getting the nfProfiles matching the query parameters
+		HashMap<String,Object> discResult = nrfService.discoverNfProfiles(searchData, forwardingData);
+		Object result = discResult.get("response");
+		
+		// Fetch the latest NrfSystemOptions
+		Integer validityPeriodSecs = (int) nrfSystemOptions
+										.getNfDiscoverSystemOptions().getDiscoveryValidityPeriod()
+										.toSeconds();
+
+		List<NfProfile> nfProfiles = new ArrayList<NfProfile>();
+		SearchResult searchResult = new SearchResult();
+		searchResult.setValidityPeriod(validityPeriodSecs);
+		searchResult.setNfInstances(nfProfiles);
+		if( !applyF3Validation) {
+			searchResult.setNrfSupportedFeatures(null);
+		}
+		CacheControl cacheControl = CacheControl.maxAge((long)validityPeriodSecs, TimeUnit.SECONDS);
+
+		// If SearchData contains any invalid requests, then response is sent with ProblemDetails
+		if(result instanceof ProblemDetails) {
+			problemDetails = (ProblemDetails) result;
+			
+			if(discResult.containsKey("forwardedRequest")) {
+				logMsg.clear();
+				logMsg.put("logMsg", "NF discovery failed with problemDetails");
+				logMsg.put("problemDetails", problemDetails);
+				logMsg.put("discovery query", this.request.getQueryString());
+				logger.error(logMsg.toString());
+				return ResponseEntity.status(problemDetails.getStatus()).contentType(MediaType.APPLICATION_PROBLEM_JSON).body(problemDetails);
+			}
+			
+			boolean profileSearched =  (boolean)discResult.get("profileSearched");
+			if(nrfService.targetNfTypeSupportedForSlfLookup(searchData.getTargetNfType()))
+			{
+				logMsg.clear();
+				logMsg.put("Discovery Query", this.request.getQueryString());
+				logMsg.put("logMsg", "Target NF type check supported for SLF Lookup");
+				logger.info(logMsg.toString());
+				
+				if((profileSearched == false) || ((profileSearched == true) && (
+						problemDetails.getStatus() != HttpStatus.NOT_FOUND.value())))
+				{
+					logMsg.clear();
+					logMsg.put("logMsg", "NF discovery failed for SLF Lookup");
+					logMsg.put("problemDetails", problemDetails);
+					logMsg.put("Discovery Query", this.request.getQueryString());
+					logger.error(logMsg.toString());
+					nrfMetrics.pegDiscoveryResponse(searchData.getRequesterNfType(), searchData.getTargetNfType(), HttpStatus.valueOf(problemDetails.getStatus()),startTime);
+					return ResponseEntity.status(problemDetails.getStatus()).contentType(MediaType.APPLICATION_PROBLEM_JSON).body(problemDetails);
+				}
+			}
+			else
+			{
+				if(problemDetails.getStatus() != HttpStatus.NOT_FOUND.value()) {
+					logMsg.clear();
+					logMsg.put("logMsg", "NF discovery failed with problemDetails");
+					logMsg.put("problemDetails", problemDetails);
+					logMsg.put("Discovery Query", this.request.getQueryString());
+					logger.error(logMsg.toString());
+					nrfMetrics.pegDiscoveryResponse(searchData.getRequesterNfType(), searchData.getTargetNfType(),HttpStatus.valueOf(problemDetails.getStatus()),startTime);
+					return ResponseEntity.status(problemDetails.getStatus()).contentType(MediaType.APPLICATION_PROBLEM_JSON).body(problemDetails);
+				}
+				else {
+					logMsg.clear();
+					logMsg.put("Discovery Query", this.request.getQueryString());
+					logMsg.put("logMsg", "No NFProfiles found for query");
+					logger.warn(logMsg.toString());
+				}
+			}
+		}
+		else {
+			
+			if((discResult.containsKey("forwardedRequest")) && (result instanceof SearchResult)) {
+				logMsg.clear();
+				logMsg.put("logMsg", "Sending NF discovery response with SearchResult");
+				logMsg.put("result", result);
+				logger.info(logMsg.toString());				
+				cacheControl = CacheControl.maxAge((long)discResult.get("cacheControl"), TimeUnit.SECONDS);
+				return ResponseEntity.ok().cacheControl(cacheControl).body((SearchResult)result);
+			}
+			
+			
+			nfProfiles = (List<NfProfile>) result;
+			// If any nfProfiles are returned matching the SearchData then SearchResult is sent in response
+			nfProfiles = removeAdditionalAttributes(nfProfiles, version);
+			searchResult.setNfInstances(nfProfiles);
+			Object resp = nrfService.limitNfProfilesInResp(searchResult, searchData);
+			if(resp instanceof  List)
+			{
+				List<NfProfile> nfProfilesResp = (List<NfProfile>)resp;	
+				searchResult.setNfInstances(nfProfilesResp);
+				logMsg.clear();
+				logMsg.put("logMsg", "number of profiles in searchResult after applying the payload size limit");
+				logMsg.put("sizeLimit", searchResult.getNfInstances().size());
+				logger.info(logMsg.toString());
+				logMsg.clear();
+				logMsg.put("logMsg", "searchResult size(octets) in discovery response");
+				logMsg.put("sizeLimit", searchResult.toString().getBytes().length);
+				logger.info(logMsg.toString());
+				logMsg.clear();
+				logMsg.put("logMsg", "Sending NF discovery response with searchResult");
+				logMsg.put("searchResult", searchResult);
+				logger.info(logMsg.toString());
+			}
+			else 
+			{
+				nrfMetrics.pegDiscoveryResponse(searchData.getRequesterNfType(), searchData.getTargetNfType(),HttpStatus.valueOf(problemDetails.getStatus()) ,startTime);
+				problemDetails = (ProblemDetails) resp;	
+				logMsg.clear();
+				logMsg.put("logMsg", "NF discovery failed with problemDetails");
+				logMsg.put("Discovery Query", this.request.getQueryString());
+				logMsg.put("problemDetails", problemDetails);
+				logger.error(logMsg.toString());
+				return ResponseEntity.status(problemDetails.getStatus())
+						.contentType(MediaType.APPLICATION_PROBLEM_JSON).body(problemDetails);
+			}
+			
+		}
+		if(nrfService.targetNfTypeSupportedForSlfLookup(searchData.getTargetNfType())) {
+			nrfMetrics.pegDiscoveryResponseForSlf(searchData.getTargetNfType(), HttpStatus.OK.value(),"NotApplicable");
+		}
+		
+		nrfMetrics.pegDiscoveryResponse(searchData.getRequesterNfType(), searchData.getTargetNfType(), HttpStatus.OK,startTime);
+		nrfMetrics.pegNumberOfProfilesSentInResponse(searchData.getTargetNfType(),searchResult.getNfInstances().size());
+		
+		return  ResponseEntity.ok()
+				.cacheControl(cacheControl)
+				.body(searchResult);
+	}
+	
+	public  ForwardingData parseViaHeader(HttpServletRequest request, List<NfConfig> nrfHostConfigList) {
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		// HashMap initialized to store loop and forward request
+		ForwardingData forwardingData = new ForwardingData();
+		forwardingData.setIsForwardingPossible(true);
+		forwardingData.setLoopDetected(false);
+
+		List<String> forwardedFrom = new ArrayList<String>();
+		if( this.request.getHeader("Via")!=null ) {
+
+			Iterator<String> viaHeadersList = this.request.getHeaders("Via").asIterator();			
+			while (viaHeadersList.hasNext()) {
+				String viaHeaderValue = viaHeadersList.next();
+				// separating [protocol-name"/"]protocol-version host[":"port] using whitespace
+				String[] viaheaderInfo = viaHeaderValue.split(" ");
+				String protocolVersion = viaheaderInfo[0];
+				String viaHeaderHost = viaheaderInfo[1];
+
+				// By default is HTTP, if protocol-name is empty in Via header
+				String protocolName = "HTTP";
+
+				// if [protocol-name"/"]protocol-version come where protocol-name is optional
+				if(viaheaderInfo[0].contains("/")) {
+					String[] protocolNameAndVersion =viaheaderInfo[0].trim().split("/");
+					protocolName = protocolNameAndVersion[0];
+					protocolVersion = protocolNameAndVersion[1];
+				}
+
+				// By default is HTTP_PORT (80), if port is empty in Via header
+				Integer viaHeaderPort = HTTP_PORT;
+
+				// if host[":"port] come where port is optional
+				if(viaheaderInfo[1].contains(":")) {
+					String[] retrieveHostAndPort =  viaheaderInfo[1].split(":");
+					viaHeaderHost = retrieveHostAndPort[0];
+					viaHeaderPort = Integer.parseInt(retrieveHostAndPort[1]);
+				}
+				logMsg.put("logMsg", "Via header received");
+				logMsg.put("protocolName", protocolName);
+				logMsg.put("protocolVersion", protocolVersion);
+				logMsg.put("host", viaHeaderHost);
+				logMsg.put("port", viaHeaderPort);
+				logger.info(logMsg.toString());
+
+				String selfHostName = nrfSystemOptions.getGeneralSystemOptions().getOcnrfEndPointHost();
+				Integer selfPort = nrfSystemOptions.getGeneralSystemOptions().getOcnrfEndPointPort();
+
+				if( viaHeaderHost.equals(selfHostName) && viaHeaderPort.toString().equals(selfPort.toString())) {
+					forwardingData.setLoopDetected(true);
+					break;
+				}
+				if(nrfHostConfigList!=null) {
+					// iterating over nrfHostConfigList to detect forwardedRequest
+					int iter = 0;
+					int nrfHostConfigListSize = nrfHostConfigList.size();
+
+					while(iter < nrfHostConfigListSize) {
+						Integer nrfHostConfigPort = nrfHostConfigList.get(iter).getPort();
+						String nrfHostConfigHostName = nrfHostConfigList.get(iter).getFqdn();
+						UriScheme uriScheme = nrfHostConfigList.get(iter).getScheme();
+						if (nrfHostConfigPort==null) {
+							if(uriScheme.equals(UriScheme.HTTP)) {
+								nrfHostConfigPort = HTTP_PORT;
+							}else if(uriScheme.equals(UriScheme.HTTPS)) {
+								nrfHostConfigPort = HTTPS_PORT;
+							}
+						}
+
+						if( nrfHostConfigHostName.equals(viaHeaderHost) && nrfHostConfigPort.toString().equals(viaHeaderPort.toString())
+								&& protocolVersion.equals("2.0")) {
+							logMsg.clear();
+							logMsg.put("logMsg", "forwardedRequest received");
+							logMsg.put("nrfHostConfigHostName", nrfHostConfigHostName);
+							logMsg.put("nrfHostConfigPort", nrfHostConfigPort);
+							logger.info(logMsg.toString());
+							if (iter == PRIMARY_NRF_INDEX) {
+								//forwarded from primaryNrf
+								forwardedFrom.add(PRIMARY);
+								if (nrfHostConfigListSize == 1) {
+									//the request is forwarded from the only NRF configured.
+									forwardingData.setIsForwardingPossible(false);
+								}
+							}
+							else if (iter == SECONDARY_NRF_INDEX) {
+								//forwarded from Secondary NRF.
+								forwardedFrom.add(SECONDARY);
+								}
+						}
+						iter++;
+					}
+				}
+
+				if(forwardingData.isLoop()) {
+					break;
+				}
+
+			}
+			forwardingData.setViaHeader(this.request.getHeaders("via").asIterator());
+		}
+		forwardingData.setForwardedFrom(forwardedFrom);
+		if (forwardingData.isForwardedFromPrimaryNrf() == true && forwardingData.isForwardedFromSecondaryNrf() == true) {
+			//forwarded from both primary and secondary NRFs, so further forwarding is not possible.
+			forwardingData.setIsForwardingPossible(false);
+		}
+		logMsg.clear();
+		logMsg.put("logMsg","Exiting parseViaHeader");
+		logMsg.put("isForwardingPossible", forwardingData.isForwardingPossible());
+		logMsg.put("isForwardedFromPrimaryNrf", forwardingData.isForwardedFromPrimaryNrf());
+		logMsg.put("isForwardedFromSecondaryNrf", forwardingData.isForwardedFromPrimaryNrf());
+		logMsg.put("ForwardingData", forwardingData.toString());
+		logger.info(logMsg.toString());
+		return forwardingData;
+	}
+	
+	public Object getFailureResponseByErrorCondition(ErrorCondition errCondition ) 
+	{
+		List<ErrorInfo> errorInfoList = nrfSystemOptions
+											.getErrorResponses().getNrfForwardingErrorResponses();		
+		ProblemDetails prob = null;		
+		Object retVal = null;
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		logMsg.clear();
+		logMsg.put("logMsg", "Entering getFailureResponseByErrorCondition function");
+		logMsg.put("errCondition", errCondition);
+		logMsg.put("errorInfoList", errorInfoList);
+		logger.info(logMsg.toString());
+		for(ErrorInfo errorInfo : errorInfoList)
+		{
+			if(errorInfo.getErrorCondition().equals(errCondition))
+			{
+				logMsg.clear();
+				logMsg.put("logMsg","errorInfo selected for errCondition : "+errCondition );
+				logMsg.put("errorInfo.detectionResultCode", errorInfo.getErrorDetectionResultCode());
+				logMsg.put("errorInfo.errorCode", errorInfo.getErrorCode());
+				logMsg.put("errorInfo.errorResponse", errorInfo.getErrorResponse());
+				logger.info(logMsg.toString());
+				if( HttpStatus.valueOf(errorInfo.getErrorCode()).is2xxSuccessful())
+				{
+					/*case where 2xx is configured as errorCode*/
+					retVal = new ArrayList<NfProfile>();
+				}
+				else
+				{
+					prob = new ProblemDetails();
+					prob.setStatus((int)errorInfo.getErrorCode());
+					prob.setDetail(errorInfo.getErrorResponse());
+				    prob.setTitle(errorInfo.getErrorResponse());
+					prob.setCause(errorInfo.getErrorResponse());
+					retVal = prob ;
+				}
+				break;
+			}
+		}
+		logMsg.clear();
+		logMsg.put("logMsg", "Exit from getFailureResponseByErrorCondition function");
+		logger.info(logMsg.toString());
+		return retVal;		
+	}
+	
+	public void setNrfSystemAndEngineeringOptions() {
+		
+		logger.info("setNrfSystemAndEngineeringOptions() invoked");
+		
+		this.nrfSystemOptions = nrfSystemOptionsManager.getNrfSystemOptions();
+        logger.info("NrfSystemOptions for the request: " + nrfSystemOptions);
+        
+        this.nrfEngSystemOptions = nrfSystemOptionsManager.getNrfEngSystemOptions();
+        logger.info("NrfEngSystemOptions for the request: " + nrfEngSystemOptions);
+        
+	}
+	
+	public List<NfProfile> removeAdditionalAttributes(List<NfProfile> list,String version) {
+		
+		/*
+		 * This function is used to extract the NfProfiles
+		 * fetched from database w.r.t to 
+		 * a specific version specified and remove additionalAttributes
+		 */
+		
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		logMsg.clear();
+		logMsg.put("logMsg", "Entering removeAdditionalAttributes function");
+		logMsg.put("ListSize", list.size());
+		logger.info(logMsg.toString());
+		
+		Iterator<NfProfile> iterator = list.iterator();
+		List<NfProfile> responseList = new ArrayList<>();
+		NfProfile profile = null;
+		while(iterator.hasNext()) {
+			profile = iterator.next();
+			//set additionalAttributes to null before sending to operator
+			profile.setAdditionalAttributes(null);
+			responseList.add(profile);
+		}
+		
+		logMsg.clear();
+		logMsg.put("logMsg", "Exit from removeAdditionalAttributes function");
+		logMsg.put("ListSize", list.size());
+		logger.info(logMsg.toString());
+		return responseList;
+	}
+	
+	public String parseOcXfccDnsHeader() {
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+
+		logMsg.clear();
+		logMsg.put("logMsg", "Parsing OC-XFCC-DNS  header");
+		logger.info(logMsg.toString());
+
+		String ocDnsHeaderValue = this.request.getHeader("OC-XFCC-DNS");
+		logMsg.put("OC-XFCC-DNS header recieved with value", ocDnsHeaderValue);
+		if (ocDnsHeaderValue == null) {
+			logMsg.clear();
+			logger.warn(logMsg.toString());
+		} else {
+			logger.info(logMsg.toString());
+		}
+
+		return ocDnsHeaderValue;
+	}
+
+
+}

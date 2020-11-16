@@ -1,0 +1,1290 @@
+package com.oracle.cgbu.cne.common.test;
+
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Type;
+import java.net.http.HttpResponse;
+import java.security.KeyStore;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.TimeUnit;
+
+import org.apache.logging.log4j.Level;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.core.Appender;
+import org.apache.logging.log4j.core.LogEvent;
+import org.apache.logging.log4j.core.Logger;
+import org.junit.After;
+import org.junit.Assert;
+import org.junit.Before;
+import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.mockito.ArgumentCaptor;
+import org.mockito.Captor;
+import org.mockito.Mock;
+import org.mockito.Mockito;
+import org.mockito.MockitoAnnotations;
+import org.powermock.api.mockito.PowerMockito;
+import org.powermock.core.classloader.annotations.PowerMockIgnore;
+import org.powermock.core.classloader.annotations.PrepareForTest;
+import org.powermock.modules.junit4.PowerMockRunner;
+import org.powermock.reflect.Whitebox;
+
+import com.google.gson.reflect.TypeToken;
+import com.oracle.cgbu.cne.common.CommonUtils;
+import com.oracle.cgbu.cne.common.config.ConfigurationInfo;
+import com.oracle.cgbu.cne.common.config.ConfigurationInfo.Globalconfig;
+import com.oracle.cgbu.cne.common.config.ConfigurationInfo.Oauthconfig;
+import com.oracle.cgbu.cne.common.config.ConfigurationInfo.Sslconfig;
+import com.oracle.cgbu.cne.common.service.ConfigWatchProcess;
+import com.oracle.cgbu.cne.common.service.UpdateConfiguration;
+//import com.squareup.okhttp.Call;
+//import com.squareup.okhttp.OkHttpClient;
+//import com.squareup.okhttp.Request;
+ 
+import com.oracle.cgbu.cne.common.service.client.CertReloadClientImpl;
+ 
+
+import io.kubernetes.client.openapi.*;
+import io.kubernetes.client.openapi.apis.*;
+import io.kubernetes.client.openapi.models.*;
+import io.kubernetes.client.util.Config;
+import io.kubernetes.client.util.Watch;
+import okhttp3.Callback;
+import okhttp3.RequestBody;
+
+@PowerMockIgnore({ "javax.management.*", "com.sun.org.apache.*", "javax.xml.*", "org.xml.*", "java.net.ssl",
+	"javax.security.auth.x500.X500Principal", "org.apache.xerces.*", "org.w3c.*", "javax.net.ssl.*" })
+@RunWith(PowerMockRunner.class)
+@PrepareForTest(value = { ConfigurationInfo.class, UpdateConfiguration.class, KeyStore.class,ConfigWatchProcess.class ,CoreV1Api.class,CommonUtils.class,Watch.class,okhttp3.OkHttpClient.class})
+
+
+public class ConfigWatchProcessTests {
+	private Logger logger;
+	private static CoreV1Api coreApi;
+
+	@After
+	public void teardown() {
+		logger.removeAppender(mockAppender);
+	}
+
+	@Mock
+	private Appender mockAppender;
+
+	@Captor
+	private ArgumentCaptor<LogEvent> captorLoggingEvent;
+
+	private ConfigWatchProcess configWatchProcess;
+
+	private Watch<Object> mockWatch = Mockito.mock(Watch.class);
+	@Before
+	public void setUp() throws Exception{
+		MockitoAnnotations.initMocks(this);
+		//PowerMockito.spy(ConfigWatchProcess.class);
+
+		when(mockAppender.getName()).thenReturn("MockAppender");
+		when(mockAppender.isStarted()).thenReturn(true);
+		when(mockAppender.isStopped()).thenReturn(false);
+		logger = (Logger) LogManager.getRootLogger();
+		logger.addAppender(mockAppender);
+		logger.setLevel(Level.INFO);
+
+	}
+	static final String rsa_pkcs8 = "-----BEGIN PRIVATE KEY-----MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQCx2gv/uIUiy1H7\n"
+			+ "SW5DOvC5ElzymJ7MOXaAR9cahbVZ6vO2AotfpQuK1t+1NMpCpErPqoo0PHO/rXc9\n"
+			+ "7ZXNYhxXgm7qMvdQN2NoG167DoeqfcGUufP+EG4gLbil7+HChr8WT8HVASBThAY+\n"
+			+ "9nMER/GmWLfTUTTw9KiWXZXN6I1jm9EPS5AGoUJGA3NfmZVcnklkJHXyLl69Jl15\n"
+			+ "qTwwzmw71TD0GNoVqen7GnE+gGXJAzOmmqXp6bjssOxXS8HGfJkwbNtLFKfgjIf0\n"
+			+ "fAAK+a4elsEvtoctHI6DgXk7OzZiq/+Xpj1Gl7KMvOJdZYIqhZ4OgC4TEJLwRfbZ\n"
+			+ "SX+G9/XlAgMBAAECggEBAKQOE4VmiwDGdjAK0zgW1ViSVMS+/bQ6yVGZcxUXA2sX\n"
+			+ "LInXHQMz9kqy3JaFRJFmhU+761I19Tt5YoXwc3+JocUjHvbP3ovTG9I7dQ2tYH1n\n"
+			+ "FTsAsM3KEBuEsU/3z9MlgnytQ4odSNlg7nYD1aK8Tm74ZVD7Fo+xzxUs7HOMsWeQ\n"
+			+ "GKKHzpoTDefRuUqUXOZdEnnKcu9vcLtr7Kp23Bge4Ie1o7z/HyWwKzbwiPU6MzMy\n"
+			+ "4XdJ+2/KYkHM/WObfghsVyqVA3hx5YQdaN+AlNznyL4G8//i+4Y8iLaCX7nRX5Sc\n"
+			+ "xnI1j1MeV/NMg8mKEDog25XEqbo8tLAmmueeyM9ohJ0CgYEA3yI/ajs6lbaMT/SP\n"
+			+ "GI61jO2qIh3zzKQHRRONQN/vyedwIS596jwQDrNqp3jGfkXPG8B5cLv3wS8jyT12\n"
+			+ "fgZbP1CJq8Q0RmqmupcuCtSyIC+CQzkKUbnwLeurg6P25CGbTpsXWTDglpZ6H6Qq\n"
+			+ "AizkpIN3vG+CtcwZHK8fNmXDMaMCgYEAzAxXCI3xxFWjUYYx/sStd9PT6MsZ95IK\n"
+			+ "VzgKxQB1CPWRCGRx6jF5S+FONngyXNdtT0rSBSVzfoAWgW0b3N50DnAjJ5w7AfBA\n"
+			+ "QnMt1Pii9SNxfopIEbiJkx8NrsTfxneJ70VAO8UQC8Y0GHRpKeYJdn1F/jsuB121\n"
+			+ "9Fahe2YiAtcCgYEArOhcHdTx7Av+pQLNVGlaFHAjM7bkMsM1AvlIr2oY5eubf4sI\n"
+			+ "dde/VbUAw/AaWMV93XKEaLCwJ5qA77PaO4RvdxvQ4zLyk1KYCuWV/zydH8XQ+oic\n"
+			+ "D4K3tM34JdWMP3IvaHVUXYA7uVW4IwbSqsbhEv7xbSs4LeqP1yN5W2z2GmMCgYAF\n"
+			+ "spqDjKMhnlqPHjYrLQbC/9E9AN7awOM1CEWUtqyN8X15RITBy1vduI7cioKtgP52\n"
+			+ "Zlpy9lbBQ4ZdWtSaWEPZW1w/8Obc6P6CXID9H2w9eB3lMKtOg16kEwvow2qUOiZJ\n"
+			+ "3h8rDBeknIY74JRHLTs6ackYjkJ8xischYbA0VtFxQKBgC1z+TKe3lGwHKFL7KU8\n"
+			+ "PU52yWw9EvcrwVVVWwBo+8QQ7FmJ1GwsTsM1U8FjL6L6YwFTyCZhRDCrLj66xH+w\n"
+			+ "ebgaXdEV+LCdMaA0YHMwlls7q0bNwNSmmPSTbjuquFl2YkyXHLOz0XB+DmBho/im\n"
+			+ "8X5ECSV9v0bmK4oU0BuZvdw0-----END PRIVATE KEY-----";
+	static final String ecdsa_pkcs8 = "-----BEGIN PRIVATE KEY-----MIGHAgEAMBMGByqGSM49Ag"
+			+ "EGCCqGSM49AwEHBG0wawIBAQQg6TTskkXUqQiTnQ8dFEg0GCik4QH51486XE1XkOlinhuhRANC"
+			+ "AASzeVpTbFVJlNCBEFYTzZv+yujZDAfEwP+dl3AL4wctnMCuTAqMA+w/kPq+Xc2q1XResg3fnY"
+			+ "zVAeERd/Twoj5c-----END PRIVATE KEY-----";
+
+	static final String rsa_pkcs8_cert = "-----BEGIN CERTIFICATE-----\n"
+			+ "MIIEDTCCAvWgAwIBAgIJALNR/Ggp4xbfMA0GCSqGSIb3DQEBCwUAMIGcMQswCQYD\n"
+			+ "VQQGEwJJTjESMBAGA1UECAwJS0FSTkFUQUtBMRIwEAYDVQQHDAlCQU5HQUxPUkUx\n"
+			+ "DzANBgNVBAoMBk9SQUNMRTENMAsGA1UECwwEQ0dCVTEZMBcGA1UEAwwQVmFpc2hh\n"
+			+ "bGkgTmFua2FuaTEqMCgGCSqGSIb3DQEJARYbdmFpc2hhbGkubmFua2FuaUBvcmFj\n"
+			+ "bGUuY29tMB4XDTE5MTIwNTA3NDg1NVoXDTIwMTIwNDA3NDg1NVowgZwxCzAJBgNV\n"
+			+ "BAYTAklOMRIwEAYDVQQIDAlLQVJOQVRBS0ExEjAQBgNVBAcMCUJBTkdBTE9SRTEP\n"
+			+ "MA0GA1UECgwGT1JBQ0xFMQ0wCwYDVQQLDARDR0JVMRkwFwYDVQQDDBBWYWlzaGFs\n"
+			+ "aSBOYW5rYW5pMSowKAYJKoZIhvcNAQkBFht2YWlzaGFsaS5uYW5rYW5pQG9yYWNs\n"
+			+ "ZS5jb20wggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQDAYKMsienWo2NG\n"
+			+ "5jj+YcdKRz8+5Xva0ZYRlk6sLLWjQpL/IiHPxB6nNRlkriUYVFnnaY2fTqRxG3v7\n"
+			+ "pQzwAPCc/CS+En5yMuoqHdIfEADONv25plci8TU7dnXFMCuSrcL9chTKuovG/SQ5\n"
+			+ "96M7lMenI5ZEMYTp2mwohCafGZ9Q0sjRM3Ws9HUMUor/ABt3yxb/TBDr32cSduY8\n"
+			+ "eisYWqLSldQzxa2+qXFm4K9zq+db+tNQjsH5Ukqn7RMJFYK3bvRqGonB4F96AcUx\n"
+			+ "7tskrSV26kvpXVl/LJv4LaGjpNZRT0X3UVSCUQKCTDCdxRYJ2rsmcdcumUO/Ygfl\n"
+			+ "mw7LflfhAgMBAAGjUDBOMB0GA1UdDgQWBBTYkqsLlkL0Xvlylu6QEm4R714jsDAf\n"
+			+ "BgNVHSMEGDAWgBTYkqsLlkL0Xvlylu6QEm4R714jsDAMBgNVHRMEBTADAQH/MA0G\n"
+			+ "CSqGSIb3DQEBCwUAA4IBAQBOXqjGmU6JozbUkMmuiVv4HlwF1n33943t217zxPv4\n"
+			+ "OzgiPSRdnwX8AWEKMl5KL/JY+hU7D+xItf54CKyQf/VT9t7fEh9RILPbikwJ3aeg\n"
+			+ "8lGlmqC8pdkbFKvbm4mdIVV6aLA0u72GbZKSN6eKGQfDHXuiXBx4xkzxohEWaFGS\n"
+			+ "D2/fIeUIeUG2cjCWEHgYJgal9KUdQVWa1z4otYLSJLheBgj3GDDZA5MxCUpVQ902\n"
+			+ "94jZBGyp62zPxJV0XJJqYdxTg5A7lvWrzuvK8AVkrjLH64I/5p3bwE+OipgQBlvG\n"
+			+ "96owhVTevN+2zh+MTLTEo9vs35013rFCzPwoOYU8OsuB\n" + "-----END CERTIFICATE-----";
+
+	static final String ecdsa_pkcs8_cert = "-----BEGIN CERTIFICATE-----\n"
+			+ "MIIEDTCCAvWgAwIBAgIJALNR/Ggp4xbfMA0GCSqGSIb3DQEBCwUAMIGcMQswCQYD\n"
+			+ "VQQGEwJJTjESMBAGA1UECAwJS0FSTkFUQUtBMRIwEAYDVQQHDAlCQU5HQUxPUkUx\n"
+			+ "DzANBgNVBAoMBk9SQUNMRTENMAsGA1UECwwEQ0dCVTEZMBcGA1UEAwwQVmFpc2hh\n"
+			+ "bGkgTmFua2FuaTEqMCgGCSqGSIb3DQEJARYbdmFpc2hhbGkubmFua2FuaUBvcmFj\n"
+			+ "bGUuY29tMB4XDTE5MTIwNTA3NDg1NVoXDTIwMTIwNDA3NDg1NVowgZwxCzAJBgNV\n"
+			+ "BAYTAklOMRIwEAYDVQQIDAlLQVJOQVRBS0ExEjAQBgNVBAcMCUJBTkdBTE9SRTEP\n"
+			+ "MA0GA1UECgwGT1JBQ0xFMQ0wCwYDVQQLDARDR0JVMRkwFwYDVQQDDBBWYWlzaGFs\n"
+			+ "aSBOYW5rYW5pMSowKAYJKoZIhvcNAQkBFht2YWlzaGFsaS5uYW5rYW5pQG9yYWNs\n"
+			+ "ZS5jb20wggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQDAYKMsienWo2NG\n"
+			+ "5jj+YcdKRz8+5Xva0ZYRlk6sLLWjQpL/IiHPxB6nNRlkriUYVFnnaY2fTqRxG3v7\n"
+			+ "pQzwAPCc/CS+En5yMuoqHdIfEADONv25plci8TU7dnXFMCuSrcL9chTKuovG/SQ5\n"
+			+ "96M7lMenI5ZEMYTp2mwohCafGZ9Q0sjRM3Ws9HUMUor/ABt3yxb/TBDr32cSduY8\n"
+			+ "eisYWqLSldQzxa2+qXFm4K9zq+db+tNQjsH5Ukqn7RMJFYK3bvRqGonB4F96AcUx\n"
+			+ "7tskrSV26kvpXVl/LJv4LaGjpNZRT0X3UVSCUQKCTDCdxRYJ2rsmcdcumUO/Ygfl\n"
+			+ "mw7LflfhAgMBAAGjUDBOMB0GA1UdDgQWBBTYkqsLlkL0Xvlylu6QEm4R714jsDAf\n"
+			+ "BgNVHSMEGDAWgBTYkqsLlkL0Xvlylu6QEm4R714jsDAMBgNVHRMEBTADAQH/MA0G\n"
+			+ "CSqGSIb3DQEBCwUAA4IBAQBOXqjGmU6JozbUkMmuiVv4HlwF1n33943t217zxPv4\n"
+			+ "OzgiPSRdnwX8AWEKMl5KL/JY+hU7D+xItf54CKyQf/VT9t7fEh9RILPbikwJ3aeg\n"
+			+ "8lGlmqC8pdkbFKvbm4mdIVV6aLA0u72GbZKSN6eKGQfDHXuiXBx4xkzxohEWaFGS\n"
+			+ "D2/fIeUIeUG2cjCWEHgYJgal9KUdQVWa1z4otYLSJLheBgj3GDDZA5MxCUpVQ902\n"
+			+ "94jZBGyp62zPxJV0XJJqYdxTg5A7lvWrzuvK8AVkrjLH64I/5p3bwE+OipgQBlvG\n"
+			+ "96owhVTevN+2zh+MTLTEo9vs35013rFCzPwoOYU8OsuB\n" + "-----END CERTIFICATE-----";
+
+	static final String rsa_pkcs1="-----BEGIN RSA PRIVATE KEY-----\n" + 
+			"MIIEpAIBAAKCAQEA673ZGAvzA63e463B56FFPUsfgMusoB8siquQFhZ5aZsNUFRf\n" + 
+			"VX7vaqUe9y+6lx9DzB6hRukhks8NWe5ZWjlmhk9F92C79TmPZcT2qZkZmiu+KkzV\n" + 
+			"Y6Jrpx9S+LgUxIQxPltYIgXtOzTmxQVGklu26pgwvZYrfRcZ7mTtobicTTGcNTXY\n" + 
+			"CKV8dIL0n9orJTZjzPbrhMopJ+Yfr/vzxqBvGecQ/7BsC/W7v4hKaUl7iCrmxKqu\n" + 
+			"9ltFpXg6EcmprRa2ZQGvvODwKUtQ6JHkaeKk3z/8w+n0iK05pyUUc6LdsjShcVvE\n" + 
+			"L2UyFgZgrjw6FhbVdZFKSsyD1ALLe21W92638QIDAQABAoIBAAbso6TOLQwtnj9n\n" + 
+			"yitIlGURgNJiqSZm5AMKuQe9D0Hn2QNEByzWtqeWRAuUrlFkDLTBLZGMpXzPch/z\n" + 
+			"HVLGHtnRGEgE4mB4mVqu52Ph6Fub71EEwrvTeIAHLoO5vHptO5kOS89sByTXD/Q3\n" + 
+			"jHQeF4haggv/jjV1aUCUXFqEtqqZvQDXuuEVu0CEwb566wANEdhQWVOSjBqgkLj5\n" + 
+			"2ok0dCJIBD+aVOE61KNPhiPbwNREWKoJnB4na59DsCnas/dJys+XkMUiO0eASGZD\n" + 
+			"wMiXvxNI8wDr9VSNbhakRy/BfLXgdnd1VSnI1fkJ5FRKePMLLq9UhPEnKYPI06DQ\n" + 
+			"OGwTZjECgYEA/t7aiwNhxoOxN1so0P5wb5tECb0YCXIyg5bDPY7xNGEMzepKvZRf\n" + 
+			"++QgLCXBowfaMY1PjSsq9LzRNEiWmZffYPugFGHz5tt+iTVUdtD7gvCpLDS6NDbj\n" + 
+			"LB5hfoZJqRnCc8ongphBCoXwNYpcR9EWEoyQOVauw6ODXy2XIU4RcxUCgYEA7MlK\n" + 
+			"+v4AgejWwgY73FmQo9GoBlyodXaTpXf28rgEsennn49m8ntY2+YGLgnUFryI+HTk\n" + 
+			"fKe+HCelosV+W3zYXiM/P4BLiQHKIjEGf4EpI2QDbTw1K5Jz7M9U1I88ryk+7sLC\n" + 
+			"VjATkD2FB9/P0q7X1mQfe+sxNgXlgJDh4ZML2G0CgYBre6QCd/yl8SetRp5h9MuJ\n" + 
+			"5Zq92KboZOZ0pAHWVg/WnQ7/T80RQh9wZPZEZ+/PRyJ3PzbLO+czquU2/V21jFzB\n" + 
+			"05vgvKZVNz+XsYvbR6qpv8A4Skw0dOk809sdtpgd3iUpG5mp83eKbo2spprgFocO\n" + 
+			"b4TrCWlOTAi8/Mb9XqTxOQKBgQCOUClFkzYA3k19DbwaoqYhH5hKQpRpDNyOffyp\n" + 
+			"Qtpnh/rTVp/8KxBsEeMy9mtHQwdbtP3Cwhqr11Rg8SwRloaAhdS0uMotTSsMw8Rx\n" + 
+			"C9MK10iL9bzLNFmCQdZtbq19ZV/SprGglYKcla0H34eLy9Qjoceedev82SxnyixI\n" + 
+			"pFVhPQKBgQCdi96XqpqYpAakRiS5FmN2TUnWb+E0F12AB5xGdT4Y4vPC1tIRw64u\n" + 
+			"LJJ6UxptmOhW0tfqhuYnfu8EswnQ4HkCy0RE6kS415ieOxug18B2mxOufM6e7G4M\n" + 
+			"rO++tY9uF9nyEF8/tvFnt+FyF6KOTIS6BFFcgdOep2OA6hclRxSH/w==\n" + 
+			"-----END RSA PRIVATE KEY-----";
+
+	public Oauthconfig test_getOauthConfig() {
+		// Oauth Config
+		Oauthconfig oauthConfig = new Oauthconfig();
+		oauthConfig.setPrivateKeySecretNameSpace("privateKeySecretNameSpace");
+		oauthConfig.setRsaPrivateKeyFileName("rsaPrivateKeyFileName");
+		oauthConfig.setEcdsaPrivateKeyFileName("ecdsaPrivateKeyFileName");
+		oauthConfig.setCertificateSecretName("certificateSecretName");
+		oauthConfig.setCertificateSecretNameSpace("certificateSecretNameSpace");
+		oauthConfig.setRsaCertificateFileName("rsaCertificateFileName");
+		oauthConfig.setEcdsaCertificateFileName("ecdsaCertificateFileName");
+		oauthConfig.setKeyStorePasswordFileName("keyStorePasswordFileName");
+		oauthConfig.setKeyStorePasswordSecretName("keyStorePasswordSecretName");
+		oauthConfig.setKeyStorePasswordSecretNameSpace("keyStorePasswordSecretNameSpace");
+		oauthConfig.setInitialAlgorithm("ES256");
+		return oauthConfig;
+	}
+
+	public Map<String, ArrayList<String>> test_getOauthK8Resources(){
+
+
+		List<String> list = new ArrayList<String>();
+		list.add("hello");
+		list.add("World");
+		// oauthResources
+		Map<String, ArrayList<String>> oauthK8Resources = new HashMap<String, ArrayList<String>>();
+		oauthK8Resources.put("keyStorePasswordSecretNameSpace", (ArrayList<String>) list);
+		oauthK8Resources.put("trustStorePasswordSecretNameSpace", (ArrayList<String>) list);
+		oauthK8Resources.put("caBundleSecretNameSpace", (ArrayList<String>) list);
+		oauthK8Resources.put("certificateSecretNameSpace", (ArrayList<String>) list);
+		oauthK8Resources.put(null,(ArrayList<String>) list);
+
+		return oauthK8Resources;
+	}
+	public Map<String, ArrayList<String>> test_getSslK8Resources(){
+
+		List<String> list = new ArrayList<String>();
+		list.add("hello");
+		list.add("World");
+		Map<String, ArrayList<String>> sslK8Resources = new HashMap<String, ArrayList<String>>();
+		sslK8Resources.put("keyStorePasswordSecretNameSpace", (ArrayList<String>) list);
+		sslK8Resources.put("trustStorePasswordSecretNameSpace", (ArrayList<String>) list);
+		sslK8Resources.put("caBundleSecretNameSpace", (ArrayList<String>) list);
+		sslK8Resources.put("certificateSecretNameSpace", (ArrayList<String>) list);
+		sslK8Resources.put("privateKeySecretNameSpace",(ArrayList<String>) list);
+		return sslK8Resources;
+
+	}
+	public Sslconfig test_getSslConfig() {
+
+		Sslconfig sslConfig = new Sslconfig();
+		sslConfig.setSslenabled(true);
+		sslConfig.setTlsVersion("TLSv1.1");
+
+		// private key
+		sslConfig.setPrivateKeySecretName("privateKeySecretName");
+		sslConfig.setPrivateKeySecretNameSpace("privateKeySecretNameSpace");
+		sslConfig.setEcdsaPrivateKeyFileName("ecdsaPrivateKeyFileName");
+		sslConfig.setRsaPrivateKeyFileName("rsaPrivateKeyFileName");
+		// certificate
+
+		sslConfig.setCertificateSecretName("certificateSecretName");
+		sslConfig.setCertificateSecretNameSpace("certificateSecretNameSpace");
+		sslConfig.setRsaCertificateFileName("rsaCertificateFileName");
+		sslConfig.setEcdsaCertificateFileName("ecdsaCertificateFileName");
+		sslConfig.setInitialAlgorithm("ES256");
+		sslConfig.setCaBundleFileName("caBundleFileName");
+		sslConfig.setCaBundleSecretName("caBundleSecretName");
+		sslConfig.setCaBundleSecretNameSpace("caBundleSecretNameSpace");
+		sslConfig.setKeyStorePasswordFileName("keyStorePasswordFileName");
+		sslConfig.setKeyStorePasswordSecretName("keyStorePasswordSecretName");
+		sslConfig.setKeyStorePasswordSecretNameSpace("keyStorePasswordSecretNameSpace");
+		sslConfig.setTrustStorePasswordFileName("trustStorePasswordFileName");
+		sslConfig.setTrustStorePasswordSecretName("trustStorePasswordSecretName");
+		sslConfig.setTrustStorePasswordSecretNameSpace("trustStorePasswordSecretNameSpace");
+		sslConfig.setCipherSuite(new String[] { "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256" });
+
+		return sslConfig;
+	}
+
+	public ArrayList<String> test_listOfSecrets() {
+
+		ArrayList<String> listSecretNames = new ArrayList<String>();
+		listSecretNames.add("privateKeySecretName");
+		listSecretNames.add("certificateSecretName");
+		listSecretNames.add("caBundleSecretName");
+		listSecretNames.add("keyStorePasswordSecretName");
+		listSecretNames.add("trustStorePasswordSecretName");
+
+		return listSecretNames;
+
+	}
+
+	public V1SecretList get_secretList() {
+		V1SecretList listSecret = new V1SecretList();
+		V1Secret secret1 = new V1Secret();
+		V1Secret secret2 = new V1Secret();
+		V1Secret secret3 = new V1Secret();
+		V1Secret secret4 = new V1Secret();
+		V1Secret secret5 = new V1Secret();
+		byte arr[] = new byte[] { 1, 6, 3 };
+		Map<String, byte[]> data1 = null;
+		data1 = new HashMap<String, byte[]>();
+		data1.put("ecdsaPrivateKeyFileName", ecdsa_pkcs8.getBytes());
+		data1.put("rsaPrivateKeyFileName", rsa_pkcs8.getBytes());
+		Map<String, byte[]> data2 = new HashMap<String, byte[]>();
+		data2.put("rsaCertificateFileName", rsa_pkcs8_cert.getBytes());
+		data2.put("ecdsaCertificateFileName", ecdsa_pkcs8_cert.getBytes());
+		Map<String, byte[]> data3 = new HashMap<String, byte[]>();
+		data3.put("caBundleFileName", rsa_pkcs8_cert.getBytes());
+		Map<String, byte[]> data4 = new HashMap<String, byte[]>();
+		data4.put("trustStorePasswordFileName", arr);
+		Map<String, byte[]> data5 = new HashMap<String, byte[]>();
+		data5.put("keyStorePasswordFileName", arr);
+		secret1.setMetadata(new V1ObjectMeta());
+		secret2.setMetadata(new V1ObjectMeta());
+		secret3.setMetadata(new V1ObjectMeta());
+		secret4.setMetadata(new V1ObjectMeta());
+		secret5.setMetadata(new V1ObjectMeta());
+		secret1.getMetadata().setName("privateKeySecretName");
+		secret1.setData(data1);
+		secret2.getMetadata().setName("certificateSecretName");
+		secret2.setData(data2);
+		secret3.getMetadata().setName("caBundleSecretName");
+		secret3.setData(data3);
+
+		secret4.getMetadata().setName("trustStorePasswordSecretName");
+		secret4.setData(data4);
+		secret5.getMetadata().setName("keyStorePasswordSecretName");
+		secret5.setData(data5);
+		listSecret.addItemsItem(secret1);
+		listSecret.addItemsItem(secret2);
+		listSecret.addItemsItem(secret3);
+		listSecret.addItemsItem(secret4);
+		listSecret.addItemsItem(secret5);
+
+		return listSecret;
+
+	}
+
+	@Test
+	public void test_checkAllConfigFilesPresent_ConfigTypeIsSsl() throws Exception{
+
+		ConfigurationInfo configInfo = new ConfigurationInfo();
+		Oauthconfig oauthConfig= test_getOauthConfig();
+		Sslconfig sslConfig=test_getSslConfig();
+		Globalconfig globalConfig = new Globalconfig();
+		globalConfig.getInitSsl();
+		configInfo.setGlobalConfig(globalConfig);
+		configInfo.setOauthConfig(oauthConfig);
+		configInfo.setSslConfig(sslConfig);
+
+		UpdateConfiguration updateConfiguration = new UpdateConfiguration();
+		Map<String, ArrayList<String>> oauthK8Resources=test_getOauthK8Resources();
+		Map<String, ArrayList<String>> sslK8Resources=test_getSslK8Resources();
+		updateConfiguration.setOauthK8Resources(oauthK8Resources);
+		updateConfiguration.setSslK8Resources(sslK8Resources);
+
+		ArrayList<String> listSecretNames =test_listOfSecrets();
+		V1SecretList listSecret = get_secretList();
+		coreApi = Mockito.mock(CoreV1Api.class);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("privateKeySecretNameSpace", null, null, null,
+				null, null, null, null, null, null);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("certificateSecretNameSpace", null, null, null,
+				null, null, null, null, null, null);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("keyStorePasswordSecretNameSpace", null, null,
+				null, null, null, null, null, null, null);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("trustStorePasswordSecretNameSpace", null, null,
+				null, null, null, null, null, null, null);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("caBundleSecretNameSpace", null, null, null,
+				null, null, null, null, null, null);
+
+		String nameSpace="keyStoreSecretNameSpace";
+		String configType ="SSL";
+
+		try {
+			Class cls = ConfigWatchProcess.class;
+			Constructor[] cn = cls.getDeclaredConstructors();
+			cn[0].setAccessible(true);      
+			ConfigWatchProcess configWatchProcess = (ConfigWatchProcess) cn[0].newInstance(updateConfiguration, nameSpace,listSecretNames,configInfo ,configType);
+
+			configWatchProcess.setConfigInfo(configInfo);
+			configWatchProcess.setConfigType(configType);
+			configWatchProcess.setResourceVersionMap();
+			ConfigWatchProcess spy = PowerMockito.spy(configWatchProcess);
+			PowerMockito.doReturn(true).when(spy, "checkAllSslConfigFilesPresent");
+			PowerMockito.doReturn(false).when(spy, "checkAllOauthConfigFilesPresent");
+
+			configWatchProcess.checkAllConfigFilesPresent();
+
+			List<String> logs = new ArrayList<String>();
+			verify(mockAppender, atLeastOnce()).append((LogEvent) captorLoggingEvent.capture());
+
+			List<LogEvent> loggingEvent = captorLoggingEvent.getAllValues();
+
+			for (LogEvent logEvt : loggingEvent) {
+				logs.add(logEvt.getMessage().getFormattedMessage());
+
+			}
+			Assert.assertTrue(logs.toString()
+					.contains("Check the presence of SSL Configuration files"));
+
+
+		} catch (Exception e) {
+
+			e.printStackTrace();
+		}
+	}
+
+	@Test
+	public void test_checkAllConfigFilesPresent_ConfigTypeIsOauth() throws Exception{
+
+		ConfigurationInfo configInfo = new ConfigurationInfo();
+		Oauthconfig oauthConfig= test_getOauthConfig();
+		Sslconfig sslConfig=test_getSslConfig();
+		Globalconfig globalConfig = new Globalconfig();
+		globalConfig.getInitSsl();
+		configInfo.setGlobalConfig(globalConfig);
+		configInfo.setOauthConfig(oauthConfig);
+		configInfo.setSslConfig(sslConfig);
+
+		UpdateConfiguration updateConfiguration = new UpdateConfiguration();
+		Map<String, ArrayList<String>> oauthK8Resources=test_getOauthK8Resources();
+		Map<String, ArrayList<String>> sslK8Resources=test_getSslK8Resources();
+		updateConfiguration.setOauthK8Resources(oauthK8Resources);
+		updateConfiguration.setSslK8Resources(sslK8Resources);
+
+		ArrayList<String> listSecretNames =test_listOfSecrets();
+		V1SecretList listSecret = get_secretList();
+
+		coreApi = Mockito.mock(CoreV1Api.class);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("privateKeySecretNameSpace", null, null, null,
+				null, null, null, null, null, null);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("certificateSecretNameSpace", null, null, null,
+				null, null, null, null, null, null);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("keyStorePasswordSecretNameSpace", null, null,
+				null, null, null, null, null, null, null);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("trustStorePasswordSecretNameSpace", null, null,
+				null, null, null, null, null, null, null);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("caBundleSecretNameSpace", null, null, null,
+				null, null, null, null, null, null);
+		String nameSpace="keyStoreSecretNameSpace";
+		String configType ="OAUTH";
+		try {
+			Class cls = ConfigWatchProcess.class;
+
+
+			Constructor[] cn = cls.getDeclaredConstructors();
+			cn[0].setAccessible(true);      
+			ConfigWatchProcess configWatchProcess = (ConfigWatchProcess) cn[0].newInstance(updateConfiguration, nameSpace,listSecretNames,configInfo ,configType);
+
+			configWatchProcess.setConfigInfo(configInfo);
+			configWatchProcess.setConfigType(configType);
+			configWatchProcess.setResourceVersionMap();
+			ConfigWatchProcess spy = PowerMockito.spy(configWatchProcess);
+			PowerMockito.doReturn(false).when(spy, "checkAllSslConfigFilesPresent");
+			PowerMockito.doReturn(false).when(spy, "checkAllOauthConfigFilesPresent");
+
+			configWatchProcess.checkAllConfigFilesPresent();
+
+			List<String> logs = new ArrayList<String>();
+			verify(mockAppender, atLeastOnce()).append((LogEvent) captorLoggingEvent.capture());
+
+			List<LogEvent> loggingEvent = captorLoggingEvent.getAllValues();
+
+			for (LogEvent logEvt : loggingEvent) {
+				logs.add(logEvt.getMessage().getFormattedMessage());
+
+			}
+
+			Assert.assertTrue(logs.toString()
+					.contains("Check the presence of OAUTH Configuration files"));
+		} catch (Exception e) {
+
+			e.printStackTrace();
+		}
+	}
+
+
+	@Test
+	public void test_handleEventAdded() throws Exception{
+
+		ConfigurationInfo configInfo = new ConfigurationInfo();
+		Oauthconfig oauthConfig= test_getOauthConfig();
+		Sslconfig sslConfig=test_getSslConfig();
+		Globalconfig globalConfig = new Globalconfig();
+		globalConfig.getInitSsl();
+		configInfo.setGlobalConfig(globalConfig);
+		configInfo.setOauthConfig(oauthConfig);
+		configInfo.setSslConfig(sslConfig);
+
+		UpdateConfiguration updateConfiguration = new UpdateConfiguration();
+		Map<String, ArrayList<String>> oauthK8Resources=test_getOauthK8Resources();
+		Map<String, ArrayList<String>> sslK8Resources=test_getSslK8Resources();
+		updateConfiguration.setOauthK8Resources(oauthK8Resources);
+		updateConfiguration.setSslK8Resources(sslK8Resources);
+
+		ArrayList<String> listSecretNames =test_listOfSecrets();
+		V1SecretList listSecret = get_secretList();
+		V1Secret secret1=listSecret.getItems().get(1);
+
+		coreApi = Mockito.mock(CoreV1Api.class);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("privateKeySecretNameSpace", null, null, null,
+				null, null, null, null, null, null);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("certificateSecretNameSpace", null, null, null,
+				null, null, null, null, null, null);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("keyStorePasswordSecretNameSpace", null, null,
+				null, null, null, null, null, null, null);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("trustStorePasswordSecretNameSpace", null, null,
+				null, null, null, null, null, null, null);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("caBundleSecretNameSpace", null, null, null,
+				null, null, null, null, null, null);
+		String nameSpace="keyStoreSecretNameSpace";
+		String configType ="OAUTH";
+
+		try {
+			Class cls = ConfigWatchProcess.class;
+			Constructor[] cn = cls.getDeclaredConstructors();
+			cn[0].setAccessible(true);      
+			ConfigWatchProcess configWatchProcess = (ConfigWatchProcess) cn[0].newInstance(updateConfiguration, nameSpace,listSecretNames,configInfo ,configType);
+
+			configWatchProcess.setConfigInfo(configInfo);
+			configWatchProcess.setConfigType(configType);
+			configWatchProcess.setResourceVersionMap();
+			ConfigWatchProcess spy = PowerMockito.spy(configWatchProcess);
+			PowerMockito.doNothing().when(spy, "handleEventAddModify",Mockito.any());
+
+			Whitebox.invokeMethod(spy,"handleEventAdded",secret1);
+			List<String> logs = new ArrayList<String>();
+			verify(mockAppender, atLeastOnce()).append((LogEvent) captorLoggingEvent.capture());
+
+			List<LogEvent> loggingEvent = captorLoggingEvent.getAllValues();
+
+			for (LogEvent logEvt : loggingEvent) {
+				logs.add(logEvt.getMessage().getFormattedMessage());
+
+			}
+			Assert.assertTrue(logs.toString()
+					.contains("handleEventAdded called for : "+secret1.getMetadata().getName()));
+
+
+
+
+		} catch (Exception e) {
+
+			e.printStackTrace();
+		}
+	}	
+
+	@Test
+	public void test_handleEventModified() throws Exception{
+		ConfigurationInfo configInfo = new ConfigurationInfo();
+		Oauthconfig oauthConfig= test_getOauthConfig();
+		Sslconfig sslConfig=test_getSslConfig();
+		Globalconfig globalConfig = new Globalconfig();
+		globalConfig.getInitSsl();
+		configInfo.setGlobalConfig(globalConfig);
+		configInfo.setOauthConfig(oauthConfig);
+		configInfo.setSslConfig(sslConfig);
+
+		UpdateConfiguration updateConfiguration = new UpdateConfiguration();
+		Map<String, ArrayList<String>> oauthK8Resources=test_getOauthK8Resources();
+		Map<String, ArrayList<String>> sslK8Resources=test_getSslK8Resources();
+		updateConfiguration.setOauthK8Resources(oauthK8Resources);
+		updateConfiguration.setSslK8Resources(sslK8Resources);
+
+		ArrayList<String> listSecretNames =test_listOfSecrets();
+		V1SecretList listSecret = get_secretList();
+		V1Secret secret1=listSecret.getItems().get(1);
+		coreApi = Mockito.mock(CoreV1Api.class);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("privateKeySecretNameSpace", null, null, null,
+				null, null, null, null, null, null);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("certificateSecretNameSpace", null, null, null,
+				null, null, null, null, null, null);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("keyStorePasswordSecretNameSpace", null, null,
+				null, null, null, null, null, null, null);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("trustStorePasswordSecretNameSpace", null, null,
+				null, null, null, null, null, null, null);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("caBundleSecretNameSpace", null, null, null,
+				null, null, null, null, null, null);
+
+
+		String nameSpace="keyStoreSecretNameSpace";
+		String configType ="OAUTH";
+
+		try {
+			Class cls = ConfigWatchProcess.class;
+			Constructor[] cn = cls.getDeclaredConstructors();
+			cn[0].setAccessible(true);      
+			ConfigWatchProcess configWatchProcess = (ConfigWatchProcess) cn[0].newInstance(updateConfiguration, nameSpace,listSecretNames,configInfo ,configType);
+
+			configWatchProcess.setConfigInfo(configInfo);
+			configWatchProcess.setConfigType(configType);
+			configWatchProcess.setResourceVersionMap();
+			ConfigWatchProcess spy = PowerMockito.spy(configWatchProcess);
+			PowerMockito.doNothing().when(spy, "handleEventAddModify",Mockito.any());
+			Whitebox.invokeMethod(spy,"handleEventModified", secret1);
+			List<String> logs = new ArrayList<String>();
+			verify(mockAppender, atLeastOnce()).append((LogEvent) captorLoggingEvent.capture());
+
+			List<LogEvent> loggingEvent = captorLoggingEvent.getAllValues();
+
+			for (LogEvent logEvt : loggingEvent) {
+				logs.add(logEvt.getMessage().getFormattedMessage());
+
+			}
+			Assert.assertTrue(logs.toString()
+					.contains("andleEventModified called for : "+secret1.getMetadata().getName()));
+		} catch (Exception e) {
+
+			e.printStackTrace();
+		}
+	}
+	@Test
+	public void test_handleEventAddModify_WithConfigTypeSsl() throws Exception{
+
+		ConfigurationInfo configInfo = new ConfigurationInfo();
+		Oauthconfig oauthConfig= test_getOauthConfig();
+		Sslconfig sslConfig=test_getSslConfig();
+		Globalconfig globalConfig = new Globalconfig();
+		globalConfig.getInitSsl();
+		configInfo.setGlobalConfig(globalConfig);
+		configInfo.setOauthConfig(oauthConfig);
+		configInfo.setSslConfig(sslConfig);
+
+		UpdateConfiguration updateConfiguration = new UpdateConfiguration();
+		Map<String, ArrayList<String>> oauthK8Resources=test_getOauthK8Resources();
+		Map<String, ArrayList<String>> sslK8Resources=test_getSslK8Resources();
+		updateConfiguration.setOauthK8Resources(oauthK8Resources);
+		updateConfiguration.setSslK8Resources(sslK8Resources);
+		ArrayList<String> listSecretNames =test_listOfSecrets();
+		V1SecretList listSecret = get_secretList();
+		V1Secret secret1=listSecret.getItems().get(1);
+
+		coreApi = Mockito.mock(CoreV1Api.class);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("privateKeySecretNameSpace", null, null, null,
+				null, null, null, null, null, null);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("certificateSecretNameSpace", null, null, null,
+				null, null, null, null, null, null);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("keyStorePasswordSecretNameSpace", null, null,
+				null, null, null, null, null, null, null);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("trustStorePasswordSecretNameSpace", null, null,
+				null, null, null, null, null, null, null);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("caBundleSecretNameSpace", null, null, null,
+				null, null, null, null, null, null);
+		String nameSpace="keyStoreSecretNameSpace";
+		String configType ="SSL";
+		try {
+			Class cls = ConfigWatchProcess.class;
+
+
+			Constructor[] cn = cls.getDeclaredConstructors();
+			cn[0].setAccessible(true);      
+			ConfigWatchProcess configWatchProcess = (ConfigWatchProcess) cn[0].newInstance(updateConfiguration, nameSpace,listSecretNames,configInfo ,configType);
+
+			configWatchProcess.setConfigInfo(configInfo);
+			configWatchProcess.setConfigType(configType);
+			configWatchProcess.setResourceVersionMap();
+			ConfigWatchProcess spy = PowerMockito.spy(configWatchProcess);
+			//  PowerMockito.doNothing().when(spy, "handleEventAddModify",Mockito.any());
+			PowerMockito.spy(CommonUtils.class);
+			PowerMockito.doNothing().when(CommonUtils.class, "configureSsl",Mockito.any());
+
+			PowerMockito.doNothing().when(CommonUtils.class, "configureOauth",Mockito.any());
+
+			Whitebox.invokeMethod(spy,"handleEventAddModify", secret1);
+
+
+			List<String> logs = new ArrayList<String>();
+			verify(mockAppender, atLeastOnce()).append((LogEvent) captorLoggingEvent.capture());
+
+			List<LogEvent> loggingEvent = captorLoggingEvent.getAllValues();
+
+			for (LogEvent logEvt : loggingEvent) {
+				logs.add(logEvt.getMessage().getFormattedMessage());
+
+			}
+			Assert.assertTrue(logs.toString()
+					.contains("SSL reconfiguration required"));
+
+			Assert.assertTrue(logs.toString()
+					.contains("Exit from handleEventAddModify"));
+
+
+		} catch (Exception e) {
+
+			e.printStackTrace();
+		}
+
+
+
+	}
+	@Test
+	public void test_handleEventDeleted() throws Exception{
+
+		ConfigurationInfo configInfo = new ConfigurationInfo();
+		Oauthconfig oauthConfig= test_getOauthConfig();
+		Sslconfig sslConfig=test_getSslConfig();
+		Globalconfig globalConfig = new Globalconfig();
+		globalConfig.getInitSsl();
+		configInfo.setGlobalConfig(globalConfig);
+		configInfo.setOauthConfig(oauthConfig);
+		configInfo.setSslConfig(sslConfig);
+
+		UpdateConfiguration updateConfiguration = new UpdateConfiguration();
+		Map<String, ArrayList<String>> oauthK8Resources=test_getOauthK8Resources();
+		Map<String, ArrayList<String>> sslK8Resources=test_getSslK8Resources();
+		updateConfiguration.setOauthK8Resources(oauthK8Resources);
+		updateConfiguration.setSslK8Resources(sslK8Resources);
+		ArrayList<String> listSecretNames =test_listOfSecrets();
+		V1SecretList listSecret = get_secretList();
+		V1Secret secret1=listSecret.getItems().get(1);
+		coreApi = Mockito.mock(CoreV1Api.class);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("privateKeySecretNameSpace", null, null, null,
+				null, null, null, null, null, null);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("certificateSecretNameSpace", null, null, null,
+				null, null, null, null, null, null);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("keyStorePasswordSecretNameSpace", null, null,
+				null, null, null, null, null, null, null);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("trustStorePasswordSecretNameSpace", null, null,
+				null, null, null, null, null, null, null);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("caBundleSecretNameSpace", null, null, null,
+				null, null, null, null, null, null);
+
+		String nameSpace="keyStoreSecretNameSpace";
+		String configType ="OAUTH";
+
+		try {
+			Class cls = ConfigWatchProcess.class;
+
+
+			Constructor[] cn = cls.getDeclaredConstructors();
+			cn[0].setAccessible(true);      
+			ConfigWatchProcess configWatchProcess = (ConfigWatchProcess) cn[0].newInstance(updateConfiguration, nameSpace,listSecretNames,configInfo ,configType);
+
+			configWatchProcess.setConfigInfo(configInfo);
+			configWatchProcess.setConfigType(configType);
+			configWatchProcess.setResourceVersionMap();
+			ConfigWatchProcess spy = PowerMockito.spy(configWatchProcess);
+			PowerMockito.spy(CommonUtils.class);
+			PowerMockito.doNothing().when(CommonUtils.class, "configureSsl",Mockito.any());
+			PowerMockito.doNothing().when(CommonUtils.class, "configureOauth",Mockito.any());
+			Whitebox.invokeMethod(spy,"handleEventDeleted", secret1);
+			List<String> logs = new ArrayList<String>();
+			verify(mockAppender, atLeastOnce()).append((LogEvent) captorLoggingEvent.capture());
+
+			List<LogEvent> loggingEvent = captorLoggingEvent.getAllValues();
+
+			for (LogEvent logEvt : loggingEvent) {
+				logs.add(logEvt.getMessage().getFormattedMessage());
+
+			}
+			Assert.assertTrue(logs.toString()
+					.contains("handleEventDeleted called for : "+secret1.getMetadata().getName()));
+
+			Assert.assertTrue(logs.toString()
+					.contains("Exit from handleEventDeleted"));
+
+
+		} catch (Exception e) {
+
+			e.printStackTrace();
+		}
+
+
+
+	}	
+	@Test
+	public void test_handleEventAddModify_WithConfigTypeOauth() throws Exception{
+
+		ConfigurationInfo configInfo = new ConfigurationInfo();
+		Oauthconfig oauthConfig= test_getOauthConfig();
+		Sslconfig sslConfig=test_getSslConfig();
+		Globalconfig globalConfig = new Globalconfig();
+		globalConfig.getInitSsl();
+		configInfo.setGlobalConfig(globalConfig);
+		configInfo.setOauthConfig(oauthConfig);
+		configInfo.setSslConfig(sslConfig);
+
+		UpdateConfiguration updateConfiguration = new UpdateConfiguration();
+		Map<String, ArrayList<String>> oauthK8Resources=test_getOauthK8Resources();
+		Map<String, ArrayList<String>> sslK8Resources=test_getSslK8Resources();
+		updateConfiguration.setOauthK8Resources(oauthK8Resources);
+		updateConfiguration.setSslK8Resources(sslK8Resources);
+		ArrayList<String> listSecretNames =test_listOfSecrets();
+		V1SecretList listSecret = get_secretList();
+		V1Secret secret1=listSecret.getItems().get(1);
+		coreApi = Mockito.mock(CoreV1Api.class);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("privateKeySecretNameSpace", null, null, null,
+				null, null, null, null, null, null);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("certificateSecretNameSpace", null, null, null,
+				null, null, null, null, null, null);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("keyStorePasswordSecretNameSpace", null, null,
+				null, null, null, null, null, null, null);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("trustStorePasswordSecretNameSpace", null, null,
+				null, null, null, null, null, null, null);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("caBundleSecretNameSpace", null, null, null,
+				null, null, null, null, null, null);
+
+		String nameSpace="keyStoreSecretNameSpace";
+		String configType ="OAUTH";
+
+		try {
+			Class cls = ConfigWatchProcess.class;
+
+
+			Constructor[] cn = cls.getDeclaredConstructors();
+			cn[0].setAccessible(true);      
+			ConfigWatchProcess configWatchProcess = (ConfigWatchProcess) cn[0].newInstance(updateConfiguration, nameSpace,listSecretNames,configInfo ,configType);
+
+			configWatchProcess.setConfigInfo(configInfo);
+			configWatchProcess.setConfigType(configType);
+			configWatchProcess.setResourceVersionMap();
+			ConfigWatchProcess spy = PowerMockito.spy(configWatchProcess);
+			PowerMockito.spy(CommonUtils.class);
+			PowerMockito.doNothing().when(CommonUtils.class, "configureSsl",Mockito.any());
+			PowerMockito.doNothing().when(CommonUtils.class, "configureOauth",Mockito.any());
+			Whitebox.invokeMethod(spy,"handleEventAddModify", secret1);
+			List<String> logs = new ArrayList<String>();
+			verify(mockAppender, atLeastOnce()).append((LogEvent) captorLoggingEvent.capture());
+
+			List<LogEvent> loggingEvent = captorLoggingEvent.getAllValues();
+
+			for (LogEvent logEvt : loggingEvent) {
+				logs.add(logEvt.getMessage().getFormattedMessage());
+
+			}
+			Assert.assertTrue(logs.toString()
+					.contains("OAuth reconfiguration required"));
+
+			Assert.assertTrue(logs.toString()
+					.contains("Exit from handleEventAddModify"));
+
+
+		} catch (Exception e) {
+
+			e.printStackTrace();
+		}
+
+
+
+	}	
+
+
+
+
+	@Test
+	public void test_checkAllOauthConfigFilesPresent() throws Exception{
+
+		ConfigurationInfo configInfo = new ConfigurationInfo();
+		Oauthconfig oauthConfig= test_getOauthConfig();
+		oauthConfig.setInitialAlgorithm("ECDSA");
+		Sslconfig sslConfig=test_getSslConfig();
+		Globalconfig globalConfig = new Globalconfig();
+		globalConfig.getInitSsl();
+		configInfo.setGlobalConfig(globalConfig);
+		configInfo.setOauthConfig(oauthConfig);
+		configInfo.setSslConfig(sslConfig);
+
+		UpdateConfiguration updateConfiguration = new UpdateConfiguration();
+		Map<String, ArrayList<String>> oauthK8Resources=test_getOauthK8Resources();
+		Map<String, ArrayList<String>> sslK8Resources=test_getSslK8Resources();
+		updateConfiguration.setOauthK8Resources(oauthK8Resources);
+		updateConfiguration.setSslK8Resources(sslK8Resources);
+		ArrayList<String> listSecretNames =test_listOfSecrets();
+		V1SecretList listSecret = get_secretList();
+		V1Secret secret1=listSecret.getItems().get(1);
+		coreApi = Mockito.mock(CoreV1Api.class);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("privateKeySecretNameSpace", null, null, null,
+				null, null, null, null, null, null);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("certificateSecretNameSpace", null, null, null,
+				null, null, null, null, null, null);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("keyStorePasswordSecretNameSpace", null, null,
+				null, null, null, null, null, null, null);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("trustStorePasswordSecretNameSpace", null, null,
+				null, null, null, null, null, null, null);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("caBundleSecretNameSpace", null, null, null,
+				null, null, null, null, null, null);
+
+		String nameSpace="keyStoreSecretNameSpace";
+		String configType ="OAUTH";
+
+		try {
+			Class cls = ConfigWatchProcess.class;
+			Constructor[] cn = cls.getDeclaredConstructors();
+			cn[0].setAccessible(true);      
+			ConfigWatchProcess configWatchProcess = (ConfigWatchProcess) cn[0].newInstance(updateConfiguration, nameSpace,listSecretNames,configInfo ,configType);
+
+			configWatchProcess.setConfigInfo(configInfo);
+			configWatchProcess.setConfigType(configType);
+			configWatchProcess.setResourceVersionMap();
+			ConfigWatchProcess spy = PowerMockito.spy(configWatchProcess);
+			Boolean oauthConfigFilesPresent=Whitebox.invokeMethod(spy,"checkAllOauthConfigFilesPresent");
+			List<String> logs = new ArrayList<String>();
+			verify(mockAppender, atLeastOnce()).append((LogEvent) captorLoggingEvent.capture());
+			List<LogEvent> loggingEvent = captorLoggingEvent.getAllValues();
+
+			for (LogEvent logEvt : loggingEvent) {
+				logs.add(logEvt.getMessage().getFormattedMessage());
+
+			}
+			Assert.assertTrue(logs.toString()
+					.contains("checking presence of oauth configuration for algorithm"+oauthConfig.getInitialAlgorithm()));
+
+			Assert.assertTrue(logs.contains("Oauth configuration present:"+oauthConfigFilesPresent));
+
+		} catch (Exception e) {
+
+			e.printStackTrace();
+		}
+
+	}
+
+
+	@Test
+	public void test_checkAllSslConfigFilesPresent() throws Exception{
+		ConfigurationInfo configInfo = new ConfigurationInfo();
+		Oauthconfig oauthConfig= test_getOauthConfig();
+		Sslconfig sslConfig=test_getSslConfig();
+		Globalconfig globalConfig = new Globalconfig();
+		globalConfig.getInitSsl();
+		configInfo.setGlobalConfig(globalConfig);
+		configInfo.setOauthConfig(oauthConfig);
+		configInfo.setSslConfig(sslConfig);
+
+		UpdateConfiguration updateConfiguration = new UpdateConfiguration();
+		Map<String, ArrayList<String>> oauthK8Resources=test_getOauthK8Resources();
+		Map<String, ArrayList<String>> sslK8Resources=test_getSslK8Resources();
+		updateConfiguration.setOauthK8Resources(oauthK8Resources);
+		updateConfiguration.setSslK8Resources(sslK8Resources);
+		ArrayList<String> listSecretNames =test_listOfSecrets();
+		V1SecretList listSecret = get_secretList();
+		V1Secret secret1=listSecret.getItems().get(1);
+		coreApi = Mockito.mock(CoreV1Api.class);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("privateKeySecretNameSpace", null, null, null,
+				null, null, null, null, null, null);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("certificateSecretNameSpace", null, null, null,
+				null, null, null, null, null, null);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("keyStorePasswordSecretNameSpace", null, null,
+				null, null, null, null, null, null, null);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("trustStorePasswordSecretNameSpace", null, null,
+				null, null, null, null, null, null, null);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("caBundleSecretNameSpace", null, null, null,
+				null, null, null, null, null, null);
+		String nameSpace="keyStoreSecretNameSpace";
+		String configType ="SSL";
+		try {
+			Class cls = ConfigWatchProcess.class;
+			Constructor[] cn = cls.getDeclaredConstructors();
+			cn[0].setAccessible(true);      
+			ConfigWatchProcess configWatchProcess = (ConfigWatchProcess) cn[0].newInstance(updateConfiguration, nameSpace,listSecretNames,configInfo ,configType);
+
+			configWatchProcess.setConfigInfo(configInfo);
+			configWatchProcess.setConfigType(configType);
+			configWatchProcess.setResourceVersionMap();
+			ConfigWatchProcess spy = PowerMockito.spy(configWatchProcess);
+			Boolean sslConfigFilesPresent=Whitebox.invokeMethod(spy,"checkAllSslConfigFilesPresent");
+			List<String> logs = new ArrayList<String>();
+			verify(mockAppender, atLeastOnce()).append((LogEvent) captorLoggingEvent.capture());
+
+			List<LogEvent> loggingEvent = captorLoggingEvent.getAllValues();
+
+			for (LogEvent logEvt : loggingEvent) {
+				logs.add(logEvt.getMessage().getFormattedMessage());
+
+			}
+			Assert.assertTrue(logs.toString()
+					.contains("checking presence of oauth configuration for algorithm"+sslConfig.getInitialAlgorithm()));
+			Assert.assertTrue(logs.contains("SSL configuration present:"+sslConfigFilesPresent));
+
+		} catch (Exception e) {
+
+			e.printStackTrace();
+		}
+
+	}
+
+
+	@Test
+	public void test_checkConfigFilesPresent_ErrorWithNoSslConfigInfo() throws Exception{
+		ConfigurationInfo configInfo = new ConfigurationInfo();
+		Oauthconfig oauthConfig= test_getOauthConfig();
+		Sslconfig sslConfig=test_getSslConfig();
+		Globalconfig globalConfig = new Globalconfig();
+		globalConfig.getInitSsl();
+		configInfo.setGlobalConfig(globalConfig);
+		configInfo.setOauthConfig(oauthConfig);
+		configInfo.setSslConfig(sslConfig);
+
+	 	UpdateConfiguration updateConfiguration = new UpdateConfiguration();
+		Map<String, ArrayList<String>> oauthK8Resources=test_getOauthK8Resources();
+		Map<String, ArrayList<String>> sslK8Resources=test_getSslK8Resources();
+		updateConfiguration.setOauthK8Resources(oauthK8Resources);
+		updateConfiguration.setSslK8Resources(sslK8Resources);
+		ArrayList<String> listSecretNames =test_listOfSecrets();
+		V1SecretList listSecret = get_secretList();
+		V1Secret secret1=listSecret.getItems().get(1);
+
+		coreApi = Mockito.mock(CoreV1Api.class);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("privateKeySecretNameSpace", null, null, null,
+				null, null, null, null, null, null);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("certificateSecretNameSpace", null, null, null,
+				null, null, null, null, null, null);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("keyStorePasswordSecretNameSpace", null, null,
+				null, null, null, null, null, null, null);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("trustStorePasswordSecretNameSpace", null, null,
+				null, null, null, null, null, null, null);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("caBundleSecretNameSpace", null, null, null,
+				null, null, null, null, null, null);
+
+		ArrayList<String> fileNameList = new ArrayList<String>();
+		fileNameList.add("ecdsaPrivateKeyFileName");
+		fileNameList.add("rsaPrivateKeyFileName");
+		fileNameList.add("");
+		fileNameList.add("keyStorePasswordFileName");
+		fileNameList.add("trustStorePasswordFileName");
+
+		String nameSpace="caBundleSecretNameSpace";
+		String configType ="SSL";
+		String secretName="caBundleSecretName";
+
+		List<String> logs = new ArrayList<String>();	
+		try {
+			Class cls = ConfigWatchProcess.class;
+			Constructor[] cn = cls.getDeclaredConstructors();
+			cn[0].setAccessible(true);      
+			ConfigWatchProcess configWatchProcess = (ConfigWatchProcess) cn[0].newInstance(updateConfiguration, nameSpace,listSecretNames,configInfo ,configType,null);
+			configWatchProcess.setConfigInfo(configInfo);
+			configWatchProcess.setConfigType(configType);
+			configWatchProcess.setResourceVersionMap();
+			ConfigWatchProcess spy = PowerMockito.spy(configWatchProcess);
+			//Whitebox.invokeMethod(spy,"checkConfigFilesPresent",nameSpace,secretName,fileNameList);
+			PowerMockito.doReturn(false).when(spy,"checkConfigFilesPresent", nameSpace,secretName,fileNameList);
+		}
+		catch(Exception e)
+		{
+			e.printStackTrace();
+			}
+	}
+
+	@Test
+	public void test_watchForNamespace() throws Exception {
+
+
+		ConfigurationInfo configInfo = new ConfigurationInfo();
+		Oauthconfig oauthConfig= test_getOauthConfig();
+		Sslconfig sslConfig=test_getSslConfig();
+		Globalconfig globalConfig = new Globalconfig();
+		globalConfig.getInitSsl();
+		configInfo.setGlobalConfig(globalConfig);
+		configInfo.setOauthConfig(oauthConfig);
+		configInfo.setSslConfig(sslConfig);
+
+		UpdateConfiguration updateConfiguration = new UpdateConfiguration();
+		Map<String, ArrayList<String>> oauthK8Resources=test_getOauthK8Resources();
+		Map<String, ArrayList<String>> sslK8Resources=test_getSslK8Resources();
+		updateConfiguration.setOauthK8Resources(oauthK8Resources);
+		updateConfiguration.setSslK8Resources(sslK8Resources);
+		ArrayList<String> listSecretNames =test_listOfSecrets();
+		V1SecretList listSecret = get_secretList();
+		V1Secret secret1=listSecret.getItems().get(1);
+
+		coreApi = Mockito.mock(CoreV1Api.class);
+
+		String nameSpace="caBundleSecretNameSpace";
+		String configType ="SSL";
+		Class cls = ConfigWatchProcess.class;
+		Constructor[] cn = cls.getDeclaredConstructors();
+		cn[0].setAccessible(true);      
+		ConfigWatchProcess configWatchProcess = (ConfigWatchProcess) cn[0].newInstance(updateConfiguration, nameSpace,listSecretNames,configInfo ,configType,null);
+		configWatchProcess.setConfigInfo(configInfo);
+		configWatchProcess.setConfigType(configType);
+		configWatchProcess.setResourceVersionMap();
+		String nameSpace1="caBundleSecretNameSpace";
+
+		Watch<V1Secret> watch=null;
+		ApiClient client = Config.defaultClient();
+//		configWatchProcess.getClient().getHttpClient().setReadTimeout(0, TimeUnit.SECONDS);
+		HttpResponse httpResponse = PowerMockito.mock(HttpResponse.class);
+		PowerMockito.mockStatic(Watch.class);
+
+
+		Callback mockCall = Mockito.mock(Callback.class);
+		List<String> logs=new ArrayList<String>();
+		Type mockType=new TypeToken<Watch.Response<V1Secret>>() {
+		}.getType();
+		//PowerMockito.whenNew(Callback.class).withArguments(any(okhttp3.OkHttpClient.class), any(RequestBody.class)).thenReturn(mockCall);
+		// when(Watch.createWatch(client, mockCall,mockType)).thenReturn(mockWatch);
+		// when(Watch.createWatch(Mockito.any(), Mockito.any(),Mockito.any())).thenReturn(mockWatch);
+		watch = configWatchProcess.watchForNamespace(nameSpace1);
+		verify(mockAppender, atLeastOnce()).append((LogEvent) captorLoggingEvent.capture());
+		List<LogEvent> loggingEvent = captorLoggingEvent.getAllValues();
+		for (LogEvent logEvt : loggingEvent) {
+			logs.add(logEvt.getMessage().getFormattedMessage());
+
+		}
+
+		Assert.assertTrue(logs.contains("Watch created for secrets in namespace: "+nameSpace1));
+	}
+
+
+	@Test
+	public void test_watchForNamespace_Failure() throws Exception {
+		ConfigurationInfo configInfo = new ConfigurationInfo();
+		Oauthconfig oauthConfig= test_getOauthConfig();
+		Sslconfig sslConfig=test_getSslConfig();
+		Globalconfig globalConfig = new Globalconfig();
+		globalConfig.getInitSsl();
+		configInfo.setGlobalConfig(globalConfig);
+		configInfo.setOauthConfig(oauthConfig);
+		configInfo.setSslConfig(sslConfig);
+
+		UpdateConfiguration updateConfiguration = new UpdateConfiguration();
+		Map<String, ArrayList<String>> oauthK8Resources=test_getOauthK8Resources();
+		Map<String, ArrayList<String>> sslK8Resources=test_getSslK8Resources();
+		updateConfiguration.setOauthK8Resources(oauthK8Resources);
+		updateConfiguration.setSslK8Resources(sslK8Resources);
+		ArrayList<String> listSecretNames =test_listOfSecrets();
+		V1SecretList listSecret = get_secretList();
+		V1Secret secret1=listSecret.getItems().get(1);
+
+		coreApi = Mockito.mock(CoreV1Api.class);
+
+		String nameSpace="caBundleSecretNameSpace";
+		String configType ="SSL";
+		Class cls = ConfigWatchProcess.class;
+		Constructor[] cn = cls.getDeclaredConstructors();
+		cn[0].setAccessible(true);      
+		ConfigWatchProcess configWatchProcess = (ConfigWatchProcess) cn[0].newInstance(updateConfiguration, nameSpace,listSecretNames,configInfo ,configType,null);
+		configWatchProcess.setConfigInfo(configInfo);
+		configWatchProcess.setConfigType(configType);
+		configWatchProcess.setResourceVersionMap();
+		String nameSpace1="";
+
+		Watch<V1Secret> watch=null;
+		PowerMockito.mockStatic(Watch.class);
+
+		try {
+			watch = configWatchProcess.watchForNamespace(nameSpace1);
+
+		}catch(Exception e) {
+			System.out.println("CHECK"+e.getMessage());
+		}
+
+
+	}
+
+
+
+//	@Test
+//	public void test_run() throws Exception{
+//
+//		ConfigurationInfo configInfo = new ConfigurationInfo();
+//		Oauthconfig oauthConfig= test_getOauthConfig();
+//		Sslconfig sslConfig=test_getSslConfig();
+//		Globalconfig globalConfig = new Globalconfig();
+//		globalConfig.getInitSsl();
+//		configInfo.setGlobalConfig(globalConfig);
+//		configInfo.setOauthConfig(oauthConfig);
+//		configInfo.setSslConfig(sslConfig);
+//
+//		UpdateConfiguration updateConfiguration = new UpdateConfiguration();
+//		Map<String, ArrayList<String>> oauthK8Resources=test_getOauthK8Resources();
+//		Map<String, ArrayList<String>> sslK8Resources=test_getSslK8Resources();
+//		updateConfiguration.setOauthK8Resources(oauthK8Resources);
+//		updateConfiguration.setSslK8Resources(sslK8Resources);
+//
+//		ArrayList<String> listSecretNames =test_listOfSecrets();
+//		V1SecretList listSecret = get_secretList();
+//		coreApi = Mockito.mock(CoreV1Api.class);
+//
+//		String nameSpace="keyStoreSecretNameSpace";
+//		String configType ="SSL";
+//
+//		try {
+//			Class cls = ConfigWatchProcess.class;
+//			Constructor[] cn = cls.getDeclaredConstructors();
+//			cn[0].setAccessible(true);      
+//			ConfigWatchProcess configWatchProcess = (ConfigWatchProcess) cn[0].newInstance(updateConfiguration, nameSpace,listSecretNames,configInfo ,configType);
+//
+//			configWatchProcess.setConfigInfo(configInfo);
+//			configWatchProcess.setConfigType(configType);
+//			configWatchProcess.setResourceVersionMap();
+//			ConfigWatchProcess spy = PowerMockito.spy(configWatchProcess);
+//
+//
+//			ApiClient client = Config.defaultClient();
+////			client.getHttpClient().setReadTimeout(60, TimeUnit.SECONDS);
+//			Configuration.setDefaultApiClient(client);
+//
+//			CoreV1Api api = new CoreV1Api();
+//			Watch<V1Secret> watchmock=PowerMockito.mock(Watch.class);
+//			Watch<V1Secret> watch =
+//					Watch.createWatch(
+//							client,
+//							api.listNamespaceCall(
+//									null, null, null, null, null, 5, null, null, Boolean.TRUE, null),
+//							new TypeToken<Watch.Response<V1Secret>>() {}.getType());
+//			//when(watchmock.createWatch(Mockito.any(), Mockito.any(),Mockito.any())).thenReturn(watch);
+//
+//			PowerMockito.doReturn(watch).when(configWatchProcess.watchForNamespace(Mockito.anyString()));
+//
+//
+//			PowerMockito.doNothing().when(spy, "handleEventAdded",Mockito.any());
+//
+//			PowerMockito.doNothing().when(spy, "handleEventModified",Mockito.any());
+//
+//			PowerMockito.doNothing().when(spy, "handleEventDeleted",Mockito.any());
+//
+//
+//			configWatchProcess.run();
+//
+//			List<String> logs = new ArrayList<String>();
+//			verify(mockAppender, atLeastOnce()).append((LogEvent) captorLoggingEvent.capture());
+//
+//			List<LogEvent> loggingEvent = captorLoggingEvent.getAllValues();
+//
+//			for (LogEvent logEvt : loggingEvent) {
+//				logs.add(logEvt.getMessage().getFormattedMessage());
+//
+//			}
+//			Assert.assertTrue(logs.toString()
+//					.contains("Starting ConfigWatchProcess"));
+//
+//
+//		} catch (Exception e) {
+//
+//			e.printStackTrace();
+//		}
+//
+//	}
+
+
+}
+
+

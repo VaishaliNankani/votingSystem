@@ -1,0 +1,10 @@
+package com.oracle.oci.votingservice.domain;
+
+public class VoteData {
+	  
+      private String reqNfType = null;
+
+      
+      private String  reqNfFqdn = null;
+
+}

@@ -1,0 +1,56 @@
+// Copyright 2020 (C), Oracle and/or its affiliates. All rights reserved.
+
+package com.oracle.oci.votingservice.rest;
+
+
+
+import javax.validation.Valid;
+
+
+import org.springframework.http.ResponseEntity;
+import org.springframework.validation.BindingResult;
+
+import org.springframework.web.bind.annotation.GetMapping;
+
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+
+
+import com.oracle.oci.votingservice.domain.CandidateData;
+
+import com.oracle.oci.votingservice.domain.RegistrationData;
+import com.oracle.oci.votingservice.domain.VoteData;
+
+
+public interface OciVotingServiceApi {
+	
+	@PutMapping(value = "/voting-service/v1/voters/{voterId}",
+	        produces = { "application/json" }, 
+	        consumes = { "application/json" })
+	public ResponseEntity<Object> registerVoter(@PathVariable("voterId") String voterId,
+			@Valid @RequestBody RegistrationData body, BindingResult bindingResult);
+	
+	@PostMapping(value = "/voting-service/v1/candidates",
+	        produces = { "application/json" }, 
+	        consumes = { "application/json" })
+	public ResponseEntity<Object> registerCandidate(@Valid @RequestBody CandidateData body,
+			BindingResult bindingResult);
+		
+	@PutMapping(value = "/voting-service/v1/vote/{voterId}",
+	        produces = { "application/json" }, 
+	        consumes = { "application/json" })
+	ResponseEntity<Object> castVote(@PathVariable("voterId") String voterId,
+	@Valid @RequestBody VoteData body, BindingResult bindingResult);
+	
+	@GetMapping(value = "/voting-service/v1/candidates",
+			produces = { "application/json" })
+	public ResponseEntity<Object> getCandidates();	
+	
+	
+	@GetMapping(value = "/voting-service/v1/vote/{voterId}",
+	        produces = { "application/json" })
+	ResponseEntity<Object> getVoterRegistrationData(@PathVariable("voterId") String voterId);	
+	
+}

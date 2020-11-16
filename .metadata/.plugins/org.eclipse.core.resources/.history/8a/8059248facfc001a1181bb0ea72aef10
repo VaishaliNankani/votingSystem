@@ -1,0 +1,412 @@
+// Copyright 2018 (C), Oracle and/or its affiliates. All rights reserved.
+
+package com.oracle.cgbu.cne.common.config;
+import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.PropertySource;
+
+@Configuration
+@PropertySource("classpath:application.properties")
+@ConfigurationProperties("initial")
+public class ConfigurationInfo {
+	private Sslconfig sslConfig;
+	private Oauthconfig oauthConfig;
+	//private Dbconfig dbConfig;
+	private Globalconfig globalConfig;
+	
+	public Sslconfig getSslConfig() {
+		return sslConfig;
+	}
+
+	public Globalconfig getGlobalConfig() {
+		return globalConfig;
+	}
+
+	public void setGlobalConfig(Globalconfig globalConfig) {
+		this.globalConfig = globalConfig;
+	}
+
+	public void setSslConfig(Sslconfig sslConfig) {
+		this.sslConfig = sslConfig;
+	}
+	
+	public Oauthconfig getOauthConfig() {
+		return oauthConfig;
+	}
+
+	public void setOauthConfig(Oauthconfig oauthConfig) {
+		this.oauthConfig = oauthConfig;
+	}
+	public static class Globalconfig {
+		private boolean initSsl;
+
+		public boolean getInitSsl() {
+			return initSsl;
+		}
+
+		public void setInitSsl(boolean initSsl) {
+			this.initSsl = initSsl;
+		}
+	}
+	/*public Dbconfig getDbConfig() {
+		return dbConfig;
+	}
+
+	public void setDbConfig(Dbconfig dbConfig) {
+		this.dbConfig = dbConfig;
+	}*/
+	@Override
+	public String toString() {
+		return "InitialConfiguration [sslConfig=" + sslConfig + ", oauthConfig=" + oauthConfig + "]";
+	}
+
+	public static class Sslconfig {
+		private boolean sslenabled;
+		private String tlsVersion;
+		private int port;
+		private String[] cipherSuite;
+		private String initialAlgorithm;
+		private String privateKeySecretName;
+		private String privateKeySecretNameSpace;
+		private String rsaPrivateKeyFileName;
+		private String ecdsaPrivateKeyFileName;
+		private String certificateSecretName;
+		private String certificateSecretNameSpace;
+		private String rsaCertificateFileName;
+		private String ecdsaCertificateFileName;
+		private String keyStorePasswordFileName;
+		private String keyStorePasswordSecretName;
+		private String keyStorePasswordSecretNameSpace;
+		private String trustStorePasswordFileName;
+		private String trustStorePasswordSecretName;
+		private String trustStorePasswordSecretNameSpace;
+		private String caBundleFileName;
+		private String caBundleSecretName;
+		private String caBundleSecretNameSpace;	
+
+		
+
+		public boolean isSslenabled() {
+			return sslenabled;
+		}
+
+		public void setSslenabled(boolean sslenabled) {
+			this.sslenabled = sslenabled;
+		}
+
+		public String getTlsVersion() {
+			return tlsVersion;
+		}
+
+		public void setTlsVersion(String tlsVersion) {
+			this.tlsVersion = tlsVersion;
+		}
+
+		public int getPort() {
+			return port;
+		}
+
+		public void setPort(int port) {
+			this.port = port;
+		}
+
+		public String[] getCipherSuite() {
+			return cipherSuite;
+		}
+
+		public void setCipherSuite(String[] cipherSuite) {
+			this.cipherSuite = cipherSuite;
+		}
+
+		public String getRsaPrivateKeyFileName() {
+			return rsaPrivateKeyFileName;
+		}
+
+		public void setRsaPrivateKeyFileName(String rsaPrivateKeyFileName) {
+			this.rsaPrivateKeyFileName = rsaPrivateKeyFileName;
+		}
+		public String getEcdsaPrivateKeyFileName() {
+			return ecdsaPrivateKeyFileName;
+		}
+
+		public void setEcdsaPrivateKeyFileName(String ecdsaPrivateKeyFileName) {
+			this.ecdsaPrivateKeyFileName = ecdsaPrivateKeyFileName;
+		}
+		
+		public String getCertificateSecretName() {
+			return certificateSecretName;
+		}
+
+		public void setCertificateSecretName(String certificateSecretName) {
+			this.certificateSecretName = certificateSecretName;
+		}
+
+		public String getInitialAlgorithm() {
+			return initialAlgorithm;
+		}
+
+		public void setInitialAlgorithm(String initialAlgorithm) {
+			this.initialAlgorithm = initialAlgorithm;
+		}
+
+		public String getPrivateKeySecretName() {
+			return privateKeySecretName;
+		}
+
+		public void setPrivateKeySecretName(String privateKeySecretName) {
+			this.privateKeySecretName = privateKeySecretName;
+		}
+
+		public String getRsaCertificateFileName() {
+			return rsaCertificateFileName;
+		}
+
+		public void setRsaCertificateFileName(String rsaCertificateFileName) {
+			this.rsaCertificateFileName = rsaCertificateFileName;
+		}
+
+		public String getEcdsaCertificateFileName() {
+			return ecdsaCertificateFileName;
+		}
+
+		public void setEcdsaCertificateFileName(String ecdsaCertificateFileName) {
+			this.ecdsaCertificateFileName = ecdsaCertificateFileName;
+		}
+
+		public String getKeyStorePasswordFileName() {
+			return keyStorePasswordFileName;
+		}
+
+		public void setKeyStorePasswordFileName(String keyStorePasswordFileName) {
+			this.keyStorePasswordFileName = keyStorePasswordFileName;
+		}
+
+		public String getTrustStorePasswordFileName() {
+			return trustStorePasswordFileName;
+		}
+
+		public void setTrustStorePasswordFileName(String trustStorePasswordFileName) {
+			this.trustStorePasswordFileName = trustStorePasswordFileName;
+		}
+
+		public String getKeyStorePasswordSecretName() {
+			return keyStorePasswordSecretName;
+		}
+
+		public void setKeyStorePasswordSecretName(String keyStorePasswordSecretName) {
+			this.keyStorePasswordSecretName = keyStorePasswordSecretName;
+		}
+
+		public String getKeyStorePasswordSecretNameSpace() {
+			return keyStorePasswordSecretNameSpace;
+		}
+
+		public void setKeyStorePasswordSecretNameSpace(String keyStorePasswordSecretNameSpace) {
+			this.keyStorePasswordSecretNameSpace = keyStorePasswordSecretNameSpace;
+		}
+
+		public String getTrustStorePasswordSecretName() {
+			return trustStorePasswordSecretName;
+		}
+
+		public void setTrustStorePasswordSecretName(String trustStorePasswordSecretName) {
+			this.trustStorePasswordSecretName = trustStorePasswordSecretName;
+		}
+
+		public String getTrustStorePasswordSecretNameSpace() {
+			return trustStorePasswordSecretNameSpace;
+		}
+
+		public void setTrustStorePasswordSecretNameSpace(String trustStorePasswordSecretNameSpace) {
+			this.trustStorePasswordSecretNameSpace = trustStorePasswordSecretNameSpace;
+		}
+		public String getPrivateKeySecretNameSpace() {
+			return privateKeySecretNameSpace;
+		}
+
+		public void setPrivateKeySecretNameSpace(String privateKeySecretNameSpace) {
+			this.privateKeySecretNameSpace = privateKeySecretNameSpace;
+		}
+
+		public String getCertificateSecretNameSpace() {
+			return certificateSecretNameSpace;
+		}
+
+		public void setCertificateSecretNameSpace(String certificateSecretNameSpace) {
+			this.certificateSecretNameSpace = certificateSecretNameSpace;
+		}
+		public String getCaBundleFileName() {
+			return caBundleFileName;
+		}
+
+		public void setCaBundleFileName(String caBundleFileName) {
+			this.caBundleFileName = caBundleFileName;
+		}
+
+		public String getCaBundleSecretName() {
+			return caBundleSecretName;
+		}
+
+		public void setCaBundleSecretName(String caBundleSecretName) {
+			this.caBundleSecretName = caBundleSecretName;
+		}
+
+		public String getCaBundleSecretNameSpace() {
+			return caBundleSecretNameSpace;
+		}
+
+		public void setCaBundleSecretNameSpace(String caBundleSecretNameSpace) {
+			this.caBundleSecretNameSpace = caBundleSecretNameSpace;
+		}
+		@Override
+		public String toString() {
+			return "config [sslenabled=" + sslenabled + ", tlsVersion=" + tlsVersion + ", port=" + port + ", cipherSuite="
+					+ cipherSuite + ", privateKeySecretName=" + privateKeySecretName + ", privateKeySecretNameSpace=" + privateKeySecretNameSpace
+					+ ", rsaPrivateKeyFileName=" + rsaPrivateKeyFileName + ", ecdsaPrivateKeyFileName=" + ecdsaPrivateKeyFileName + ",certificateSecretName=" + certificateSecretName +", "
+					+ "certificateSecretNameSpace=" + certificateSecretNameSpace+", rsaCertificateFileName=" +rsaCertificateFileName+","
+					+ "keyStorePasswordFileName=" + keyStorePasswordFileName +",keyStorePasswordSecretName="
+					+ keyStorePasswordSecretName+",keyStorePasswordSecretNameSpace=" +keyStorePasswordSecretNameSpace+""
+					+ ",trustStorePasswordFileName=" +trustStorePasswordFileName+",trustStorePasswordSecretName=" +trustStorePasswordSecretName+","
+					+ "trustStorePasswordSecretNameSpace=" +trustStorePasswordSecretNameSpace+",caBundleFileName=" +caBundleFileName+""
+							+ ",caBundleSecretName=" +caBundleSecretName+"," +"caBundleSecretNameSpace=" +caBundleSecretNameSpace+",initialAlgorithm=" + initialAlgorithm + "]";
+		}
+
+		
+	}
+
+		
+	
+	public static class Oauthconfig {
+		
+		private String privateKeySecretName;
+		private String privateKeySecretNameSpace;
+		private String rsaPrivateKeyFileName;
+		private String ecdsaPrivateKeyFileName;
+		private String certificateSecretName;
+		private String certificateSecretNameSpace;
+		private String rsaCertificateFileName;
+		private String ecdsaCertificateFileName;
+		private String keyStorePasswordFileName;
+		private String keyStorePasswordSecretName;
+		private String keyStorePasswordSecretNameSpace;
+		private String initialAlgorithm;
+		
+		public String getInitialAlgorithm() {
+			return initialAlgorithm;
+		}
+		public void setInitialAlgorithm(String initialAlgorithm) {
+			this.initialAlgorithm = initialAlgorithm;
+		}
+		public String getPrivateKeySecretName() {
+			return privateKeySecretName;
+		}
+		public void setPrivateKeySecretName(String privateKeySecretName) {
+			this.privateKeySecretName = privateKeySecretName;
+		}
+		
+		public String getRsaPrivateKeyFileName() {
+			return rsaPrivateKeyFileName;
+		}
+		public void setRsaPrivateKeyFileName(String rsaPrivateKeyFileName) {
+			this.rsaPrivateKeyFileName = rsaPrivateKeyFileName;
+		}
+		public String getEcdsaPrivateKeyFileName() {
+			return ecdsaPrivateKeyFileName;
+		}
+		public void setEcdsaPrivateKeyFileName(String ecdsaPrivateKeyFileName) {
+			this.ecdsaPrivateKeyFileName = ecdsaPrivateKeyFileName;
+		}
+		public String getCertificateSecretName() {
+			return certificateSecretName;
+		}
+		public void setCertificateSecretName(String certificateSecretName) {
+			this.certificateSecretName = certificateSecretName;
+		}
+		
+		public String getPrivateKeySecretNameSpace() {
+			return privateKeySecretNameSpace;
+		}
+		public void setPrivateKeySecretNameSpace(String privateKeySecretNameSpace) {
+			this.privateKeySecretNameSpace = privateKeySecretNameSpace;
+		}
+		public String getCertificateSecretNameSpace() {
+			return certificateSecretNameSpace;
+		}
+		public void setCertificateSecretNameSpace(String certificateSecretNameSpace) {
+			this.certificateSecretNameSpace = certificateSecretNameSpace;
+		}
+		public String getRsaCertificateFileName() {
+			return rsaCertificateFileName;
+		}
+
+		public void setRsaCertificateFileName(String rsaCertificateFileName) {
+			this.rsaCertificateFileName = rsaCertificateFileName;
+		}
+		public String getKeyStorePasswordFileName() {
+			return keyStorePasswordFileName;
+		}
+		public void setKeyStorePasswordFileName(String keyStorePasswordFileName) {
+			this.keyStorePasswordFileName = keyStorePasswordFileName;
+		}
+		public String getKeyStorePasswordSecretName() {
+			return keyStorePasswordSecretName;
+		}
+		public void setKeyStorePasswordSecretName(String keyStorePasswordSecretName) {
+			this.keyStorePasswordSecretName = keyStorePasswordSecretName;
+		}
+		public String getKeyStorePasswordSecretNameSpace() {
+			return keyStorePasswordSecretNameSpace;
+		}
+		public void setKeyStorePasswordSecretNameSpace(String keyStorePasswordSecretNameSpace) {
+			this.keyStorePasswordSecretNameSpace = keyStorePasswordSecretNameSpace;
+		}
+		public String getEcdsaCertificateFileName() {
+			return ecdsaCertificateFileName;
+		}
+		public void setEcdsaCertificateFileName(String ecdsaCertificateFileName) {
+			this.ecdsaCertificateFileName = ecdsaCertificateFileName;
+		}
+		
+		@Override
+		public String toString() {
+			return "config [privateKeySecretName=" + privateKeySecretName + ", privateKeySecretNameSpace=" + privateKeySecretNameSpace
+					+ ", rsaPrivateKeyFileName=" + rsaPrivateKeyFileName + ", ecdsaPrivateKeyFileName=" + ecdsaPrivateKeyFileName + ",certificateSecretName=" + certificateSecretName +", "
+					+ "certificateSecretNameSpace=" + certificateSecretNameSpace+", rsaCertificateFileName=" +rsaCertificateFileName+","
+					+ "keyStorePasswordFileName=" + keyStorePasswordFileName +",keyStorePasswordSecretName="
+					+keyStorePasswordSecretName+",keyStorePasswordSecretNameSpace=" +keyStorePasswordSecretNameSpace+", initialAlgorithm=" + initialAlgorithm +"]";
+		}
+	}
+	/*
+	public static class Dbconfig {
+		private String dbConfigFileName;
+		private String dbConfigSecretName;
+		private String dbConfigSecretNameSpace;
+		
+		
+		public String getDbConfigSecretName() {
+			return dbConfigSecretName;
+		}
+		public void setDbConfigSecretName(String dbConfigSecretName) {
+			this.dbConfigSecretName = dbConfigSecretName;
+		}
+		public String getDbConfigSecretNameSpace() {
+			return dbConfigSecretNameSpace;
+		}
+		public void setDbConfigSecretNameSpace(String dbConfigSecretNameSpace) {
+			this.dbConfigSecretNameSpace = dbConfigSecretNameSpace;
+		}
+		public String getDbConfigFileName() {
+			return dbConfigFileName;
+		}
+		public void setDbConfigFileName(String dbConfigFileName) {
+			this.dbConfigFileName = dbConfigFileName;
+		}
+		@Override
+		public String toString() {
+			return "config [dbConfigFileName=" + dbConfigFileName + ", dbConfigSecretName=" + dbConfigSecretName
+					+ ", dbConfigSecretNameSpace=" + dbConfigSecretNameSpace + "]";
+		}
+	}*/
+	
+
+}

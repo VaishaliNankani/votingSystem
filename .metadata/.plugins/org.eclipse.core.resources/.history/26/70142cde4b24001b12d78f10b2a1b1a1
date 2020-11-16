@@ -1,0 +1,27 @@
+package com.oracle.oci.votingservice.domain;
+
+import javax.validation.constraints.NotNull;
+
+public class VoteData extends AbstractDto{
+	
+	@NotNull
+	private long voterId;	
+	
+	@NotNull
+	private long candidateId;	
+	private long voterCasted;
+	
+	public long getCandidateId() {
+		return candidateId;
+	}
+	public void setCandidateId(long candidateId) {
+		this.candidateId = candidateId;
+	}
+	public long getVoterId() {
+		return voterId;
+	}
+	public void setVoterId(long voterId) {
+		this.voterId = voterId;
+	}
+	
+}

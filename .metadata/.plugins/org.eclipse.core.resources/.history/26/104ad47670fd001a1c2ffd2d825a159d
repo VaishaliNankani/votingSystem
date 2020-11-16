@@ -1,0 +1,1357 @@
+package com.oracle.cgbu.cne.common.test;
+
+import static org.junit.Assert.fail;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+import java.io.BufferedWriter;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.security.KeyStore;
+import java.security.PrivateKey;
+import java.security.cert.X509Certificate;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+import org.apache.commons.lang3.tuple.Pair;
+import org.apache.logging.log4j.Level;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.core.Appender;
+import org.apache.logging.log4j.core.LogEvent;
+import org.apache.logging.log4j.core.Logger;
+import org.junit.After;
+import org.junit.Assert;
+import org.junit.Before;
+import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.mockito.ArgumentCaptor;
+import org.mockito.Captor;
+import org.mockito.Mock;
+import org.mockito.Mockito;
+import org.mockito.MockitoAnnotations;
+import org.powermock.api.mockito.PowerMockito;
+import org.powermock.core.classloader.annotations.PowerMockIgnore;
+import org.powermock.core.classloader.annotations.PrepareForTest;
+import org.powermock.modules.junit4.PowerMockRunner;
+import org.springframework.boot.context.properties.ConfigurationProperties;
+
+import com.oracle.cgbu.cne.common.CommonUtils;
+import com.oracle.cgbu.cne.common.ConfigException;
+import com.oracle.cgbu.cne.common.config.ConfigurationInfo;
+import com.oracle.cgbu.cne.common.config.ConfigurationInfo.Globalconfig;
+import com.oracle.cgbu.cne.common.config.ConfigurationInfo.Oauthconfig;
+import com.oracle.cgbu.cne.common.config.ConfigurationInfo.Sslconfig;
+
+import io.kubernetes.client.openapi.*;
+import io.kubernetes.client.openapi.apis.*;
+import io.kubernetes.client.openapi.models.*;
+
+@PowerMockIgnore({ "javax.management.*", "com.sun.org.apache.*", "javax.xml.*", "org.xml.*", "java.net.ssl",
+	"javax.security.auth.x500.X500Principal", "org.apache.xerces.*", "org.w3c.*", "javax.net.ssl.*" })
+@RunWith(PowerMockRunner.class)
+@PrepareForTest(value = { CoreV1Api.class, CommonUtils.class, KeyStore.class })
+@ConfigurationProperties("application")
+public class CommonUtilsTest {
+	private static CoreV1Api coreApi;
+
+	// private CommonUtils commonUtils;
+
+	static final String rsa_pkcs8 = "-----BEGIN PRIVATE KEY-----MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQCx2gv/uIUiy1H7\n"
+			+ "SW5DOvC5ElzymJ7MOXaAR9cahbVZ6vO2AotfpQuK1t+1NMpCpErPqoo0PHO/rXc9\n"
+			+ "7ZXNYhxXgm7qMvdQN2NoG167DoeqfcGUufP+EG4gLbil7+HChr8WT8HVASBThAY+\n"
+			+ "9nMER/GmWLfTUTTw9KiWXZXN6I1jm9EPS5AGoUJGA3NfmZVcnklkJHXyLl69Jl15\n"
+			+ "qTwwzmw71TD0GNoVqen7GnE+gGXJAzOmmqXp6bjssOxXS8HGfJkwbNtLFKfgjIf0\n"
+			+ "fAAK+a4elsEvtoctHI6DgXk7OzZiq/+Xpj1Gl7KMvOJdZYIqhZ4OgC4TEJLwRfbZ\n"
+			+ "SX+G9/XlAgMBAAECggEBAKQOE4VmiwDGdjAK0zgW1ViSVMS+/bQ6yVGZcxUXA2sX\n"
+			+ "LInXHQMz9kqy3JaFRJFmhU+761I19Tt5YoXwc3+JocUjHvbP3ovTG9I7dQ2tYH1n\n"
+			+ "FTsAsM3KEBuEsU/3z9MlgnytQ4odSNlg7nYD1aK8Tm74ZVD7Fo+xzxUs7HOMsWeQ\n"
+			+ "GKKHzpoTDefRuUqUXOZdEnnKcu9vcLtr7Kp23Bge4Ie1o7z/HyWwKzbwiPU6MzMy\n"
+			+ "4XdJ+2/KYkHM/WObfghsVyqVA3hx5YQdaN+AlNznyL4G8//i+4Y8iLaCX7nRX5Sc\n"
+			+ "xnI1j1MeV/NMg8mKEDog25XEqbo8tLAmmueeyM9ohJ0CgYEA3yI/ajs6lbaMT/SP\n"
+			+ "GI61jO2qIh3zzKQHRRONQN/vyedwIS596jwQDrNqp3jGfkXPG8B5cLv3wS8jyT12\n"
+			+ "fgZbP1CJq8Q0RmqmupcuCtSyIC+CQzkKUbnwLeurg6P25CGbTpsXWTDglpZ6H6Qq\n"
+			+ "AizkpIN3vG+CtcwZHK8fNmXDMaMCgYEAzAxXCI3xxFWjUYYx/sStd9PT6MsZ95IK\n"
+			+ "VzgKxQB1CPWRCGRx6jF5S+FONngyXNdtT0rSBSVzfoAWgW0b3N50DnAjJ5w7AfBA\n"
+			+ "QnMt1Pii9SNxfopIEbiJkx8NrsTfxneJ70VAO8UQC8Y0GHRpKeYJdn1F/jsuB121\n"
+			+ "9Fahe2YiAtcCgYEArOhcHdTx7Av+pQLNVGlaFHAjM7bkMsM1AvlIr2oY5eubf4sI\n"
+			+ "dde/VbUAw/AaWMV93XKEaLCwJ5qA77PaO4RvdxvQ4zLyk1KYCuWV/zydH8XQ+oic\n"
+			+ "D4K3tM34JdWMP3IvaHVUXYA7uVW4IwbSqsbhEv7xbSs4LeqP1yN5W2z2GmMCgYAF\n"
+			+ "spqDjKMhnlqPHjYrLQbC/9E9AN7awOM1CEWUtqyN8X15RITBy1vduI7cioKtgP52\n"
+			+ "Zlpy9lbBQ4ZdWtSaWEPZW1w/8Obc6P6CXID9H2w9eB3lMKtOg16kEwvow2qUOiZJ\n"
+			+ "3h8rDBeknIY74JRHLTs6ackYjkJ8xischYbA0VtFxQKBgC1z+TKe3lGwHKFL7KU8\n"
+			+ "PU52yWw9EvcrwVVVWwBo+8QQ7FmJ1GwsTsM1U8FjL6L6YwFTyCZhRDCrLj66xH+w\n"
+			+ "ebgaXdEV+LCdMaA0YHMwlls7q0bNwNSmmPSTbjuquFl2YkyXHLOz0XB+DmBho/im\n"
+			+ "8X5ECSV9v0bmK4oU0BuZvdw0-----END PRIVATE KEY-----";
+	static final String ecdsa_pkcs8 = "-----BEGIN PRIVATE KEY-----MIGHAgEAMBMGByqGSM49Ag"
+			+ "EGCCqGSM49AwEHBG0wawIBAQQg6TTskkXUqQiTnQ8dFEg0GCik4QH51486XE1XkOlinhuhRANC"
+			+ "AASzeVpTbFVJlNCBEFYTzZv+yujZDAfEwP+dl3AL4wctnMCuTAqMA+w/kPq+Xc2q1XResg3fnY"
+			+ "zVAeERd/Twoj5c-----END PRIVATE KEY-----";
+
+	static final String rsa_pkcs8_cert = "-----BEGIN CERTIFICATE-----\n"
+			+ "MIIEDTCCAvWgAwIBAgIJALNR/Ggp4xbfMA0GCSqGSIb3DQEBCwUAMIGcMQswCQYD\n"
+			+ "VQQGEwJJTjESMBAGA1UECAwJS0FSTkFUQUtBMRIwEAYDVQQHDAlCQU5HQUxPUkUx\n"
+			+ "DzANBgNVBAoMBk9SQUNMRTENMAsGA1UECwwEQ0dCVTEZMBcGA1UEAwwQVmFpc2hh\n"
+			+ "bGkgTmFua2FuaTEqMCgGCSqGSIb3DQEJARYbdmFpc2hhbGkubmFua2FuaUBvcmFj\n"
+			+ "bGUuY29tMB4XDTE5MTIwNTA3NDg1NVoXDTIwMTIwNDA3NDg1NVowgZwxCzAJBgNV\n"
+			+ "BAYTAklOMRIwEAYDVQQIDAlLQVJOQVRBS0ExEjAQBgNVBAcMCUJBTkdBTE9SRTEP\n"
+			+ "MA0GA1UECgwGT1JBQ0xFMQ0wCwYDVQQLDARDR0JVMRkwFwYDVQQDDBBWYWlzaGFs\n"
+			+ "aSBOYW5rYW5pMSowKAYJKoZIhvcNAQkBFht2YWlzaGFsaS5uYW5rYW5pQG9yYWNs\n"
+			+ "ZS5jb20wggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQDAYKMsienWo2NG\n"
+			+ "5jj+YcdKRz8+5Xva0ZYRlk6sLLWjQpL/IiHPxB6nNRlkriUYVFnnaY2fTqRxG3v7\n"
+			+ "pQzwAPCc/CS+En5yMuoqHdIfEADONv25plci8TU7dnXFMCuSrcL9chTKuovG/SQ5\n"
+			+ "96M7lMenI5ZEMYTp2mwohCafGZ9Q0sjRM3Ws9HUMUor/ABt3yxb/TBDr32cSduY8\n"
+			+ "eisYWqLSldQzxa2+qXFm4K9zq+db+tNQjsH5Ukqn7RMJFYK3bvRqGonB4F96AcUx\n"
+			+ "7tskrSV26kvpXVl/LJv4LaGjpNZRT0X3UVSCUQKCTDCdxRYJ2rsmcdcumUO/Ygfl\n"
+			+ "mw7LflfhAgMBAAGjUDBOMB0GA1UdDgQWBBTYkqsLlkL0Xvlylu6QEm4R714jsDAf\n"
+			+ "BgNVHSMEGDAWgBTYkqsLlkL0Xvlylu6QEm4R714jsDAMBgNVHRMEBTADAQH/MA0G\n"
+			+ "CSqGSIb3DQEBCwUAA4IBAQBOXqjGmU6JozbUkMmuiVv4HlwF1n33943t217zxPv4\n"
+			+ "OzgiPSRdnwX8AWEKMl5KL/JY+hU7D+xItf54CKyQf/VT9t7fEh9RILPbikwJ3aeg\n"
+			+ "8lGlmqC8pdkbFKvbm4mdIVV6aLA0u72GbZKSN6eKGQfDHXuiXBx4xkzxohEWaFGS\n"
+			+ "D2/fIeUIeUG2cjCWEHgYJgal9KUdQVWa1z4otYLSJLheBgj3GDDZA5MxCUpVQ902\n"
+			+ "94jZBGyp62zPxJV0XJJqYdxTg5A7lvWrzuvK8AVkrjLH64I/5p3bwE+OipgQBlvG\n"
+			+ "96owhVTevN+2zh+MTLTEo9vs35013rFCzPwoOYU8OsuB\n" + "-----END CERTIFICATE-----";
+
+	static final String ecdsa_pkcs8_cert = "-----BEGIN CERTIFICATE-----\n"
+			+ "MIIEDTCCAvWgAwIBAgIJALNR/Ggp4xbfMA0GCSqGSIb3DQEBCwUAMIGcMQswCQYD\n"
+			+ "VQQGEwJJTjESMBAGA1UECAwJS0FSTkFUQUtBMRIwEAYDVQQHDAlCQU5HQUxPUkUx\n"
+			+ "DzANBgNVBAoMBk9SQUNMRTENMAsGA1UECwwEQ0dCVTEZMBcGA1UEAwwQVmFpc2hh\n"
+			+ "bGkgTmFua2FuaTEqMCgGCSqGSIb3DQEJARYbdmFpc2hhbGkubmFua2FuaUBvcmFj\n"
+			+ "bGUuY29tMB4XDTE5MTIwNTA3NDg1NVoXDTIwMTIwNDA3NDg1NVowgZwxCzAJBgNV\n"
+			+ "BAYTAklOMRIwEAYDVQQIDAlLQVJOQVRBS0ExEjAQBgNVBAcMCUJBTkdBTE9SRTEP\n"
+			+ "MA0GA1UECgwGT1JBQ0xFMQ0wCwYDVQQLDARDR0JVMRkwFwYDVQQDDBBWYWlzaGFs\n"
+			+ "aSBOYW5rYW5pMSowKAYJKoZIhvcNAQkBFht2YWlzaGFsaS5uYW5rYW5pQG9yYWNs\n"
+			+ "ZS5jb20wggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQDAYKMsienWo2NG\n"
+			+ "5jj+YcdKRz8+5Xva0ZYRlk6sLLWjQpL/IiHPxB6nNRlkriUYVFnnaY2fTqRxG3v7\n"
+			+ "pQzwAPCc/CS+En5yMuoqHdIfEADONv25plci8TU7dnXFMCuSrcL9chTKuovG/SQ5\n"
+			+ "96M7lMenI5ZEMYTp2mwohCafGZ9Q0sjRM3Ws9HUMUor/ABt3yxb/TBDr32cSduY8\n"
+			+ "eisYWqLSldQzxa2+qXFm4K9zq+db+tNQjsH5Ukqn7RMJFYK3bvRqGonB4F96AcUx\n"
+			+ "7tskrSV26kvpXVl/LJv4LaGjpNZRT0X3UVSCUQKCTDCdxRYJ2rsmcdcumUO/Ygfl\n"
+			+ "mw7LflfhAgMBAAGjUDBOMB0GA1UdDgQWBBTYkqsLlkL0Xvlylu6QEm4R714jsDAf\n"
+			+ "BgNVHSMEGDAWgBTYkqsLlkL0Xvlylu6QEm4R714jsDAMBgNVHRMEBTADAQH/MA0G\n"
+			+ "CSqGSIb3DQEBCwUAA4IBAQBOXqjGmU6JozbUkMmuiVv4HlwF1n33943t217zxPv4\n"
+			+ "OzgiPSRdnwX8AWEKMl5KL/JY+hU7D+xItf54CKyQf/VT9t7fEh9RILPbikwJ3aeg\n"
+			+ "8lGlmqC8pdkbFKvbm4mdIVV6aLA0u72GbZKSN6eKGQfDHXuiXBx4xkzxohEWaFGS\n"
+			+ "D2/fIeUIeUG2cjCWEHgYJgal9KUdQVWa1z4otYLSJLheBgj3GDDZA5MxCUpVQ902\n"
+			+ "94jZBGyp62zPxJV0XJJqYdxTg5A7lvWrzuvK8AVkrjLH64I/5p3bwE+OipgQBlvG\n"
+			+ "96owhVTevN+2zh+MTLTEo9vs35013rFCzPwoOYU8OsuB\n" + "-----END CERTIFICATE-----";
+
+	static final String rsa_pkcs1="-----BEGIN RSA PRIVATE KEY-----\n" + 
+			"MIIEpAIBAAKCAQEA673ZGAvzA63e463B56FFPUsfgMusoB8siquQFhZ5aZsNUFRf\n" + 
+			"VX7vaqUe9y+6lx9DzB6hRukhks8NWe5ZWjlmhk9F92C79TmPZcT2qZkZmiu+KkzV\n" + 
+			"Y6Jrpx9S+LgUxIQxPltYIgXtOzTmxQVGklu26pgwvZYrfRcZ7mTtobicTTGcNTXY\n" + 
+			"CKV8dIL0n9orJTZjzPbrhMopJ+Yfr/vzxqBvGecQ/7BsC/W7v4hKaUl7iCrmxKqu\n" + 
+			"9ltFpXg6EcmprRa2ZQGvvODwKUtQ6JHkaeKk3z/8w+n0iK05pyUUc6LdsjShcVvE\n" + 
+			"L2UyFgZgrjw6FhbVdZFKSsyD1ALLe21W92638QIDAQABAoIBAAbso6TOLQwtnj9n\n" + 
+			"yitIlGURgNJiqSZm5AMKuQe9D0Hn2QNEByzWtqeWRAuUrlFkDLTBLZGMpXzPch/z\n" + 
+			"HVLGHtnRGEgE4mB4mVqu52Ph6Fub71EEwrvTeIAHLoO5vHptO5kOS89sByTXD/Q3\n" + 
+			"jHQeF4haggv/jjV1aUCUXFqEtqqZvQDXuuEVu0CEwb566wANEdhQWVOSjBqgkLj5\n" + 
+			"2ok0dCJIBD+aVOE61KNPhiPbwNREWKoJnB4na59DsCnas/dJys+XkMUiO0eASGZD\n" + 
+			"wMiXvxNI8wDr9VSNbhakRy/BfLXgdnd1VSnI1fkJ5FRKePMLLq9UhPEnKYPI06DQ\n" + 
+			"OGwTZjECgYEA/t7aiwNhxoOxN1so0P5wb5tECb0YCXIyg5bDPY7xNGEMzepKvZRf\n" + 
+			"++QgLCXBowfaMY1PjSsq9LzRNEiWmZffYPugFGHz5tt+iTVUdtD7gvCpLDS6NDbj\n" + 
+			"LB5hfoZJqRnCc8ongphBCoXwNYpcR9EWEoyQOVauw6ODXy2XIU4RcxUCgYEA7MlK\n" + 
+			"+v4AgejWwgY73FmQo9GoBlyodXaTpXf28rgEsennn49m8ntY2+YGLgnUFryI+HTk\n" + 
+			"fKe+HCelosV+W3zYXiM/P4BLiQHKIjEGf4EpI2QDbTw1K5Jz7M9U1I88ryk+7sLC\n" + 
+			"VjATkD2FB9/P0q7X1mQfe+sxNgXlgJDh4ZML2G0CgYBre6QCd/yl8SetRp5h9MuJ\n" + 
+			"5Zq92KboZOZ0pAHWVg/WnQ7/T80RQh9wZPZEZ+/PRyJ3PzbLO+czquU2/V21jFzB\n" + 
+			"05vgvKZVNz+XsYvbR6qpv8A4Skw0dOk809sdtpgd3iUpG5mp83eKbo2spprgFocO\n" + 
+			"b4TrCWlOTAi8/Mb9XqTxOQKBgQCOUClFkzYA3k19DbwaoqYhH5hKQpRpDNyOffyp\n" + 
+			"Qtpnh/rTVp/8KxBsEeMy9mtHQwdbtP3Cwhqr11Rg8SwRloaAhdS0uMotTSsMw8Rx\n" + 
+			"C9MK10iL9bzLNFmCQdZtbq19ZV/SprGglYKcla0H34eLy9Qjoceedev82SxnyixI\n" + 
+			"pFVhPQKBgQCdi96XqpqYpAakRiS5FmN2TUnWb+E0F12AB5xGdT4Y4vPC1tIRw64u\n" + 
+			"LJJ6UxptmOhW0tfqhuYnfu8EswnQ4HkCy0RE6kS415ieOxug18B2mxOufM6e7G4M\n" + 
+			"rO++tY9uF9nyEF8/tvFnt+FyF6KOTIS6BFFcgdOep2OA6hclRxSH/w==\n" + 
+			"-----END RSA PRIVATE KEY-----";
+	static final String rsa_pkcs1_cert="-----BEGIN CERTIFICATE-----\n" + 
+			"MIIDVzCCAj+gAwIBAgIJAPCg+dxKxvuKMA0GCSqGSIb3DQEBCwUAMEIxCzAJBgNV\n" + 
+			"BAYTAlhYMRUwEwYDVQQHDAxEZWZhdWx0IENpdHkxHDAaBgNVBAoME0RlZmF1bHQg\n" + 
+			"Q29tcGFueSBMdGQwHhcNMjAwMTA3MDgxMjMxWhcNMjEwMTA2MDgxMjMxWjBCMQsw\n" + 
+			"CQYDVQQGEwJYWDEVMBMGA1UEBwwMRGVmYXVsdCBDaXR5MRwwGgYDVQQKDBNEZWZh\n" + 
+			"dWx0IENvbXBhbnkgTHRkMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA\n" + 
+			"673ZGAvzA63e463B56FFPUsfgMusoB8siquQFhZ5aZsNUFRfVX7vaqUe9y+6lx9D\n" + 
+			"zB6hRukhks8NWe5ZWjlmhk9F92C79TmPZcT2qZkZmiu+KkzVY6Jrpx9S+LgUxIQx\n" + 
+			"PltYIgXtOzTmxQVGklu26pgwvZYrfRcZ7mTtobicTTGcNTXYCKV8dIL0n9orJTZj\n" + 
+			"zPbrhMopJ+Yfr/vzxqBvGecQ/7BsC/W7v4hKaUl7iCrmxKqu9ltFpXg6EcmprRa2\n" + 
+			"ZQGvvODwKUtQ6JHkaeKk3z/8w+n0iK05pyUUc6LdsjShcVvEL2UyFgZgrjw6FhbV\n" + 
+			"dZFKSsyD1ALLe21W92638QIDAQABo1AwTjAdBgNVHQ4EFgQUTq+Dr3vaaroZSMef\n" + 
+			"QqTFHIG8Dn8wHwYDVR0jBBgwFoAUTq+Dr3vaaroZSMefQqTFHIG8Dn8wDAYDVR0T\n" + 
+			"BAUwAwEB/zANBgkqhkiG9w0BAQsFAAOCAQEAkG1nn23Wq/Q2xVP2f5I0w2AxymxQ\n" + 
+			"pzyMPeR2xezrTP5OvC5kkRGTeaNdOwPj1/NulTE1iUZcCm+N45528PgCIM2v4sol\n" + 
+			"2dt2yHJ2Jd9mm9IZGtdMlsVbGRf1dHH/31oyE9kXfnfgxMhDDHL03ZvRqCcOGcYW\n" + 
+			"xY77M5a4kthlPQM4rjqrQ6FHAiV51DEaBHCFbkRr2zR7B4hpA2yk1eDfYntISk3x\n" + 
+			"eEqX2/iPn7/rKfY5bEjNN/X7i1+F2FrHpFrlU6xwNXBy27BdvFShiqgBLAgRWBrI\n" + 
+			"oD4ZvcxxWi0ply3CYtG2Sd4+aKoL++0P1JYlmURkrdNImTCPyqdhMO568w==\n" + 
+			"-----END CERTIFICATE-----";
+	private Logger logger;
+
+	@After
+	public void teardown() {
+		logger.removeAppender(mockAppender);
+	}
+
+	@Mock
+	private Appender mockAppender;
+
+	@Captor
+	private ArgumentCaptor<LogEvent> captorLoggingEvent;
+
+	@Before
+	public void setUp() {
+		//TODO: Create /tmp/configinfo dir
+		MockitoAnnotations.initMocks(this);
+		when(mockAppender.getName()).thenReturn("MockAppender");
+		when(mockAppender.isStarted()).thenReturn(true);
+		when(mockAppender.isStopped()).thenReturn(false);
+		logger = (Logger) LogManager.getRootLogger();
+		logger.addAppender(mockAppender);
+		logger.setLevel(Level.INFO);
+	}
+	public void tearDown() {
+		// TODO: Delete /tmp/configinfo dir
+	}
+	public Oauthconfig test_getOauthConfig() {
+		// Oauth Config
+		Oauthconfig oauthConfig = new Oauthconfig();
+		oauthConfig.setPrivateKeySecretNameSpace("privateKeySecretNameSpace");
+		oauthConfig.setRsaPrivateKeyFileName("rsaPrivateKeyFileName");
+		oauthConfig.setEcdsaPrivateKeyFileName("ecdsaPrivateKeyFileName");
+		
+		oauthConfig.setKeyStorePasswordFileName("keyStorePasswordFileName");
+		oauthConfig.setKeyStorePasswordSecretName("keyStorePasswordSecretName");
+		oauthConfig.setKeyStorePasswordSecretNameSpace("keyStorePasswordSecretNameSpace");
+		oauthConfig.setInitialAlgorithm("ES256");
+		return oauthConfig;
+	}
+	public Sslconfig test_getSslConfig() {
+
+		Sslconfig sslConfig = new Sslconfig();
+		sslConfig.setSslenabled(true);
+		sslConfig.setPort(443);
+		sslConfig.setTlsVersion("TLSv1.2");
+
+		// private key
+		sslConfig.setPrivateKeySecretName("privateKeySecretName");
+		sslConfig.setPrivateKeySecretNameSpace("privateKeySecretNameSpace");
+		sslConfig.setEcdsaPrivateKeyFileName("ecdsaPrivateKeyFileName");
+		sslConfig.setRsaPrivateKeyFileName("rsaPrivateKeyFileName");
+		// certificate
+
+		sslConfig.setCertificateSecretName("certificateSecretName");
+		sslConfig.setCertificateSecretNameSpace("certificateSecretNameSpace");
+		sslConfig.setRsaCertificateFileName("rsaCertificateFileName");
+		sslConfig.setEcdsaCertificateFileName("ecdsaCertificateFileName");
+		sslConfig.setInitialAlgorithm("ES256");
+		sslConfig.setCaBundleFileName("caBundleFileName");
+		sslConfig.setCaBundleSecretName("caBundleSecretName");
+		sslConfig.setCaBundleSecretNameSpace("caBundleSecretNameSpace");
+		sslConfig.setKeyStorePasswordFileName("keyStorePasswordFileName");
+		sslConfig.setKeyStorePasswordSecretName("keyStorePasswordSecretName");
+		sslConfig.setKeyStorePasswordSecretNameSpace("keyStorePasswordSecretNameSpace");
+		sslConfig.setTrustStorePasswordFileName("trustStorePasswordFileName");
+		sslConfig.setTrustStorePasswordSecretName("trustStorePasswordSecretName");
+		sslConfig.setTrustStorePasswordSecretNameSpace("trustStorePasswordSecretNameSpace");
+		sslConfig.setCipherSuite(new String[] { "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256" });
+
+		return sslConfig;
+	}
+
+	public V1SecretList get_secretList() {
+		V1SecretList listSecret = new V1SecretList();
+		V1Secret secret1 = new V1Secret();
+		V1Secret secret2 = new V1Secret();
+		V1Secret secret3 = new V1Secret();
+		V1Secret secret4 = new V1Secret();
+		V1Secret secret5 = new V1Secret();
+		byte arr[] = new byte[] { 1, 6, 3 };
+		Map<String, byte[]> data1 = null;
+		data1 = new HashMap<String, byte[]>();
+		data1.put("ecdsaPrivateKeyFileName", ecdsa_pkcs8.getBytes());
+		data1.put("rsaPrivateKeyFileName", rsa_pkcs8.getBytes());
+		Map<String, byte[]> data2 = new HashMap<String, byte[]>();
+		data2.put("rsaCertificateFileName", rsa_pkcs8_cert.getBytes());
+		data2.put("ecdsaCertificateFileName", ecdsa_pkcs8_cert.getBytes());
+		Map<String, byte[]> data3 = new HashMap<String, byte[]>();
+		data3.put("caBundleFileName", rsa_pkcs8_cert.getBytes());
+		Map<String, byte[]> data4 = new HashMap<String, byte[]>();
+		data4.put("trustStorePasswordFileName", arr);
+		Map<String, byte[]> data5 = new HashMap<String, byte[]>();
+		data5.put("keyStorePasswordFileName", arr);
+		secret1.setMetadata(new V1ObjectMeta());
+		secret2.setMetadata(new V1ObjectMeta());
+		secret3.setMetadata(new V1ObjectMeta());
+		secret4.setMetadata(new V1ObjectMeta());
+		secret5.setMetadata(new V1ObjectMeta());
+		secret1.getMetadata().setName("privateKeySecretName");
+		secret1.setData(data1);
+		secret2.getMetadata().setName("certificateSecretName");
+		secret2.setData(data2);
+		secret3.getMetadata().setName("caBundleSecretName");
+		secret3.setData(data3);
+
+		secret4.getMetadata().setName("trustStorePasswordSecretName");
+		secret4.setData(data4);
+		secret5.getMetadata().setName("keyStorePasswordSecretName");
+		secret5.setData(data5);
+		listSecret.addItemsItem(secret1);
+		listSecret.addItemsItem(secret2);
+		listSecret.addItemsItem(secret3);
+		listSecret.addItemsItem(secret4);
+		listSecret.addItemsItem(secret5);
+
+		return listSecret;
+
+	}
+	@Test
+	public void test_Ssl2InitialConfiguration() throws Exception {
+
+		PowerMockito.spy(CommonUtils.class);
+		PowerMockito.doNothing().when(CommonUtils.class, "createKeyStore", any(), any(), any());
+		PowerMockito.doNothing().when(CommonUtils.class, "createTrustStore", any(), any());
+		ConfigurationInfo configInfo = new ConfigurationInfo();
+		Sslconfig sslConfig = test_getSslConfig();
+		Globalconfig globalConfig = new Globalconfig();
+		V1SecretList listSecret = get_secretList();
+		coreApi = Mockito.mock(CoreV1Api.class);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("privateKeySecretNameSpace", null, null, null,
+				null, null, null, null, null, null);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("certificateSecretNameSpace", null, null, null,
+				null, null, null, null, null, null);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("keyStorePasswordSecretNameSpace", null, null,
+				null, null, null, null, null, null, null);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("trustStorePasswordSecretNameSpace", null, null,
+				null, null, null, null, null, null, null);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("caBundleSecretNameSpace", null, null, null,
+				null, null, null, null, null, null);
+
+		CommonUtils.configureSsl(sslConfig);
+
+	}
+	//
+	//	@Test
+	//	public void test_ValidateInvalidPort_InSslConfig() throws Exception {
+	//
+	//		PowerMockito.spy(CommonUtils.class);
+	//		PowerMockito.doNothing().when(CommonUtils.class, "createKeyStore", any(), any(), any());
+	//		PowerMockito.doNothing().when(CommonUtils.class, "createTrustStore", any(), any());
+	//
+	//		ConfigurationInfo configInfo = new ConfigurationInfo();
+	//		Sslconfig sslConfig = test_getSslConfig();
+	//		sslConfig.setPort(-1);
+	//		Globalconfig globalConfig = new Globalconfig();
+	//		V1SecretList listSecret = get_secretList();
+	//		
+	//		coreApi = Mockito.mock(CoreV1Api.class);
+	//		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+	//		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("privateKeySecretNameSpace", null, null, null,
+	//				null, null, null, null, null, null);
+	//		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+	//		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("certificateSecretNameSpace", null, null, null,
+	//				null, null, null, null, null, null);
+	//		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+	//		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("keyStorePasswordSecretNameSpace", null, null,
+	//				null, null, null, null, null, null, null);
+	//		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+	//		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("trustStorePasswordSecretNameSpace", null, null,
+	//				null, null, null, null, null, null, null);
+	//		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+	//		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("caBundleSecretNameSpace", null, null, null,
+	//				null, null, null, null, null, null);
+	//		CommonUtils.configureSsl(sslConfig);
+	//		
+	//		try {
+	//			sslConfig.setPort(-1);
+	//			CommonUtils.configureSsl(sslConfig);
+	//		
+	//		} catch (ConfigException e) {
+	//          System.out.println("CHECK"+e.getMessage());
+	//		Assert.assertEquals(e.getMessage(),"Bad configuration.Invalid SSL port configured"+sslConfig.getPort());
+	//		}
+	//
+	//			}
+
+	@Test
+	public void test_ValidateInvalidTLSVersion() throws Exception {
+		ConfigurationInfo configInfo = new ConfigurationInfo();
+		Sslconfig sslConfig = test_getSslConfig();
+		sslConfig.setPort(-1);
+		Globalconfig globalConfig = new Globalconfig();
+		V1SecretList listSecret = get_secretList();
+		coreApi = Mockito.mock(CoreV1Api.class);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("privateKeySecretNameSpace", null, null, null,
+				null, null, null, null, null, null);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("certificateSecretNameSpace", null, null, null,
+				null, null, null, null, null, null);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("keyStorePasswordSecretNameSpace", null, null,
+				null, null, null, null, null, null, null);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("trustStorePasswordSecretNameSpace", null, null,
+				null, null, null, null, null, null, null);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("caBundleSecretNameSpace", null, null, null,
+				null, null, null, null, null, null);
+
+		try {
+			sslConfig.setTlsVersion("TLSv1.1");
+			CommonUtils.configureSsl(sslConfig);
+
+		} catch (ConfigException e) {
+			verify(mockAppender,atLeastOnce()).append((LogEvent)captorLoggingEvent.capture());
+
+			List<LogEvent> loggingEvent = captorLoggingEvent.getAllValues();
+			List<String> logs = new ArrayList<String>(); 
+			for(LogEvent 	  logEvt:loggingEvent) { logs.add(logEvt.getMessage().getFormattedMessage()); }
+			Assert.assertTrue(logs.toString().contains("Bad configuration."+e.getMessage()));
+
+		}
+
+	}
+
+	@Test
+	public void test_ConvertToX509Certificate_WithInValidPemContent() throws Exception {
+		PowerMockito.spy(CommonUtils.class);
+		String invalid_pemContent = "";
+		try {
+			CommonUtils.convertToX509Certificate(invalid_pemContent);
+		} catch (IOException e) {
+			Assert.assertEquals(e.getMessage(), "Couldnot convert to X509 format .Invalid pemContent");
+
+		}
+
+	}
+
+	@Test
+	public void test_ConvertToX509Certificate_WithPemContentEqualToNull() throws Exception {
+		PowerMockito.spy(CommonUtils.class);
+		String pemContentEqualToNull = "";
+		try {
+			CommonUtils.convertToX509Certificate(pemContentEqualToNull);
+		} catch (IOException e) {
+			Assert.assertEquals(e.getMessage(), "Couldnot convert to X509 format .Invalid pemContent");
+
+		}
+
+	}
+
+	@Test
+	public void test_ConvertToX509Certificate_WithValidPemContent() throws Exception { // X509Certificate cert = null;
+		PowerMockito.spy(CommonUtils.class);
+		// cert=readFromFile("classpath:rsa_pkcs8_cert_X509Certificate");
+		Collection<X509Certificate> certificateList = CommonUtils.convertToX509Certificate(rsa_pkcs8_cert);
+		Assert.assertNotNull(certificateList);
+		Assert.assertTrue(certificateList.size()>0);
+
+	}
+
+	//	  @Test public void test_WritekeyStorePassword_SuccessfullCreationOfFile() throws Exception {
+	//	  String passwd="hello";
+	//	
+	//	  
+	//	    PowerMockito.spy(CommonUtils.class);
+	//		File file=PowerMockito.mock(File.class);
+	//		File spy=PowerMockito.spy(file);
+	//		
+	//		FileWriter fileWriter=PowerMockito.mock(FileWriter.class);
+	//		
+	//		BufferedWriter bufferedWriter=PowerMockito.mock(BufferedWriter.class);
+	//		PowerMockito.whenNew(FileWriter.class).withArguments(file).thenReturn(fileWriter);
+	//		PowerMockito.whenNew(BufferedWriter.class).withArguments(fileWriter).thenReturn(bufferedWriter);
+	//		
+	//	    PowerMockito.doReturn(true).when(file).createNewFile();
+	//	  // PowerMockito.doReturn(true).when(spy,"createNewFile");
+	//		//PowerMockito.doReturn(true).when(File.class,"createNewFile");
+	//	   CommonUtils.writekeyStorePassword(passwd);
+	//	 
+	//	   verify(mockAppender,atLeastOnce()).append((LogEvent)captorLoggingEvent.capture());
+	//	  
+	//	  List<LogEvent> loggingEvent = captorLoggingEvent.getAllValues();
+	//	  List<String> logs = new ArrayList<String>(); 
+	//	  for(LogEvent 	  logEvt:loggingEvent) { logs.add(logEvt.getMessage().getFormattedMessage()); }
+	//	  Assert.assertTrue(logs.toString().contains("keyStorePassword.txt has been created."));
+	//	  
+	//	  
+	//	  }
+
+
+	@Test public void test_WritekeyStorePassword_SuccessfullCreationOfFile() throws Exception {
+		String passwd="hello";
+		File myFile = PowerMockito.mock(File.class);
+		PowerMockito.whenNew(File.class).withAnyArguments().thenReturn(myFile);
+		Mockito.when(myFile.createNewFile()).thenReturn(true);
+		FileWriter fileWriter=PowerMockito.mock(FileWriter.class);
+		BufferedWriter bufferedWriter=PowerMockito.mock(BufferedWriter.class);
+
+		PowerMockito.whenNew(FileWriter.class).withArguments(Mockito.anyString()).thenReturn(fileWriter);
+		PowerMockito.whenNew(BufferedWriter.class).withArguments(fileWriter).thenReturn(bufferedWriter);
+
+		PowerMockito.doNothing().when(bufferedWriter).write(Mockito.anyString());
+		CommonUtils.writekeyStorePassword(passwd);
+
+		verify(mockAppender,atLeastOnce()).append((LogEvent)captorLoggingEvent.capture());
+
+		List<LogEvent> loggingEvent = captorLoggingEvent.getAllValues();
+		List<String> logs = new ArrayList<String>(); 
+		for(LogEvent 	  logEvt:loggingEvent) { logs.add(logEvt.getMessage().getFormattedMessage()); }
+		Assert.assertTrue(logs.toString().contains("keyStore file has been created."));
+
+
+	}
+
+	@Test public void test_WritekeyStorePassword_ExistingFile() throws Exception {
+		String passwd="hello";
+		File myFile = PowerMockito.mock(File.class);
+
+		PowerMockito.whenNew(File.class).withAnyArguments().thenReturn(myFile);
+		Mockito.when(myFile.createNewFile()).thenReturn(false);
+
+		FileWriter fileWriter=PowerMockito.mock(FileWriter.class);
+		BufferedWriter bufferedWriter=PowerMockito.mock(BufferedWriter.class);
+
+		PowerMockito.whenNew(FileWriter.class).withArguments(Mockito.anyString()).thenReturn(fileWriter);
+		PowerMockito.whenNew(BufferedWriter.class).withArguments(fileWriter).thenReturn(bufferedWriter);
+
+		PowerMockito.doNothing().when(bufferedWriter).write(Mockito.anyString());
+		CommonUtils.writekeyStorePassword(passwd);
+
+		verify(mockAppender,atLeastOnce()).append((LogEvent)captorLoggingEvent.capture());
+
+		List<LogEvent> loggingEvent = captorLoggingEvent.getAllValues();
+		List<String> logs = new ArrayList<String>(); 
+		for(LogEvent 	  logEvt:loggingEvent) { logs.add(logEvt.getMessage().getFormattedMessage()); }
+		Assert.assertTrue(logs.toString().contains("keyStore file already exists."));
+
+
+	}
+
+	@Test public void test_WritekeyStorePassword_Failure() throws Exception {
+		String passwd="";
+		File myFile = PowerMockito.mock(File.class);
+
+		PowerMockito.whenNew(File.class).withAnyArguments().thenReturn(myFile);
+		Mockito.when(myFile.createNewFile()).thenReturn(true);
+
+		//  FileWriter fileWriter=PowerMockito.mock(FileWriter.class);
+		BufferedWriter bufferedWriter=PowerMockito.mock(BufferedWriter.class);
+
+		//	PowerMockito.whenNew(FileWriter.class).withArguments(Mockito.anyString()).thenReturn(fileWriter);
+		//	PowerMockito.whenNew(BufferedWriter.class).withArguments(fileWriter).thenReturn(bufferedWriter);
+		PowerMockito.doNothing().when(bufferedWriter).write(Mockito.anyString());
+
+		try { CommonUtils.writekeyStorePassword(passwd);
+		}
+		catch(ConfigException e) {
+
+			verify(mockAppender,atLeastOnce()).append((LogEvent)captorLoggingEvent.capture());
+			List<LogEvent> loggingEvent = captorLoggingEvent.getAllValues();
+			List<String> logs = new ArrayList<String>(); 
+			for(LogEvent 	  logEvt:loggingEvent) { logs.add(logEvt.getMessage().getFormattedMessage()); }
+			System.out.println("CHECK:"+logs.toString());
+			Assert.assertTrue(logs.toString().contains("A write error has occurred : /configinfo/keyStorePassword.txt (No such file or directory)"));
+		}
+
+
+	}
+
+
+	@Test
+	public void test_getCertificate_validCertificateSecretName() throws Exception {
+		V1SecretList listSecret = get_secretList();
+		String certificateSecretName = "certificateSecretName";
+		String rsaCertificateFileName = "rsaCertificateFileName";
+		String ecdsaCertificateFileName = "ecdsaCertificateFileName";
+		String rsa_content = rsa_pkcs8_cert;
+		String ecdsa_content = ecdsa_pkcs8_cert;
+		Pair<String, String> certificatePair = Pair.of(rsa_content, ecdsa_content);
+		Pair<String, String> certPair = CommonUtils.getCertificate(listSecret, certificateSecretName,
+				rsaCertificateFileName, ecdsaCertificateFileName);
+		Assert.assertEquals(certPair, certificatePair);
+
+	}
+
+	@Test
+	public void test_getCertificate_InvalidCertificateSecretName() throws Exception {
+		V1SecretList listSecret = get_secretList();
+		String certificateSecretName = "null";
+		String rsaCertificateFileName = "rsaCertificateFileName";
+		String ecdsaCertificateFileName = "ecdsaCertificateFileName";
+		String rsa_content = rsa_pkcs8_cert;
+		String ecdsa_content = ecdsa_pkcs8_cert;
+		Pair<String, String> certificatePair = Pair.of(rsa_content, ecdsa_content);
+		Pair<String, String> expected_value = Pair.of(null, null);
+
+		Pair<String, String> certPair = CommonUtils.getCertificate(listSecret, certificateSecretName,
+				rsaCertificateFileName, ecdsaCertificateFileName);
+		Assert.assertEquals(certPair, expected_value);
+
+	}
+
+	@Test()
+	public void test_GetPrivateKeyFromPKCS8Format_WithInvalidPrivateKey() throws Exception {
+		PowerMockito.spy(CommonUtils.class);
+		List<String> logs = new ArrayList<String>(); 
+		try {
+			PrivateKey privateKey = CommonUtils.getPrivateKeyFromPKCS8Format("hello", "RSA");
+			verify(mockAppender,atLeastOnce()).append((LogEvent)captorLoggingEvent.capture());
+
+			List<LogEvent> loggingEvent = captorLoggingEvent.getAllValues();
+
+			for(LogEvent 	  logEvt:loggingEvent) { logs.add(logEvt.getMessage().getFormattedMessage()); 
+
+			}
+		}catch(ConfigException e) {
+			verify(mockAppender,atLeastOnce()).append((LogEvent)captorLoggingEvent.capture());
+
+			List<LogEvent> loggingEvent = captorLoggingEvent.getAllValues();
+
+			for(LogEvent 	  logEvt:loggingEvent) { logs.add(logEvt.getMessage().getFormattedMessage()); 
+
+			Assert.assertEquals(e.getMessage(),"Failed to get private key from PKCS8Format .Last unit does not have enough valid bits");
+			}
+
+
+		}
+
+	}
+
+	@Test()
+	public void test_GetPrivateKeyFromPKCS8Format_WithValidPrivateKey() throws Exception {
+		PowerMockito.spy(CommonUtils.class);
+		List<String> logs = new ArrayList<String>(); 
+
+		String PKCS8_PRIVATE_KEY_START = "-----BEGIN PRIVATE KEY-----";
+		String PKCS8_PRIVATE_KEY_END = "-----END PRIVATE KEY-----";
+		String rsaPrivateKeyContent = rsa_pkcs8.replaceAll("\\n", "")
+				.replace(PKCS8_PRIVATE_KEY_START, "")
+				.replace(PKCS8_PRIVATE_KEY_END, "") ;
+		try {
+			PrivateKey privateKey = CommonUtils.getPrivateKeyFromPKCS8Format(rsaPrivateKeyContent, "RSA");
+		}catch(ConfigException e)
+		{
+			verify(mockAppender,atLeastOnce()).append((LogEvent)captorLoggingEvent.capture());
+			List<LogEvent> loggingEvent = captorLoggingEvent.getAllValues();
+
+			for(LogEvent 	  logEvt:loggingEvent) { logs.add(logEvt.getMessage().getFormattedMessage()); }
+
+			Assert.assertTrue(logs.toString().contains(e.getMessage()));
+		}
+
+
+	}
+	@Test()
+	public void test_GetPrivateKeyFromPKCS1Format_InvalidPrivateKey() throws Exception {
+		PowerMockito.spy(CommonUtils.class);
+		List<String> logs = new ArrayList<String>(); 
+		try {
+			PrivateKey privateKey = CommonUtils.getPrivateKeyFromPKCS1Format("hello");
+			verify(mockAppender,atLeastOnce()).append((LogEvent)captorLoggingEvent.capture());
+
+			List<LogEvent> loggingEvent = captorLoggingEvent.getAllValues();
+
+			for(LogEvent 	  logEvt:loggingEvent) { logs.add(logEvt.getMessage().getFormattedMessage()); 
+
+			}
+		}catch(ConfigException e) {
+			verify(mockAppender,atLeastOnce()).append((LogEvent)captorLoggingEvent.capture());
+
+			List<LogEvent> loggingEvent = captorLoggingEvent.getAllValues();
+
+			for(LogEvent 	  logEvt:loggingEvent) { logs.add(logEvt.getMessage().getFormattedMessage()); 
+			Assert.assertTrue(logs.toString().contains(e.getMessage()));
+			}
+
+
+		}
+
+	}
+
+
+	@Test
+	public void test_ValidateConfiguration_InvalidAlgorithm() throws Exception {
+		PowerMockito.spy(CommonUtils.class);
+		Pair<String, String> privateKeyInfo = Pair.of(rsa_pkcs8, ecdsa_pkcs8);
+		Pair<String, String> certificateInfo = Pair.of(rsa_pkcs8_cert, ecdsa_pkcs8_cert);
+		String initialAlgorithm = "ES2566";
+		try {
+			CommonUtils.validateConfiguration(privateKeyInfo, certificateInfo, initialAlgorithm);
+		} catch (ConfigException e) {
+			Assert.assertEquals(e.getMessage(), "Invalid Algorithm configured...");
+		}
+
+	}
+
+	@Test
+	public void test_ValidateConfiguration_WithBothKeysEqualToNull() throws Exception {
+		PowerMockito.spy(CommonUtils.class);
+		Pair<String, String> privateKeyInfo = Pair.of(null, ecdsa_pkcs8);
+		Pair<String, String> certificateInfo = Pair.of(rsa_pkcs8_cert, null);
+		String initialAlgorithm = "ES256";
+		try {
+			CommonUtils.validateConfiguration(privateKeyInfo, certificateInfo, initialAlgorithm);
+		} catch (ConfigException e) {
+			Assert.assertEquals(e.getMessage(), "Bad configuration.Both RSA and ECDSA keys are missing");
+		}
+	}
+
+	@Test
+	public void test_ValidateConfiguration_WithRsaKeySetToNull() throws Exception {
+		PowerMockito.spy(CommonUtils.class);
+		Pair<String, String> privateKeyInfo = Pair.of(null, ecdsa_pkcs8);
+		Pair<String, String> certificateInfo = Pair.of(rsa_pkcs8_cert, ecdsa_pkcs8_cert);
+		String initialAlgorithm = "RSA256";
+		try {
+			CommonUtils.validateConfiguration(privateKeyInfo, certificateInfo, initialAlgorithm);
+		} catch (ConfigException e) {
+			Assert.assertEquals(e.getMessage(),
+					"Bad configuration.RSA private key/certificate not present for initial Algorithm RSA");
+		}
+	}
+
+	@Test
+	public void test_ValidateConfiguration_WithEcdsaKeySetToNull() throws Exception {
+		PowerMockito.spy(CommonUtils.class);
+		Pair<String, String> privateKeyInfo = Pair.of(rsa_pkcs8, ecdsa_pkcs8);
+		Pair<String, String> certificateInfo = Pair.of(rsa_pkcs8_cert, null);
+		String initialAlgorithm = "RSA256";
+		try {
+			CommonUtils.validateConfiguration(privateKeyInfo, certificateInfo, initialAlgorithm);
+		} catch (ConfigException e) {
+			Assert.assertEquals(e.getMessage(),
+					"Bad configuration.ECDSA private key/certificate not presnt for initial Algorithm ECDSA");
+		}
+	}
+
+	@Test
+	public void test_ConfigureSsl_InvalidParameter() throws Exception {
+		PowerMockito.spy(CommonUtils.class);
+		PowerMockito.doNothing().when(CommonUtils.class, "createKeyStore", any(), any(), any());
+		PowerMockito.doNothing().when(CommonUtils.class, "createTrustStore", any(), any());
+		ConfigurationInfo configInfo = new ConfigurationInfo();
+		Sslconfig sslConfig = test_getSslConfig();
+		Globalconfig globalConfig = new Globalconfig();
+		V1SecretList listSecret = get_secretList();
+		sslConfig.setTlsVersion("xxx");
+
+		coreApi = Mockito.mock(CoreV1Api.class);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("privateKeySecretNameSpace", null, null, null,
+				null, null, null, null, null, null);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("certificateSecretNameSpace", null, null, null,
+				null, null, null, null, null, null);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("keyStorePasswordSecretNameSpace", null, null,
+				null, null, null, null, null, null, null);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("trustStorePasswordSecretNameSpace", null, null,
+				null, null, null, null, null, null, null);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("caBundleSecretNameSpace", null, null, null,
+				null, null, null, null, null, null);
+		List<String> logs = new ArrayList<String>(); 
+		try {
+			CommonUtils.configureSsl(sslConfig);
+
+		}catch(ConfigException e) {
+			verify(mockAppender,atLeastOnce()).append((LogEvent)captorLoggingEvent.capture());
+
+			List<LogEvent> loggingEvent = captorLoggingEvent.getAllValues();
+
+			for(LogEvent 	  logEvt:loggingEvent) { logs.add(logEvt.getMessage().getFormattedMessage()); 
+
+			}
+			System.out.println("logs:"+logs.toString());
+			System.out.println("e    "+e.getMessage());
+			Assert.assertTrue(logs.contains("Invalid TLS version specified : "+ sslConfig.getTlsVersion()));
+
+
+		}
+	}
+
+
+	@Test
+	public void test_getKeystorePassword_keyStorePasswordNotPresentInFile() throws Exception{
+		ConfigurationInfo configInfo = new ConfigurationInfo();
+		Sslconfig sslConfig = test_getSslConfig();
+		Globalconfig globalConfig = new Globalconfig();
+
+		V1SecretList listSecretForKeyStore = new V1SecretList();
+		V1Secret secret1 = new V1Secret();
+		V1Secret secret2 = new V1Secret();
+		V1Secret secret3 = new V1Secret();
+		V1Secret secret4 = new V1Secret();
+		V1Secret secret5 = new V1Secret();
+		byte arr[] = new byte[] { 1, 6, 3 };
+		byte arr1[] = new byte[] {  };
+		Map<String, byte[]> data1 = null;
+		data1 = new HashMap<String, byte[]>();
+		data1.put("ecdsaPrivateKeyFileName", ecdsa_pkcs8.getBytes());
+		data1.put("rsaPrivateKeyFileName", rsa_pkcs8.getBytes());
+		Map<String, byte[]> data2 = new HashMap<String, byte[]>();
+		data2.put("rsaCertificateFileName", rsa_pkcs8_cert.getBytes());
+		data2.put("ecdsaCertificateFileName", ecdsa_pkcs8_cert.getBytes());
+		Map<String, byte[]> data3 = new HashMap<String, byte[]>();
+		data3.put("caBundleFileName", rsa_pkcs8_cert.getBytes());
+		Map<String, byte[]> data4 = new HashMap<String, byte[]>();
+		data4.put("trustStorePasswordFileName", arr);
+		Map<String, byte[]> data5 = new HashMap<String, byte[]>();
+		data5.put("keyStorePasswordFileName", arr1);
+		//data5.put(null, null);
+
+		String keyStorePasswordFileName=sslConfig.getKeyStorePasswordFileName();
+		String keyStorePasswd = new String(data5.get(keyStorePasswordFileName));
+
+		secret1.setMetadata(new V1ObjectMeta());
+		secret2.setMetadata(new V1ObjectMeta());
+		secret3.setMetadata(new V1ObjectMeta());
+		secret4.setMetadata(new V1ObjectMeta());
+		secret5.setMetadata(new V1ObjectMeta());
+		secret1.getMetadata().setName("privateKeySecretName");
+		secret1.setData(data1);
+		secret2.getMetadata().setName("certificateSecretName");
+		secret2.setData(data2);
+		secret3.getMetadata().setName("caBundleSecretName");
+		secret3.setData(data3);
+
+		secret4.getMetadata().setName("trustStorePasswordSecretName");
+		secret4.setData(data4);
+		secret5.getMetadata().setName("keyStorePasswordSecretName");
+		secret5.setData(data5);
+		listSecretForKeyStore.addItemsItem(secret1);
+		listSecretForKeyStore.addItemsItem(secret2);
+		listSecretForKeyStore.addItemsItem(secret3);
+		listSecretForKeyStore.addItemsItem(secret4);
+		listSecretForKeyStore.addItemsItem(secret5);
+		String keyStoreSecretName=sslConfig.getKeyStorePasswordSecretName();
+		//String keyStorePasswordFileName=sslConfig.getKeyStorePasswordFileName();
+		try {
+			String keyStorePassword=CommonUtils.getKeystorePassword(listSecretForKeyStore, keyStoreSecretName, keyStorePasswordFileName);}
+		catch(ConfigException e) {
+			Assert.assertEquals(e.getMessage(),"keyStore details is not present in File");
+
+		}
+	}
+
+	@Test
+	public void test_getKeystorePassword_keyStorePasswordFileNameNotPresent() throws Exception{
+		ConfigurationInfo configInfo = new ConfigurationInfo();
+		Sslconfig sslConfig = test_getSslConfig();
+		Globalconfig globalConfig = new Globalconfig();
+		V1SecretList listSecretForKeyStore = new V1SecretList();
+		V1Secret secret1 = new V1Secret();
+		V1Secret secret2 = new V1Secret();
+		V1Secret secret3 = new V1Secret();
+		V1Secret secret4 = new V1Secret();
+		V1Secret secret5 = new V1Secret();
+		byte arr[] = new byte[] { 1, 6, 3 };
+		Map<String, byte[]> data1 = null;
+		data1 = new HashMap<String, byte[]>();
+		data1.put("ecdsaPrivateKeyFileName", ecdsa_pkcs8.getBytes());
+		data1.put("rsaPrivateKeyFileName", rsa_pkcs8.getBytes());
+		Map<String, byte[]> data2 = new HashMap<String, byte[]>();
+		data2.put("rsaCertificateFileName", rsa_pkcs8_cert.getBytes());
+		data2.put("ecdsaCertificateFileName", ecdsa_pkcs8_cert.getBytes());
+		Map<String, byte[]> data3 = new HashMap<String, byte[]>();
+		data3.put("caBundleFileName", rsa_pkcs8_cert.getBytes());
+		Map<String, byte[]> data4 = new HashMap<String, byte[]>();
+		data4.put("trustStorePasswordFileName", arr);
+		Map<String, byte[]> data5 = new HashMap<String, byte[]>();
+		data5.put("keyStorePasswordFileName", null);
+		secret1.setMetadata(new V1ObjectMeta());
+		secret2.setMetadata(new V1ObjectMeta());
+		secret3.setMetadata(new V1ObjectMeta());
+		secret4.setMetadata(new V1ObjectMeta());
+		secret5.setMetadata(new V1ObjectMeta());
+		secret1.getMetadata().setName("privateKeySecretName");
+		secret1.setData(data1);
+		secret2.getMetadata().setName("certificateSecretName");
+		secret2.setData(data2);
+		secret3.getMetadata().setName("caBundleSecretName");
+		secret3.setData(data3);
+
+		secret4.getMetadata().setName("trustStorePasswordSecretName");
+		secret4.setData(data4);
+		secret5.getMetadata().setName("keyStorePasswordSecretName");
+		secret5.setData(data5);
+		listSecretForKeyStore.addItemsItem(secret1);
+		listSecretForKeyStore.addItemsItem(secret2);
+		listSecretForKeyStore.addItemsItem(secret3);
+		listSecretForKeyStore.addItemsItem(secret4);
+		listSecretForKeyStore.addItemsItem(secret5);
+		String keyStoreSecretName=sslConfig.getKeyStorePasswordSecretName();
+		String keyStorePasswordFileName=sslConfig.getKeyStorePasswordFileName();
+		try {
+			String keyStorePassword=CommonUtils.getKeystorePassword(listSecretForKeyStore, keyStoreSecretName, keyStorePasswordFileName);}
+		catch(ConfigException e) {
+			Assert.assertEquals(e.getMessage(),"keyStore details not present in the secret");
+
+		}
+	}
+
+
+	@Test
+	public void test_getTrustStorePassword_TrustStorePasswordNotPresentInFile() throws Exception{
+		ConfigurationInfo configInfo = new ConfigurationInfo();
+		Globalconfig globalConfig = new Globalconfig();
+		Sslconfig sslConfig = test_getSslConfig();
+
+		V1SecretList listSecretForTrustStore = new V1SecretList();
+		V1Secret secret1 = new V1Secret();
+		V1Secret secret2 = new V1Secret();
+		V1Secret secret3 = new V1Secret();
+		V1Secret secret4 = new V1Secret();
+		V1Secret secret5 = new V1Secret();
+		byte arr[] = new byte[] { 1, 6, 3 };
+		byte arr1[] = new byte[] { };
+		Map<String, byte[]> data1 = null;
+		data1 = new HashMap<String, byte[]>();
+		data1.put("ecdsaPrivateKeyFileName", ecdsa_pkcs8.getBytes());
+		data1.put("rsaPrivateKeyFileName", rsa_pkcs8.getBytes());
+		Map<String, byte[]> data2 = new HashMap<String, byte[]>();
+		data2.put("rsaCertificateFileName", rsa_pkcs8_cert.getBytes());
+		data2.put("ecdsaCertificateFileName", ecdsa_pkcs8_cert.getBytes());
+		Map<String, byte[]> data3 = new HashMap<String, byte[]>();
+		data3.put("caBundleFileName", rsa_pkcs8_cert.getBytes());
+		Map<String, byte[]> data4 = new HashMap<String, byte[]>();
+		data4.put("trustStorePasswordFileName", arr);
+		Map<String, byte[]> data5 = new HashMap<String, byte[]>();
+		data5.put("keyStorePasswordFileName", arr1);
+		secret1.setMetadata(new V1ObjectMeta());
+		secret2.setMetadata(new V1ObjectMeta());
+		secret3.setMetadata(new V1ObjectMeta());
+		secret4.setMetadata(new V1ObjectMeta());
+		secret5.setMetadata(new V1ObjectMeta());
+		secret1.getMetadata().setName("privateKeySecretName");
+		secret1.setData(data1);
+		secret2.getMetadata().setName("certificateSecretName");
+		secret2.setData(data2);
+		secret3.getMetadata().setName("caBundleSecretName");
+		secret3.setData(data3);
+
+		secret4.getMetadata().setName("trustStorePasswordSecretName");
+		secret4.setData(data4);
+		secret5.getMetadata().setName("keyStorePasswordSecretName");
+		secret5.setData(data5);
+		listSecretForTrustStore.addItemsItem(secret1);
+		listSecretForTrustStore.addItemsItem(secret2);
+		listSecretForTrustStore.addItemsItem(secret3);
+		listSecretForTrustStore.addItemsItem(secret4);
+		listSecretForTrustStore.addItemsItem(secret5);
+		coreApi = Mockito.mock(CoreV1Api.class);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecretForTrustStore).when(coreApi).listNamespacedSecret("trustStorePasswordSecretNameSpace", null, null,
+				null, null, null, null, null, null, null);
+		try {
+			String trustStorePassword=CommonUtils.getTrustStorePassword(sslConfig);
+		}
+		catch(ConfigException e) {
+			Assert.assertEquals(e.getMessage(),"trustStorePassword is not present in File :"+sslConfig.getTrustStorePasswordFileName() +"  secret:"+ sslConfig.getTrustStorePasswordSecretName());
+
+		}
+	}
+
+	@Test
+	public void test_getTrustStorePassword_TrustStoreFileNameNotPresent() throws Exception{
+		ConfigurationInfo configInfo = new ConfigurationInfo();
+		Sslconfig sslConfig = test_getSslConfig();
+		Globalconfig globalConfig = new Globalconfig();
+
+		V1SecretList listSecretForTrustStore = new V1SecretList();
+		V1Secret secret1 = new V1Secret();
+		V1Secret secret2 = new V1Secret();
+		V1Secret secret3 = new V1Secret();
+		V1Secret secret4 = new V1Secret();
+		V1Secret secret5 = new V1Secret();
+		byte arr[] = new byte[] { 1, 6, 3 };
+		Map<String, byte[]> data1 = null;
+		data1 = new HashMap<String, byte[]>();
+		data1.put("ecdsaPrivateKeyFileName", ecdsa_pkcs8.getBytes());
+		data1.put("rsaPrivateKeyFileName", rsa_pkcs8.getBytes());
+		Map<String, byte[]> data2 = new HashMap<String, byte[]>();
+		data2.put("rsaCertificateFileName", rsa_pkcs8_cert.getBytes());
+		data2.put("ecdsaCertificateFileName", ecdsa_pkcs8_cert.getBytes());
+		Map<String, byte[]> data3 = new HashMap<String, byte[]>();
+		data3.put("caBundleFileName", rsa_pkcs8_cert.getBytes());
+		Map<String, byte[]> data4 = new HashMap<String, byte[]>();
+		data4.put("trustStorePasswordFileName", null);
+		Map<String, byte[]> data5 = new HashMap<String, byte[]>();
+		data5.put("keyStorePasswordFileName", arr);
+		secret1.setMetadata(new V1ObjectMeta());
+		secret2.setMetadata(new V1ObjectMeta());
+		secret3.setMetadata(new V1ObjectMeta());
+		secret4.setMetadata(new V1ObjectMeta());
+		secret5.setMetadata(new V1ObjectMeta());
+		secret1.getMetadata().setName("privateKeySecretName");
+		secret1.setData(data1);
+		secret2.getMetadata().setName("certificateSecretName");
+		secret2.setData(data2);
+		secret3.getMetadata().setName("caBundleSecretName");
+		secret3.setData(data3);
+
+		secret4.getMetadata().setName("trustStorePasswordSecretName");
+		secret4.setData(data4);
+		secret5.getMetadata().setName("keyStorePasswordSecretName");
+		secret5.setData(data5);
+		listSecretForTrustStore.addItemsItem(secret2);
+		listSecretForTrustStore.addItemsItem(secret3);
+		listSecretForTrustStore.addItemsItem(secret4);
+		listSecretForTrustStore.addItemsItem(secret5);
+		coreApi = Mockito.mock(CoreV1Api.class);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecretForTrustStore).when(coreApi).listNamespacedSecret("trustStorePasswordSecretNameSpace", null, null,
+				null, null, null, null, null, null, null);
+		try {
+			String trustStorePassword=CommonUtils.getTrustStorePassword(sslConfig);
+		}
+		
+		catch(ConfigException e) {
+			Assert.assertEquals(e.getMessage(),"trustStore details not present in the secret");
+
+		}
+	}
+
+
+	@Test
+	public void test_ConfigureOauth_InvalidParameter() throws Exception {
+		PowerMockito.spy(CommonUtils.class);
+		PowerMockito.doNothing().when(CommonUtils.class, "createKeyStore", any(), any(), any());
+		PowerMockito.doNothing().when(CommonUtils.class, "writekeyStorePassword", any());
+
+		ConfigurationInfo configInfo = new ConfigurationInfo();
+		Oauthconfig oauthConfig = test_getOauthConfig();
+		oauthConfig.setInitialAlgorithm("ECS!23");
+		Globalconfig globalConfig = new Globalconfig();
+		V1SecretList listSecret =get_secretList();
+
+		coreApi = Mockito.mock(CoreV1Api.class);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("privateKeySecretNameSpace", null, null, null,
+				null, null, null, null, null, null);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("certificateSecretNameSpace", null, null, null,
+				null, null, null, null, null, null);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("keyStorePasswordSecretNameSpace", null, null,
+				null, null, null, null, null, null, null);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("trustStorePasswordSecretNameSpace", null, null,
+				null, null, null, null, null, null, null);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("caBundleSecretNameSpace", null, null, null,
+				null, null, null, null, null, null);
+
+		try {
+			CommonUtils.configureOauth(oauthConfig);
+
+		}catch(ConfigException e) {
+
+			Assert.assertEquals(e.getMessage(), "Invalid Algorithm configured...");
+		}
+
+	}
+
+
+	@Test
+	public void test_CreateKeyStore_RSAKeyNoTInPKCS8OrPKCS1Format() throws Exception {
+		PowerMockito.spy(CommonUtils.class);
+		File file=PowerMockito.mock(File.class);
+		FileOutputStream fileStream=PowerMockito.mock(FileOutputStream.class);
+		PowerMockito.whenNew(FileOutputStream.class).withArguments(file).thenReturn(fileStream);
+
+		final KeyStore keyStoreMock = PowerMockito.mock(KeyStore.class);
+		PowerMockito.mockStatic(KeyStore.class, invocation -> keyStoreMock);
+		PowerMockito.when(KeyStore.getInstance(any())).thenReturn(keyStoreMock);
+		PowerMockito.doNothing().when(keyStoreMock).store(any(FileOutputStream.class), Mockito.any());
+
+		Pair<String, String> privateKeyInfo =Pair.of("hello", ecdsa_pkcs8);
+		Pair<String, String> certificateInfo =Pair.of(rsa_pkcs8_cert,ecdsa_pkcs8_cert);
+		String keystorePassword="hello";
+		try {
+			CommonUtils.createKeyStore(privateKeyInfo,certificateInfo, keystorePassword);}
+		catch(ConfigException e) {
+
+			Assert.assertEquals(e.getMessage(),"Bad configuration.RSA Private key is not present in either PKCS1 /PKCS8 Format");
+		}
+
+	}
+	@Test
+	public void test_CreateKeyStore_ECDSAKeyNoTInPKCS8Format() throws Exception {
+		PowerMockito.spy(CommonUtils.class);
+		File file=PowerMockito.mock(File.class);
+		FileOutputStream fileStream=PowerMockito.mock(FileOutputStream.class);
+		PowerMockito.whenNew(FileOutputStream.class).withArguments(file).thenReturn(fileStream);
+
+		final KeyStore keyStoreMock = PowerMockito.mock(KeyStore.class);
+		PowerMockito.mockStatic(KeyStore.class, invocation -> keyStoreMock);
+		PowerMockito.when(KeyStore.getInstance(any())).thenReturn(keyStoreMock);
+		PowerMockito.doNothing().when(keyStoreMock).store(any(FileOutputStream.class), Mockito.any());
+
+		Pair<String, String> privateKeyInfo = Pair.of(rsa_pkcs8, "hello");
+		Pair<String, String> certificateInfo = Pair.of(rsa_pkcs8_cert, ecdsa_pkcs8_cert);
+		String keystorePassword = "hello";
+		try {
+			CommonUtils.createKeyStore(privateKeyInfo, certificateInfo, keystorePassword);
+			fail("Didn't throw ConfigException");
+		} catch (ConfigException e) {
+			e.printStackTrace();
+			Assert.assertEquals(e.getMessage(),
+					"Bad configuration.ECDSA Private key is not present in either Traditional Format/PKCS8 Format");
+		}
+	}
+
+
+	@Test
+	public void test_CreateKeyStore_Failure() throws Exception {
+		PowerMockito.spy(CommonUtils.class);
+		File file=PowerMockito.mock(File.class);
+		FileOutputStream fileStream=PowerMockito.mock(FileOutputStream.class);
+		PowerMockito.whenNew(FileOutputStream.class).withArguments(file).thenReturn(fileStream);
+
+		final KeyStore keyStoreMock = PowerMockito.mock(KeyStore.class);
+		PowerMockito.mockStatic(KeyStore.class, invocation -> keyStoreMock);
+		PowerMockito.when(KeyStore.getInstance(any())).thenReturn(keyStoreMock);
+		PowerMockito.doNothing().when(keyStoreMock).store(any(FileOutputStream.class), Mockito.any());
+
+		Pair<String, String> privateKeyInfo = Pair.of("", "hello");
+		Pair<String, String> certificateInfo = Pair.of(rsa_pkcs8_cert, ecdsa_pkcs8_cert);
+		String keystorePassword = "hello";
+		List<String> logs = new ArrayList<String>(); 
+		try {
+			CommonUtils.createKeyStore(privateKeyInfo, certificateInfo, keystorePassword);
+			fail("Didn't throw ConfigException");
+		} catch (ConfigException e) {
+			e.printStackTrace();
+			verify(mockAppender,atLeastOnce()).append((LogEvent)captorLoggingEvent.capture());
+
+			List<LogEvent> loggingEvent = captorLoggingEvent.getAllValues();
+
+			for(LogEvent 	  logEvt:loggingEvent) { logs.add(logEvt.getMessage().getFormattedMessage());}
+			Assert.assertTrue(logs.contains("Failed to create keystore."+e.getMessage()));
+		}
+
+
+	}
+
+	@Test
+	public void test_createTrustStore_caBundleNotPresenrInSecret() throws Exception{
+		PowerMockito.spy(CommonUtils.class);
+		File file=PowerMockito.mock(File.class);
+		FileOutputStream fileStream=PowerMockito.mock(FileOutputStream.class);
+		PowerMockito.whenNew(FileOutputStream.class).withArguments(file).thenReturn(fileStream);
+
+		final KeyStore keyStoreMock = PowerMockito.mock(KeyStore.class);
+		PowerMockito.mockStatic(KeyStore.class, invocation -> keyStoreMock);
+		PowerMockito.when(KeyStore.getInstance(any())).thenReturn(keyStoreMock);
+		PowerMockito.doNothing().when(keyStoreMock).store(any(FileOutputStream.class), Mockito.any());
+
+		Sslconfig sslConfig = test_getSslConfig();
+		sslConfig.setCaBundleSecretName("caBundleSecretName1");
+		V1SecretList listSecret =get_secretList();
+
+		coreApi = Mockito.mock(CoreV1Api.class);
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("caBundleSecretNameSpace", null, null, null,
+				null, null, null, null, null, null);
+
+		String truststorePassword = "hello";
+		try {
+			CommonUtils.createTrustStore(sslConfig, truststorePassword);
+			fail("Didn't throw ConfigException");
+		} catch (ConfigException e) {
+			e.printStackTrace();
+			Assert.assertEquals(e.getMessage(),
+					"caBundle details not present in secret");
+		}
+
+	}
+
+	@Test
+	public void test_createTrustStore_caBundleContentEmpty() throws Exception{
+		PowerMockito.spy(CommonUtils.class);
+		File file=PowerMockito.mock(File.class);
+		FileOutputStream fileStream=PowerMockito.mock(FileOutputStream.class);
+		PowerMockito.whenNew(FileOutputStream.class).withArguments(file).thenReturn(fileStream);
+
+		final KeyStore keyStoreMock = PowerMockito.mock(KeyStore.class);
+		PowerMockito.mockStatic(KeyStore.class, invocation -> keyStoreMock);
+		PowerMockito.when(KeyStore.getInstance(any())).thenReturn(keyStoreMock);
+		PowerMockito.doNothing().when(keyStoreMock).store(any(FileOutputStream.class), Mockito.any());
+
+		Sslconfig sslConfig = test_getSslConfig();
+		V1SecretList listSecret = new V1SecretList();
+		V1Secret secret1 = new V1Secret();
+		V1Secret secret2 = new V1Secret();
+		V1Secret secret3 = new V1Secret();
+		V1Secret secret4 = new V1Secret();
+		V1Secret secret5 = new V1Secret();
+		byte arr[] = new byte[] { 1, 6, 3 };
+		byte arr1[] = new byte[] {  };
+		Map<String, byte[]> data1 = null;
+		data1 = new HashMap<String, byte[]>();
+		data1.put("ecdsaPrivateKeyFileName", ecdsa_pkcs8.getBytes());
+		data1.put("rsaPrivateKeyFileName", rsa_pkcs8.getBytes());
+		Map<String, byte[]> data2 = new HashMap<String, byte[]>();
+		data2.put("rsaCertificateFileName", rsa_pkcs8_cert.getBytes());
+		data2.put("ecdsaCertificateFileName", ecdsa_pkcs8_cert.getBytes());
+		Map<String, byte[]> data3 = new HashMap<String, byte[]>();
+		data3.put("caBundleFileName",arr1 );
+		Map<String, byte[]> data4 = new HashMap<String, byte[]>();
+		data4.put("trustStorePasswordFileName", arr);
+		Map<String, byte[]> data5 = new HashMap<String, byte[]>();
+		data5.put("keyStorePasswordFileName", arr);
+		secret1.setMetadata(new V1ObjectMeta());
+		secret2.setMetadata(new V1ObjectMeta());
+		secret3.setMetadata(new V1ObjectMeta());
+		secret4.setMetadata(new V1ObjectMeta());
+		secret5.setMetadata(new V1ObjectMeta());
+		secret1.getMetadata().setName("privateKeySecretName");
+		secret1.setData(data1);
+		secret2.getMetadata().setName("certificateSecretName");
+		secret2.setData(data2);
+		secret3.getMetadata().setName("caBundleSecretName");
+		secret3.setData(data3);
+
+		secret4.getMetadata().setName("trustStorePasswordSecretName");
+		secret4.setData(data4);
+		secret5.getMetadata().setName("keyStorePasswordSecretName");
+		secret5.setData(data5);
+		listSecret.addItemsItem(secret1);
+		listSecret.addItemsItem(secret2);
+		listSecret.addItemsItem(secret3);
+		listSecret.addItemsItem(secret4);
+		listSecret.addItemsItem(secret5);
+
+		coreApi = Mockito.mock(CoreV1Api.class);
+
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("caBundleSecretNameSpace", null, null, null,
+				null, null, null, null, null, null);
+
+		String truststorePassword = "hello";
+		try {
+			CommonUtils.createTrustStore(sslConfig, truststorePassword);
+			fail("Didn't throw ConfigException");
+		} catch (ConfigException e) {
+			e.printStackTrace();
+			Assert.assertEquals(e.getMessage(),
+					"caBundle details not present in secret");
+		}
+
+	}
+	/*@Test
+	public void test_createTrustStore_Created() throws Exception{
+		PowerMockito.spy(CommonUtils.class);
+		File file=PowerMockito.mock(File.class);
+		FileOutputStream fileStream=PowerMockito.mock(FileOutputStream.class);
+		PowerMockito.whenNew(FileOutputStream.class).withArguments(file).thenReturn(fileStream);
+
+		final KeyStore keyStoreMock = PowerMockito.mock(KeyStore.class);
+		PowerMockito.mockStatic(KeyStore.class, invocation -> keyStoreMock);
+		PowerMockito.when(KeyStore.getInstance(any())).thenReturn(keyStoreMock);
+		PowerMockito.doNothing().when(keyStoreMock).store(any(FileOutputStream.class), Mockito.any());
+
+		Sslconfig sslConfig = test_getSslConfig();
+
+		V1SecretList listSecret =get_secretList();
+
+		coreApi = Mockito.mock(CoreV1Api.class);
+
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("caBundleSecretNameSpace", null, null, null,
+				null, null, null, null, null, null);
+
+
+		String truststorePassword = "hello";
+
+
+		CommonUtils.createTrustStore(sslConfig, truststorePassword);
+		List<String> logs = new ArrayList<String>(); 
+		verify(mockAppender,atLeastOnce()).append((LogEvent)captorLoggingEvent.capture());
+
+		List<LogEvent> loggingEvent = captorLoggingEvent.getAllValues();
+
+		for(LogEvent 	  logEvt:loggingEvent) { logs.add(logEvt.getMessage().getFormattedMessage());}
+		Assert.assertTrue(logs.contains("truststore created successfully"));
+
+	}*/
+	@Test
+	public void test_createTrustStore_Failure() throws Exception{
+		PowerMockito.spy(CommonUtils.class);
+		File file=PowerMockito.mock(File.class);
+		FileOutputStream fileStream=PowerMockito.mock(FileOutputStream.class);
+		PowerMockito.whenNew(FileOutputStream.class).withArguments(file).thenReturn(fileStream);
+
+		final KeyStore keyStoreMock = PowerMockito.mock(KeyStore.class);
+		PowerMockito.mockStatic(KeyStore.class, invocation -> keyStoreMock);
+		PowerMockito.when(KeyStore.getInstance(any())).thenReturn(keyStoreMock);
+		PowerMockito.doNothing().when(keyStoreMock).store(any(FileOutputStream.class), Mockito.any());
+
+		Sslconfig sslConfig = test_getSslConfig();
+
+		V1SecretList listSecret = new V1SecretList();
+		V1Secret secret1 = new V1Secret();
+		V1Secret secret2 = new V1Secret();
+		V1Secret secret3 = new V1Secret();
+
+		byte arr[] = new byte[] { 1, 6, 3 };
+		byte arr1[] = new byte[] {  };
+		Map<String, byte[]> data1 = null;
+		data1 = new HashMap<String, byte[]>();
+		data1.put("ecdsaPrivateKeyFileName", ecdsa_pkcs8.getBytes());
+		data1.put("rsaPrivateKeyFileName", rsa_pkcs8.getBytes());
+		Map<String, byte[]> data2 = new HashMap<String, byte[]>();
+		data2.put("rsaCertificateFileName", rsa_pkcs8_cert.getBytes());
+		data2.put("ecdsaCertificateFileName", ecdsa_pkcs8_cert.getBytes());
+		Map<String, byte[]> data3 = new HashMap<String, byte[]>();
+		data3.put("caBundleFileName",arr1 );
+		secret1.setMetadata(new V1ObjectMeta());
+		secret2.setMetadata(new V1ObjectMeta());
+		secret3.setMetadata(new V1ObjectMeta());
+		secret1.getMetadata().setName("privateKeySecretName");
+		secret1.setData(data1);
+		secret2.getMetadata().setName("");
+		secret2.setData(data2);
+		secret3.getMetadata().setName("caBundleSecretName");
+		secret3.setData(data3);
+		listSecret.addItemsItem(secret1);
+		listSecret.addItemsItem(secret2);
+		listSecret.addItemsItem(secret3);
+
+		coreApi = Mockito.mock(CoreV1Api.class);
+
+		PowerMockito.whenNew(CoreV1Api.class).withNoArguments().thenReturn(coreApi);
+		Mockito.doReturn(listSecret).when(coreApi).listNamespacedSecret("caBundleSecretNameSpace", null, null, null,
+				null, null, null, null, null, null);
+
+
+		String truststorePassword = "hello";
+		List<String> logs = new ArrayList<String>(); 
+		try {
+			CommonUtils.createTrustStore(sslConfig, truststorePassword);
+			fail("Didn't throw ConfigException");
+		} catch (ConfigException e) {
+			e.printStackTrace();
+			verify(mockAppender,atLeastOnce()).append((LogEvent)captorLoggingEvent.capture());
+
+			List<LogEvent> loggingEvent = captorLoggingEvent.getAllValues();
+
+			for(LogEvent 	  logEvt:loggingEvent) { logs.add(logEvt.getMessage().getFormattedMessage());}
+			Assert.assertTrue(logs.contains("Failed to create truststore."+e.getMessage()));
+		}
+
+	}
+
+}

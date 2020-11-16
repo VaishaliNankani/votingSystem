@@ -1,0 +1,36 @@
+package com.oracle.oci.votingservice.domain;
+
+import javax.validation.constraints.NotNull;
+
+import org.springframework.validation.annotation.Validated;
+@Validated
+public class VoteData extends AbstractDto{
+	
+	@NotNull
+	private long voterId;	
+	
+	@NotNull
+	private long candidateId;
+	
+	private boolean voterCasted;
+	
+	public boolean getVoterCasted() {
+		return voterCasted;
+	}
+	public void setVoterCasted(boolean voterCasted) {
+		this.voterCasted = voterCasted;
+	}
+	public long getCandidateId() {
+		return candidateId;
+	}
+	public void setCandidateId(long candidateId) {
+		this.candidateId = candidateId;
+	}
+	public long getVoterId() {
+		return voterId;
+	}
+	public void setVoterId(long voterId) {
+		this.voterId = voterId;
+	}
+	
+}

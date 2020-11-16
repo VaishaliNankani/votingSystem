@@ -1,0 +1,43 @@
+// Copyright 2020 (C), Oracle and/or its affiliates. All rights reserved.
+
+package com.oracle.oci.votingservice.domain;
+
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.Set;
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.springframework.validation.annotation.Validated;
+
+import com.fasterxml.jackson.annotation.JsonAnyGetter;
+import com.fasterxml.jackson.annotation.JsonAnySetter;
+import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
+
+@Validated
+@JsonInclude(JsonInclude.Include.NON_EMPTY)
+public abstract class AbstractDto {
+	private static Logger logger = LogManager.getLogger(AbstractDto.class);
+	Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+
+	private static final ObjectMapper objectMapper = new ObjectMapper();
+
+		
+	
+	@Override
+	public String toString() {
+		String text;
+		objectMapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+		try {
+			text = objectMapper.writeValueAsString(this);
+		} catch (JsonProcessingException e) {
+			text = "{}";
+		}
+		return text;
+	}
+}

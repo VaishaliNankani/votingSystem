@@ -1,0 +1,808 @@
+// Copyright 2018 (C), Oracle and/or its affiliates. All rights reserved.
+package com.oracle.cgbu.cne.common;
+
+import java.io.BufferedWriter;
+import java.io.ByteArrayInputStream;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.io.StringReader;
+import java.io.StringWriter;
+import java.math.BigInteger;
+
+import java.security.KeyFactory;
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
+import java.security.KeyStore;
+
+import java.security.PrivateKey;
+import java.security.PublicKey;
+import java.security.SecureRandom;
+import java.security.Security;
+
+import java.security.cert.CertificateException;
+import java.security.cert.CertificateFactory;
+import java.security.cert.X509Certificate;
+import java.security.spec.ECGenParameterSpec;
+import java.security.spec.PKCS8EncodedKeySpec;
+
+import java.util.Base64;
+import java.util.Collection;
+
+import java.util.Map;
+import org.bouncycastle.operator.ContentSigner;
+import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
+import org.bouncycastle.x509.X509V3CertificateGenerator;
+import org.bouncycastle.jce.X509Principal;
+import org.apache.commons.lang3.tuple.Pair;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.bouncycastle.jce.provider.BouncyCastleProvider;
+import org.bouncycastle.openssl.PEMKeyPair;
+import org.bouncycastle.openssl.PEMParser;
+import org.bouncycastle.openssl.PEMWriter;
+import org.bouncycastle.openssl.jcajce.JcaPEMKeyConverter;
+import org.bouncycastle.openssl.jcajce.JcaPEMWriter;
+import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter; 
+import org.bouncycastle.cert.jcajce.JcaX509v3CertificateBuilder; 
+import com.oracle.cgbu.cne.common.config.ConfigurationInfo.Oauthconfig;
+import com.oracle.cgbu.cne.common.config.ConfigurationInfo.Sslconfig;
+
+import io.kubernetes.client.openapi.*;
+import io.kubernetes.client.openapi.apis.*;
+import io.kubernetes.client.openapi.models.*;
+
+
+
+
+import org.bouncycastle.asn1.x500.X500NameBuilder;
+import org.bouncycastle.asn1.x500.style.BCStyle;
+
+
+import org.bouncycastle.cert.X509v3CertificateBuilder;
+
+import java.util.Date;
+public class CommonUtils {
+	private static final String BC = org.bouncycastle.jce.provider.BouncyCastleProvider.PROVIDER_NAME;
+	private static Logger logger = LogManager.getLogger(CommonUtils.class);
+	static final String PKCS1_RSA_PRIVATE_KEY_START = "-----BEGIN RSA PRIVATE KEY-----";
+	static final String PKCS1_RSA_PRIVATE_KEY_END = "-----END RSA PRIVATE KEY-----";
+	static final String PKCS8_PRIVATE_KEY_START = "-----BEGIN PRIVATE KEY-----";
+	static final String PKCS8_PRIVATE_KEY_END = "-----END PRIVATE KEY-----";
+	static final String EC_PRIVATE_KEY_START = "-----BEGIN EC PRIVATE KEY-----";
+	static final String EC_PRIVATE_KEY_END = "-----END EC PRIVATE KEY-----";
+	static final String CERTIFICATE_START = "-----BEGIN CERTIFICATE-----";
+	static final String CERTIFICATE_END = "-----END CERTIFICATE-----";
+	static final String EC_PARAM_START ="-----BEGIN EC PARAMETERS-----";
+	static final String EC_PARAM_END ="-----END EC PARAMETERS-----";
+	public static  void validateConfiguration(Pair<String,String> privateKeyInfo,
+			Pair<String,String> certificateInfo,String initialAlgorithm)
+	{
+		boolean rsaKeyPresent=false,ecdsaKeyPresent=false;
+		/*(1)both rsa & ecdsa files absent
+		 * (2)only rsa private key present and ecdsa is configured in helm
+		 * (3)only ecdsa private key present and rsa is configured in helm
+		 * */
+		String rsaPrivateKeyContent = privateKeyInfo.getLeft();
+		String ecdsaPrivateKeyContent = privateKeyInfo.getRight();
+		String rsaCertificateContent = certificateInfo.getLeft();
+		String ecdsaCertificateContent = certificateInfo.getRight();
+		logger.info("Inside validateConfiguration()");
+		
+		if(!(initialAlgorithm.equals("ES256") || initialAlgorithm.equals("RSA256")))
+		{
+			logger.error("Only ES256 & RSA256 are supported algorithms");
+			throw new ConfigException("Invalid Algorithm configured...");
+		}
+
+		if((rsaPrivateKeyContent != null) && (rsaCertificateContent !=null))
+		{
+			rsaKeyPresent = true;		
+		}
+
+		if((ecdsaPrivateKeyContent != null) && (ecdsaCertificateContent !=null))
+		{
+			ecdsaKeyPresent = true;
+		}
+		if((rsaKeyPresent == false) && (ecdsaKeyPresent == false))
+		{
+			logger.error("Bad configuration.Both RSA and ECDSA keys are missing");
+			throw new ConfigException("Bad configuration.Both RSA and ECDSA keys are missing");
+		}
+
+
+		if((ecdsaKeyPresent == false) && (initialAlgorithm.equals("ES256")))
+		{
+			logger.error("Bad configuration.ECDSA private key/certificate not present for initial Algorithm ECDSA");
+			throw new ConfigException("Bad configuration.ECDSA private key/certificate not presnt for initial Algorithm ECDSA");
+		}
+
+		if((rsaKeyPresent == false) && (initialAlgorithm.equals("RSA256")))
+		{
+			logger.error("Bad configuration.RSA private key/certificate not present for initial Algorithm RSA");
+			throw new ConfigException("Bad configuration.RSA private key/certificate not present for initial Algorithm RSA");
+		}
+	}
+
+	public static Collection<X509Certificate> convertToX509Certificate(String pemContent) throws IOException {
+		Collection<X509Certificate> certList = null;
+		CertificateFactory cf;
+		try {
+			cf = CertificateFactory.getInstance("X.509");
+			 certList= (Collection<X509Certificate>) cf.generateCertificates(new ByteArrayInputStream(pemContent.getBytes()));
+		} catch (CertificateException e) {
+			// TODO Auto-generated catch block
+			logger.error("Couldnot convert to X509 format .Invalid pemContent");
+			throw new IOException("Couldnot convert to X509 format .Invalid pemContent");
+			//e.printStackTrace();
+		}
+		return certList;
+	}
+
+	//fetch ssl secret
+	public static void configureSsl(Sslconfig sslInfo) {
+
+
+		String rsaPrivateKeyContent = null;
+		String ecdsaPrivateKeyContent = null;
+		String keyStorePassword = null;
+
+		Pair<String,String> certificatePair = null;
+
+		logger.info("Get configuration information");
+		try {
+
+			//validate port
+
+			if((sslInfo.getPort() > (int) Character.MAX_VALUE) || (sslInfo.getPort()) < 0)
+			{
+				logger.error("Invalid SSL port configured");
+				throw new ConfigException("Invalid SSL port configured"+sslInfo.getPort());
+
+			}
+			//validate TLS version
+			if(!sslInfo.getTlsVersion().equals("TLSv1.2") )
+			{
+				logger.error("Invalid TLS version specified : "+sslInfo.getTlsVersion());
+				throw new ConfigException("Invalid TLS version specified"+sslInfo.getTlsVersion());
+			}
+			V1SecretList listSecret = new CoreV1Api().listNamespacedSecret(sslInfo.getPrivateKeySecretNameSpace(),
+					null, null, null, null,	null, null, null, null, null);
+
+			for( V1Secret secret: listSecret.getItems())
+			{
+				if(secret.getMetadata().getName().equals(sslInfo.getPrivateKeySecretName()))
+				{
+					Map <String,byte[]> map = secret.getData();				
+
+					if(map.get(sslInfo.getRsaPrivateKeyFileName()) != null)
+					{
+						rsaPrivateKeyContent = new String(map.get(sslInfo.getRsaPrivateKeyFileName()));
+
+					}
+					if(map.get(sslInfo.getEcdsaPrivateKeyFileName()) != null)
+					{
+						ecdsaPrivateKeyContent = new String(map.get(sslInfo.getEcdsaPrivateKeyFileName()));
+
+						if(ecdsaPrivateKeyContent.contains(EC_PARAM_START)&& 
+								ecdsaPrivateKeyContent.contains(EC_PARAM_END))
+						{
+							ecdsaPrivateKeyContent = ecdsaPrivateKeyContent.substring(ecdsaPrivateKeyContent.indexOf(EC_PRIVATE_KEY_START));
+							
+						}			
+					}
+					/*if privatekey and certificate namespace are different then 
+					 further iteration is not required*/
+					break;
+				}		
+			}
+			//search certificate
+			if(!sslInfo.getPrivateKeySecretNameSpace().equals(sslInfo.getCertificateSecretNameSpace()))
+			{
+				V1SecretList listSecretForCert = new CoreV1Api().listNamespacedSecret(sslInfo.
+						getCertificateSecretNameSpace(),null, null, null, null,	null, null, null, null, null);
+				certificatePair = getCertificate(listSecretForCert,sslInfo.getCertificateSecretName(),
+						sslInfo.getRsaCertificateFileName(),sslInfo.getEcdsaCertificateFileName());
+			}
+			else
+			{
+				certificatePair = getCertificate(listSecret,sslInfo.getCertificateSecretName(),
+						sslInfo.getRsaCertificateFileName(),sslInfo.getEcdsaCertificateFileName());
+			}
+			//search keystore
+
+			if(!sslInfo.getKeyStorePasswordSecretNameSpace().equals(sslInfo.getPrivateKeySecretNameSpace()))
+			{
+				V1SecretList listSecretForKeyStore = new CoreV1Api().listNamespacedSecret(sslInfo.
+						getKeyStorePasswordSecretNameSpace(),null, null, null, null,	null, null, null, null, null);
+				keyStorePassword = getKeystorePassword(listSecretForKeyStore,
+						sslInfo.getKeyStorePasswordSecretName(),sslInfo.getKeyStorePasswordFileName());
+			}
+			else
+			{
+				keyStorePassword = getKeystorePassword(listSecret,
+						sslInfo.getKeyStorePasswordSecretName(),sslInfo.getKeyStorePasswordFileName());
+			}
+
+			logger.info("SSL information extracted");
+			validateConfiguration(Pair.of(rsaPrivateKeyContent,ecdsaPrivateKeyContent),
+					certificatePair,sslInfo.getInitialAlgorithm());
+		} catch (Exception e) {
+			logger.error("Bad configuration."+e.getMessage());
+			throw new ConfigException(e.getMessage());
+		}
+
+		createKeyStore(Pair.of(rsaPrivateKeyContent,ecdsaPrivateKeyContent),certificatePair,keyStorePassword);
+
+		createTrustStore(sslInfo, getTrustStorePassword(sslInfo));
+		//configureSslInApplicationYaml( sslInfo,keyStorePassword);
+
+
+	}
+	//fetch oauth secret
+	public static void configureOauth(Oauthconfig oauthInfo) {
+
+		String rsaPrivateKeyContent =null;
+		String ecdsaPrivateKeyContent =null;
+		String keyStorePassword =null;
+		Pair<String,String> certificatePair = null;
+		logger.info("Inside configureOauth");
+
+		/*if(this.getConfigInfo().getGlobalConfig().getInitSsl() == true)
+		{
+			logger.info("Oauth configuration not required");
+			return;
+		}*/
+		logger.info("Get configuration information for Oauth ");
+		try {
+			logger.info("Get privatekey information for Oauth from namespace");
+			V1SecretList listSecret = new CoreV1Api().listNamespacedSecret(oauthInfo.getPrivateKeySecretNameSpace(),
+					null, null, null, null,	null, null, null, null, null);
+
+			for( V1Secret secret: listSecret.getItems())
+			{
+				if(secret.getMetadata().getName().equals(oauthInfo.getPrivateKeySecretName()))
+				{
+					Map <String,byte[]> map = secret.getData();				
+
+					if(map.get(oauthInfo.getRsaPrivateKeyFileName()) != null)
+					{
+						rsaPrivateKeyContent = new String(map.get(oauthInfo.getRsaPrivateKeyFileName()));
+					}
+					if(map.get(oauthInfo.getEcdsaPrivateKeyFileName()) != null)
+					{
+						ecdsaPrivateKeyContent = new String(map.get(oauthInfo.getEcdsaPrivateKeyFileName()));
+						if(ecdsaPrivateKeyContent.contains(EC_PARAM_START)&& 
+								ecdsaPrivateKeyContent.contains(EC_PARAM_END))
+						{
+							ecdsaPrivateKeyContent = ecdsaPrivateKeyContent.substring(ecdsaPrivateKeyContent.indexOf(EC_PRIVATE_KEY_START));
+						}
+					}
+					/*if privatekey and certificate namespace are different then 
+					 further iteration is not required*/
+					break;
+				}		
+			}
+			
+			certificatePair  = getOauthCertificate();
+			//search keystore
+
+			if(!oauthInfo.getKeyStorePasswordSecretNameSpace().equals(oauthInfo.getPrivateKeySecretNameSpace()))
+			{
+				V1SecretList listSecretForKeyStore = new CoreV1Api().listNamespacedSecret(oauthInfo.
+						getKeyStorePasswordSecretNameSpace(),null, null, null, null,	null, null, null, null, null);
+				keyStorePassword = getKeystorePassword(listSecretForKeyStore,oauthInfo.getKeyStorePasswordSecretName(),
+						oauthInfo.getKeyStorePasswordFileName());
+			}
+			else
+			{
+				keyStorePassword = getKeystorePassword(listSecret,oauthInfo.getKeyStorePasswordSecretName(),
+						oauthInfo.getKeyStorePasswordFileName());
+			}
+			logger.info("Oauth information extracted");
+			validateConfiguration(Pair.of(rsaPrivateKeyContent,ecdsaPrivateKeyContent),
+					certificatePair,oauthInfo.getInitialAlgorithm());
+		} catch (Exception e) {
+			// TODO Auto-generated catch block
+			logger.error("Bad configuration."+e.getMessage());
+			throw new ConfigException(e.getMessage());
+		}
+
+		createKeyStore(Pair.of(rsaPrivateKeyContent,ecdsaPrivateKeyContent),certificatePair,keyStorePassword);
+		writekeyStorePassword( keyStorePassword);
+	}
+
+	public static void writekeyStorePassword(String keyStorePassword)
+	{
+		File file = new File("/configinfo/keyStorePassword.txt");
+
+		try {
+			if (file.createNewFile()) {
+
+				logger.info("keyStore file has been created.");
+			} else {
+				logger.info("keyStore file already exists.");
+			}
+			FileWriter fstream = new FileWriter ("/configinfo/keyStorePassword.txt");
+			BufferedWriter keyInfo = new BufferedWriter(fstream);			  		  
+			keyInfo.write(keyStorePassword);
+			keyInfo.close();
+			fstream.close();
+
+		} catch(IOException e) {
+
+
+			logger.error("A write error has occurred : "+e.getMessage());
+			throw new ConfigException("Failed to write keystore password File"+e.getMessage());
+		}
+
+	}
+
+	public static Pair<String,String> getCertificate(V1SecretList listSecret,String certificateSecretName,
+			String rsaCertificateFileName,String ecdsaCertificateFileName)
+	{
+		Pair <String,String> certificatePair = null;		
+		String rsaCertificateContent =null;
+		String ecdsaCertificateContent =null;
+		for( V1Secret secret: listSecret.getItems())
+		{
+			if(secret.getMetadata().getName().equals(certificateSecretName) )
+			{
+				Map <String,byte[]> map = secret.getData();
+				if(map.get(rsaCertificateFileName) != null)
+				{
+					rsaCertificateContent = new String(map.get(rsaCertificateFileName));
+				}
+				if(map.get(ecdsaCertificateFileName) != null)
+				{
+					ecdsaCertificateContent = new String(map.get(ecdsaCertificateFileName));
+				}
+				break;
+			}
+		}
+		certificatePair= Pair.of(rsaCertificateContent,ecdsaCertificateContent);
+		return certificatePair;
+	}
+	/*
+	static String  getOauthEcdsaCertificate()
+	{
+		ECGenParameterSpec ecSpec = new ECGenParameterSpec("secp256k1");
+		KeyPairGenerator ecdsaGenerator;
+		X509Certificate  ecdsaCert = null;
+		byte[] byteEcdsa = null;
+		String ecdsaCertStr = null;
+		try {
+			//ecdsa cert
+			ecdsaGenerator = KeyPairGenerator.getInstance("EC");
+			ecdsaGenerator.initialize(ecSpec, new SecureRandom());
+			KeyPair ecdsaKeyPair = ecdsaGenerator.generateKeyPair();
+			PublicKey ecdsaPublicKey = ecdsaKeyPair.getPublic();
+			X509V3CertificateGenerator certGen = new X509V3CertificateGenerator();            
+			certGen.setSignatureAlgorithm("SHA256withECDSA");
+			certGen.setSerialNumber(BigInteger.valueOf(1));
+			certGen.setIssuerDN(new X509Principal("CN=Software emul (EC Cert)"));
+			certGen.setNotBefore(new Date(System.currentTimeMillis() - 50000));
+			certGen.setNotAfter(new Date(System.currentTimeMillis() + 50000000));
+			certGen.setSubjectDN(new X509Principal("CN=Software emul (EC Cert)"));
+			certGen.setPublicKey(ecdsaKeyPair.getPublic());
+			ecdsaCert = certGen.generate(ecdsaKeyPair.getPrivate());	       	        
+			ecdsaCertStr = convertToBase64PEMString(ecdsaCert);
+		} catch (Exception e) {			
+			e.printStackTrace();
+		}
+		return ecdsaCertStr;
+	}*/
+	
+	static String  getOauthEcdsaCertificate()
+	{
+		ECGenParameterSpec ecSpec = new ECGenParameterSpec("secp256k1");
+		KeyPairGenerator ecdsaGenerator;
+		X509Certificate  ecdsaCert = null;		
+		String ecdsaCertStr = null;
+		try {
+			//ecdsa cert
+			Security.addProvider(new org.bouncycastle.jce.provider.BouncyCastleProvider());
+			ecdsaGenerator = KeyPairGenerator.getInstance("EC");
+			ecdsaGenerator.initialize(ecSpec, new SecureRandom());
+			KeyPair ecdsaKeyPair = ecdsaGenerator.generateKeyPair();
+			PublicKey ecdsaPublicKey = ecdsaKeyPair.getPublic();
+			X500NameBuilder builder=new X500NameBuilder(BCStyle.INSTANCE);
+			builder.addRDN(BCStyle.OU,"ocnrf");
+			builder.addRDN(BCStyle.O,"ocnrf");
+			builder.addRDN(BCStyle.CN,"ocnrf");
+			Date notBefore=new Date(System.currentTimeMillis() - 500);
+			Date notAfter=new Date(System.currentTimeMillis() + 10 *5000);
+			BigInteger serial=BigInteger.valueOf(System.currentTimeMillis());
+			X509v3CertificateBuilder certGen=new JcaX509v3CertificateBuilder(builder.build(),serial,notBefore,notAfter,builder.build(),ecdsaPublicKey);
+			ContentSigner sigGen=new JcaContentSignerBuilder("SHA256WithECDSA").setProvider(BC).build(ecdsaKeyPair.getPrivate());
+			ecdsaCert =new JcaX509CertificateConverter().setProvider(BC).getCertificate(certGen.build(sigGen));	       	        
+			ecdsaCertStr = convertToBase64PEMString(ecdsaCert);
+		} catch (Exception e) {			
+			e.printStackTrace();
+			logger.error("A write error has occurred : "+e.getMessage());
+			throw new ConfigException("Failed to write keystore password File"+e.getMessage());
+		}
+		return ecdsaCertStr;
+	}
+	
+	static String getOauthRsaCertificate()
+	{
+		X509Certificate  rsaCert = null;
+		String rsaCertStr = null;
+		try {		
+			
+			  Security.addProvider(new org.bouncycastle.jce.provider.BouncyCastleProvider());
+			    KeyPairGenerator kpGen=KeyPairGenerator.getInstance("RSA","BC");
+			    kpGen.initialize(1024,new SecureRandom());
+			    KeyPair pair=kpGen.generateKeyPair();
+			    X500NameBuilder builder=new X500NameBuilder(BCStyle.INSTANCE);
+			    builder.addRDN(BCStyle.OU,"ocnrf");
+			    builder.addRDN(BCStyle.O,"ocnrf");
+			    builder.addRDN(BCStyle.CN,"ocnrf");
+			    Date notBefore=new Date(System.currentTimeMillis() - 500);
+			    Date notAfter=new Date(System.currentTimeMillis() + 10 *5000);
+			    BigInteger serial=BigInteger.valueOf(System.currentTimeMillis());
+			    X509v3CertificateBuilder certGen=new JcaX509v3CertificateBuilder(builder.build(),serial,notBefore,notAfter,builder.build(),pair.getPublic());
+			    ContentSigner sigGen=new JcaContentSignerBuilder("SHA256WithRSA").setProvider(BC).build(pair.getPrivate());
+			    rsaCert =new JcaX509CertificateConverter().setProvider(BC).getCertificate(certGen.build(sigGen));
+			    rsaCertStr = convertToBase64PEMString(rsaCert);
+		} catch (Exception e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+		return rsaCertStr;
+	}
+	public static Pair<String,String> getOauthCertificate()
+	{
+		Pair <String,String> certificatePair = null;		
+		String rsaCertificateContent = null;
+		String ecdsaCertificateContent = null;
+		//generate rsa and ecdsa certificate
+		logger.info("Entering getOauthCertificate");		
+		try {
+			ecdsaCertificateContent  =  getOauthEcdsaCertificate();
+			rsaCertificateContent =  getOauthRsaCertificate();	 
+			certificatePair= Pair.of(rsaCertificateContent,ecdsaCertificateContent);			
+			logger.info("rsaCertificateContent: "+rsaCertificateContent);
+			logger.info("ecdsaCertificateContent: "+ecdsaCertificateContent);
+			logger.info("Exit from getOauthCertificate");
+		} catch (Exception e) {			
+			e.printStackTrace();
+		} 
+		return certificatePair;
+	}
+	
+	
+	public static String getKeystorePassword(V1SecretList listSecretForKeyStore,String keyStoreSecretName,
+			String keyStorePasswordFileName)
+	{
+
+		String keyStorePassword =null;
+		for( V1Secret secret: listSecretForKeyStore.getItems())
+		{
+			if(secret.getMetadata().getName().equals(keyStoreSecretName) )
+			{
+				Map <String,byte[]> map = secret.getData();
+				if(map.get(keyStorePasswordFileName)!= null)
+				{
+					keyStorePassword = new String(map.get(keyStorePasswordFileName));
+					if(keyStorePassword == null|| keyStorePassword.isEmpty())
+					{
+						logger.error("keyStore details is not present in File");
+						throw new ConfigException("keyStore details is not present in File");
+					}else
+					{
+
+						keyStorePassword = keyStorePassword.substring(0, keyStorePassword.length() - 1);
+						logger.info("keyStore details extracted");
+					}
+					break;
+				}
+				else
+				{
+					logger.error("keyStore details not present in the secret");
+					throw new ConfigException("keyStore details not present in the secret");
+				}
+
+			}
+		}
+
+		logger.info("keyStore details retreived successfully");
+		return keyStorePassword;
+	}
+
+	public static PrivateKey getPrivateKeyFromPKCS1Format(String privateKeyContent)
+	{
+		Object object=null;
+		PrivateKey privateKey = null;
+		KeyPair kp=null;
+		JcaPEMKeyConverter converter = new JcaPEMKeyConverter().setProvider("BC");
+		try(PEMParser pemParser = new PEMParser(new StringReader(privateKeyContent))) {
+			object = pemParser.readObject();
+			kp = converter.getKeyPair((PEMKeyPair) object);
+			privateKey = kp.getPrivate();
+			pemParser.close();
+			logger.info("Private key generated from PKCS1Format");
+			return privateKey;
+
+		} catch (IOException e) {
+			logger.error("Failed to get private key from PKCS1Format ."+e.getMessage());
+			throw new ConfigException("Failed to get private key from PKCS1Format ."+e.getMessage());
+		}
+	}
+
+	public static PrivateKey getPrivateKeyFromPKCS8Format(String privateKeyContent,String algo)
+	{
+		PrivateKey privateKey = null;
+		KeyFactory factory= null;
+		try {
+			if(algo.equals("ECDSA"))
+			{
+				factory = KeyFactory.getInstance("EC");
+			}
+			else
+			{   
+				factory = KeyFactory.getInstance("RSA");
+			}
+
+			PKCS8EncodedKeySpec keySpec = new PKCS8EncodedKeySpec(Base64.getDecoder().decode(privateKeyContent));				
+
+			privateKey = factory.generatePrivate(keySpec);
+			logger.info("Private key generated from PKCS8Format");
+			return privateKey;
+		}catch (Exception e) {
+			// TODO Auto-generated catch block
+			logger.error("Failed to get private key from PKCS8Format ."+e.getMessage());
+			throw new ConfigException("Failed to get private key from PKCS8Format ."+e.getMessage());
+		}
+
+	}
+	public static void createKeyStore(Pair<String,String> privateKeyInfo,
+			Pair<String,String> certificateInfo,String keystorePassword)
+	{
+		Collection<X509Certificate> certList = null;
+		X509Certificate[] certificateChain = null;
+		char[] password = null;
+		PrivateKey privKey = null;	
+		String rsaPrivateKeyContent = privateKeyInfo.getLeft();
+		String ecdsaPrivateKeyContent = privateKeyInfo.getRight();
+		String rsaCertificateContent = certificateInfo.getLeft();
+		String ecdsaCertificateContent = certificateInfo.getRight();
+		Security.addProvider(new BouncyCastleProvider());
+		try(
+			FileOutputStream rsaFileOutputStream = new FileOutputStream("/configinfo/KeyStore.jks");
+			FileOutputStream ecFileOutputStream = new FileOutputStream("/configinfo/KeyStore.jks");
+			) {
+
+			KeyStore keyStore = KeyStore.getInstance("jks");
+			password = keystorePassword.toCharArray();
+			keyStore.load(null, password);
+			Security.addProvider(new BouncyCastleProvider());
+			if((rsaPrivateKeyContent != null) && (rsaCertificateContent !=null))
+			{
+				/**generate private key**/
+				if(rsaPrivateKeyContent.contains(PKCS1_RSA_PRIVATE_KEY_START) && 
+						rsaPrivateKeyContent.contains(PKCS1_RSA_PRIVATE_KEY_END))
+				{
+					logger.info("RSA key received in PKCS1 Format");
+					privKey = getPrivateKeyFromPKCS1Format(rsaPrivateKeyContent);
+				}
+				else if(rsaPrivateKeyContent.contains(PKCS8_PRIVATE_KEY_START) && 
+						rsaPrivateKeyContent.contains(PKCS8_PRIVATE_KEY_END))
+				{
+					logger.info("RSA key received in PKCS8 Format");
+					rsaPrivateKeyContent = rsaPrivateKeyContent.replaceAll("\\n", "")
+							.replace(PKCS8_PRIVATE_KEY_START, "")
+							.replace(PKCS8_PRIVATE_KEY_END, "") ;
+					privKey = getPrivateKeyFromPKCS8Format(rsaPrivateKeyContent,"RSA");
+				}
+				else
+				{
+					logger.error("Bad configuration.RSA Private key is not present in either PKCS1 /PKCS8 Format");
+					throw new ConfigException("Bad configuration.RSA Private key is not present in either "
+							+ "PKCS1 /PKCS8 Format");
+				}
+				logger.info("storing rsa private key");	
+				certList =  convertToX509Certificate(rsaCertificateContent);
+				logger.info("No. of signed RSA certificate are {}",certList.size());
+			    certificateChain = new X509Certificate[certList.size()];
+			   
+			    int i=0;
+				for(X509Certificate cert: certList) {
+					certificateChain[i] = cert;
+					i++;
+				}
+				keyStore.setKeyEntry("rsakey", privKey, password, certificateChain);							
+				keyStore.store(rsaFileOutputStream, password);
+				logger.info("rsa key stored");
+			}
+
+			if ((ecdsaPrivateKeyContent != null) && (ecdsaCertificateContent !=null))
+			{
+				if(ecdsaPrivateKeyContent.contains(EC_PRIVATE_KEY_START) && 
+						ecdsaPrivateKeyContent.contains(EC_PRIVATE_KEY_END))
+				{
+					logger.error("ECDSA key received in PKCS1 Format,"
+							+ "Only PKCS8 Format supported for ECDSA");	
+					throw new ConfigException("Bad configuration.ECDSA Private key is not present in "
+							+ "PKCS8 Format");
+
+				}
+				else if(ecdsaPrivateKeyContent.contains(PKCS8_PRIVATE_KEY_START) && 
+						ecdsaPrivateKeyContent.contains(PKCS8_PRIVATE_KEY_END))
+				{
+					logger.info("ECDSA key received in PKCS8 Format");
+					ecdsaPrivateKeyContent = ecdsaPrivateKeyContent.replaceAll("\\n", "")
+							.replace(PKCS8_PRIVATE_KEY_START, "")
+							.replace(PKCS8_PRIVATE_KEY_END, "") ;
+					privKey = getPrivateKeyFromPKCS8Format(ecdsaPrivateKeyContent,"ECDSA");
+				}
+				else
+				{
+					logger.error("Bad configuration.ECDSA Private key is not "
+							+ "present in either Traditional Format/PKCS8 Format");
+					throw new ConfigException("Bad configuration.ECDSA Private key is not present in "
+							+ "either Traditional Format/PKCS8 Format");
+				}
+				certList =  convertToX509Certificate(ecdsaCertificateContent);
+				logger.info("No. of signed ECDSA certificate are {}",certList.size());
+				certificateChain = new X509Certificate[certList.size()];
+				
+				int i=0;
+				for(X509Certificate cert: certList) {
+					certificateChain[i] = cert;
+					i++;
+				}
+				keyStore.setKeyEntry("ecdsakey", privKey, password, certificateChain);
+				logger.info("storing ecdsa private key");
+				keyStore.store(ecFileOutputStream, password);
+				logger.info("ecdsa key stored");
+			}
+
+		} catch (Exception e) {
+
+			logger.error("Failed to create keystore."+e.getMessage());
+			throw new ConfigException(e.getMessage());
+		}	
+	}
+	public static String getTrustStorePassword(Sslconfig sslInfo)
+	{
+
+		String trustStorePassword =null;
+		V1SecretList listSecretForTrustStore;
+		try {
+			listSecretForTrustStore = new CoreV1Api().listNamespacedSecret(sslInfo.
+					getTrustStorePasswordSecretNameSpace(),null, null, null, null,	null, null, null, null, null);
+
+			for( V1Secret secret: listSecretForTrustStore.getItems())
+			{
+				if(secret.getMetadata().getName().equals(sslInfo.getTrustStorePasswordSecretName()) )
+				{
+					Map <String,byte[]> map = secret.getData();
+					if(map.get(sslInfo.getTrustStorePasswordFileName())!= null)
+					{   
+						trustStorePassword = new String(map.get(sslInfo.getTrustStorePasswordFileName()));
+						if(trustStorePassword == null|| trustStorePassword.isEmpty())
+						{
+							logger.error("trustStore details is not present in File");
+							throw new ConfigException("trustStore details is not present in File");
+						}else
+						{
+							trustStorePassword = trustStorePassword.substring(0, trustStorePassword.length() - 1);
+							logger.info("trustStore details extracted");
+						}
+						break;
+					}					else
+					{
+						logger.error("trustStore details not present in the secret");
+						throw new ConfigException("trustStore details not present in the secret");
+					}
+
+				}
+			}
+
+			return trustStorePassword;
+		} catch (ApiException e) {
+			e.printStackTrace();
+
+			logger.error("could not extract trustStore details");
+			throw new ConfigException("could not extract trustStore details");
+		}
+	}
+	public static void createTrustStore(Sslconfig sslInfo,String truststorePassword)
+	{
+		Collection<X509Certificate> certList = null;
+		char[] password = null;
+
+		KeyPair kp=null;
+		String caBundleContent=null;
+		//get caBundleContent
+		KeyPairGenerator kpg=  null;
+		try(FileOutputStream fileOutputStream = new FileOutputStream("/configinfo/TrustStore.jks")) {
+
+			V1SecretList listSecretForCaBundle = new CoreV1Api().listNamespacedSecret(sslInfo.
+					getCaBundleSecretNameSpace(),null, null, null, null,	null, null, null, null, null);
+
+			for( V1Secret secret: listSecretForCaBundle.getItems())
+			{
+				if(secret.getMetadata().getName().equals(sslInfo.getCaBundleSecretName()) )
+				{
+					Map <String,byte[]> map = secret.getData();
+					if(map.get(sslInfo.getCaBundleFileName())!= null)
+					{
+						caBundleContent = new String(map.get(sslInfo.getCaBundleFileName()));
+						break;
+					}
+					else
+					{
+						logger.error("caBundle details not present in secret");
+						throw new ConfigException("caBundle details not present in secret");
+					}
+
+				}
+			}
+			if(caBundleContent == null || caBundleContent.isEmpty())
+			{
+				logger.error("caBundle details not present secret");
+				throw new ConfigException("caBundle details not present in secret");
+			}
+
+			//create dummy keypair
+			if(sslInfo.getInitialAlgorithm().equals("ES256"))
+			{
+				kpg = KeyPairGenerator 
+						.getInstance("EC"); 
+				ECGenParameterSpec ecSpec = new ECGenParameterSpec("secp256r1");		
+				kpg.initialize(ecSpec); 
+			}
+			else
+			{
+				kpg = KeyPairGenerator 
+						.getInstance("RSA"); 
+				kpg.initialize(2048);				
+			}
+			kp = kpg.generateKeyPair(); 
+			KeyStore keyStore = KeyStore.getInstance("jks");
+			password = truststorePassword.toCharArray();
+			keyStore.load(null, password);
+			certList =  convertToX509Certificate(caBundleContent);
+			logger.info("No. of CA certificate are {}",certList.size());
+			X509Certificate[] certificateChain = new X509Certificate[certList.size()];
+	
+			int i=0;
+			for(X509Certificate cert: certList) {
+				certificateChain[i] = cert;
+				i++;
+			}
+			//putting dummy private key
+			keyStore.setKeyEntry("cabundle", kp.getPrivate(), password, certificateChain);							
+			keyStore.store(fileOutputStream, password);
+			logger.info("truststore created successfully");
+
+		} catch (Exception e) {
+			// TODO Auto-generated catch block
+			logger.error("Failed to create truststore."+e.getMessage());
+
+			throw new ConfigException(e.getMessage());
+		}	
+	}
+	/*
+	public static String convertToBase64PEMString(X509Certificate x509Cert) throws IOException {
+	    StringWriter sw = new StringWriter();
+	    try (PEMWriter pw = new PEMWriter(sw)) {
+	        pw.writeObject(x509Cert);
+	    }
+	    return sw.toString();
+	}*/
+	
+	public static String convertToBase64PEMString(X509Certificate x509Cert) throws IOException {
+		logger.info("converting x509 certificate to PEM Format ");
+		 final StringWriter writer = new StringWriter();
+		    final JcaPEMWriter pemWriter = new JcaPEMWriter(writer);
+		    pemWriter.writeObject(x509Cert);
+		    pemWriter.flush();
+		    pemWriter.close();
+		    return writer.toString();
+	}
+}

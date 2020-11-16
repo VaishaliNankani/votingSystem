@@ -1,0 +1,10 @@
+management.endpoint.metrics.enabled=true
+management.endpoints.web.exposure.include=*
+management.endpoint.prometheus.enabled=true
+management.metrics.export.prometheus.enabled=true
+management.metrics.use-global-registry=true
+management.metrics.export.prometheus.pushgateway.enabled=true
+management.metrics.export.prometheus.pushgateway.grouping-key.app_name=upgradeOcnrf
+management.metrics.export.prometheus.pushgateway.push-rate=1s
+management.metrics.export.prometheus.pushgateway.job=upgradeOcnrf
+management.metrics.export.prometheus.pushgateway.shutdown-operation=push

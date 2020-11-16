@@ -1,0 +1,94 @@
+// Copyright 2018 (C), Oracle and/or its affiliates. All rights reserved.
+
+package com.oracle.cgbu.cne.nrf.domain;
+
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.Set;
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.springframework.validation.annotation.Validated;
+
+import com.fasterxml.jackson.annotation.JsonAnyGetter;
+import com.fasterxml.jackson.annotation.JsonAnySetter;
+import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
+
+@Validated
+@JsonInclude(JsonInclude.Include.NON_EMPTY)
+public abstract class AbstractDto {
+	private static Logger logger = LogManager.getLogger(AbstractDto.class);
+	Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+
+	private static final ObjectMapper objectMapper = new ObjectMapper();
+
+	@JsonAnySetter 
+	protected Map<String,Object> vendorSpecificIe = new HashMap<>();
+	
+	static {
+		objectMapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+	}
+
+	@JsonAnyGetter 
+	public Map<String, Object> getVendorSpecificIe() { 
+		return vendorSpecificIe;
+	}
+
+
+	public void setVendorSpecificIe(Map<String, Object> vendorSpecificIe) { 
+		this.vendorSpecificIe = vendorSpecificIe; 
+	}
+
+	public Map<String, Object> vendorSpecificIeValidation(Map<String, Object> vendorSpecificIe,boolean allowAllIe,boolean enableF5) {
+	
+		
+		//allow no additional attributes including vendorSpecific
+		if(enableF5 == false && allowAllIe == false) {   
+			logMsg.clear();
+			logMsg.put("logMsg", "Allow no additional attributes including vendorSpecific");
+			logMsg.put("enableF5", enableF5);
+			logMsg.put("acceptAdditionalAttributes", allowAllIe);
+			logMsg.put("The following attributes have been dropped/ignored", vendorSpecificIe );
+			logger.info(logMsg.toString());
+			vendorSpecificIe.clear();
+		}
+		
+		//allow only VendorSpecific attributes
+		if(enableF5 == true && allowAllIe == false)    
+		{	
+			Set<String> additionalAttributes = new HashSet<> ();
+			for (Map.Entry<String, Object> entry : vendorSpecificIe.entrySet()) {
+				if(!(entry.getKey().matches("^vendorSpecific-([0-9]{6,6})"))) {
+					additionalAttributes.add(entry.getKey());
+				}
+			}
+			vendorSpecificIe.keySet().removeAll(additionalAttributes);
+			if(additionalAttributes != null && (!additionalAttributes.isEmpty())) {
+			logMsg.clear();
+			logMsg.put("logMsg", "Allow only VendorSpecific attributes");
+			logMsg.put("enableF5", enableF5);
+			logMsg.put("acceptAdditionalAttributes", allowAllIe);
+			logMsg.put("The following attributes have been dropped/ignored", additionalAttributes );
+			logger.info(logMsg.toString());
+			}
+		}
+		return vendorSpecificIe;
+	}		
+	
+	@Override
+	public String toString() {
+		String text;
+		objectMapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+		try {
+			text = objectMapper.writeValueAsString(this);
+		} catch (JsonProcessingException e) {
+			text = "{}";
+		}
+		return text;
+	}
+}

@@ -1,0 +1,50 @@
+package com.oracle.cgbu.cne.nrf.domain;
+
+import org.springframework.http.HttpHeaders;
+
+/**
+ * GenericResponse can be used when a method needs to return responses of different data types.
+ */
+public class GenericResponse extends SimpleAbstractDto{
+
+	private Object response;
+	
+	private boolean forwardingCandidate;
+	
+	private HttpHeaders headers = null;
+	
+	public Object getResponse() {
+		return response;
+	}
+<<<<<<< HEAD
+=======
+	public void setResponse(Object response) {
+		this.response = response;
+	}
+>>>>>>> development
+	public boolean isForwardingCandidate() {
+		return forwardingCandidate;
+	}
+	public void setForwardingCandidate(boolean forwardingCandidate) {
+		this.forwardingCandidate = forwardingCandidate;
+	}
+	
+	public void addHeader(String key, String value) {
+		if(headers == null) {
+			headers = new HttpHeaders();
+		}
+		headers.add(key, value);
+	}
+	
+	public HttpHeaders getHeaders() {
+		return headers;
+	}
+
+	public void setResponse(Object response) {
+		this.response = response;
+	}
+	public void setHeaders(HttpHeaders headers) {
+		this.headers = headers;
+	}
+	
+}

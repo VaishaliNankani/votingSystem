@@ -1,0 +1,315 @@
+// Copyright 2020 (C), Oracle and/or its affiliates. All rights reserved.
+package com.oracle.cgbu.cne.nrf.hooks.releases;
+import com.oracle.utils.DbConnectionFactory;
+import java.sql.SQLException;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+import javax.json.Json;
+import javax.json.JsonObject;
+import javax.json.JsonPatch;
+import javax.json.JsonPatchBuilder;
+import javax.json.JsonValue;
+
+import java.io.StringReader;
+import java.sql.Connection;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
+import com.oracle.utils.DbConnectionFactory;
+import com.oracle.cgbu.cne.nrf.domain.NrfSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.PatchItem;
+import com.oracle.cgbu.cne.nrf.domain.ProblemDetails;
+import com.oracle.cgbu.cne.nrf.domain.VersionedJsonDoc;
+import com.oracle.cgbu.cne.nrf.domain.VersionedJsonDocList;
+import com.oracle.cgbu.cne.nrf.hooks.config.HookConfiguration;
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Component;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.JsonMappingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.oracle.cgbu.cne.nrf.NrfException;
+import com.oracle.cgbu.cne.nrf.domain.ErrorCondition;
+import com.oracle.cgbu.cne.nrf.domain.ErrorInfo;
+import com.oracle.cgbu.cne.nrf.domain.FeatureStatus;
+import com.oracle.cgbu.cne.nrf.domain.GeneralEngSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.HeartbeatInfo;
+import com.oracle.cgbu.cne.nrf.domain.InvalidParam;
+import com.oracle.cgbu.cne.nrf.domain.NfAuthenticationSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.NfManagementSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.NrfEngSystemOptions;
+import com.oracle.releasemanagement.Release;
+import com.oracle.releasemanagement.ReleaseHooks;
+import com.oracle.releasemanagement.ReleaseVersion;
+
+@Component
+public class ReleaseHelmHook_1_8_0 extends Release implements ReleaseHooks {
+
+	private static final Logger logger = LogManager.getLogger(ReleaseHelmHook_1_8_0.class);
+	private static final   ObjectMapper mapper = new ObjectMapper();	
+	private DbConnectionFactory dbConnectionFactory = new DbConnectionFactory();
+	@Autowired
+	private HookConfiguration hookConfig;
+	/*
+     * Assigned the release-version (1,8,0) based on the ReadMe file mentioned
+     * in the upgrade-common jar.
+     */
+	@Override
+	public ReleaseVersion getReleaseVersion() {
+	
+		return new ReleaseVersion(1, 8, 0);
+	}
+
+	private String getApplicationDatabase() {
+        String database = hookConfig.getSiteInfo().getApplicationDatabase();
+        if (database != null && !database.isEmpty()) {
+            return database;
+        } else {
+            logger.error("ApplicationDatabase not configured.");
+            throw new NullPointerException();
+        }
+    }
+	private String getNrfInstanceId() {
+		String nrfInstanceId = hookConfig.getSiteInfo().getNrfInstanceId();
+		if (nrfInstanceId != null && !nrfInstanceId.isEmpty()) {
+			return nrfInstanceId;
+		} else {
+			logger.error("NrfInstanceId not configured.");
+			throw new NullPointerException();
+		}
+	}
+	String getJsonBasedOnVersion(String version,List<VersionedJsonDoc> versionedJsonDocList)
+	{
+				
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		logMsg.clear();
+		logMsg.put("logMsg", "Entering getJsonBasedOnVersion function");
+		logMsg.put("version",version);
+		logMsg.put("VersionedJsonDocList", versionedJsonDocList);
+		logger.info(logMsg.toString());
+		boolean recordExists = false;
+		
+		String response = null;
+		Iterator<VersionedJsonDoc> versionedListIterator = versionedJsonDocList.iterator();
+		
+		while(versionedListIterator.hasNext()) {			
+			VersionedJsonDoc jsonDoc = (VersionedJsonDoc) versionedListIterator.next();
+		    if(jsonDoc.getVersion().equals(version)) {
+		    	recordExists = true;		    	
+				logger.info(logMsg.toString());
+		    	String doc = jsonDoc.getDoc();
+		    	response = doc;
+		    	logMsg.clear();
+				logMsg.put("logMsg", "RecordExists");
+				logMsg.put("VersionedJsonDoc",response);
+				break;
+		    }
+		}
+		logMsg.clear();
+		logMsg.put("logMsg", "Exit from getJsonBasedOnVersion function");
+		logMsg.put("version",version);
+		logMsg.put("Doc", response);
+		logMsg.put("RecordExists", recordExists);
+		logger.info(logMsg.toString());		
+		return response;
+	}
+	
+	@Override
+	public void preUpgrade()
+	{	
+		String jsonStr = null;
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		String batchSqls[]  = new String[2];		
+		logMsg.clear();
+		logMsg.put("logMsg","Entering function preUpgrade()");
+		logMsg.put("hookConfig",hookConfig);
+		logger.info(logMsg.toString());
+		
+		try (Connection con = dbConnectionFactory.createConnection();
+				Statement stmt = con.createStatement();) {	
+			String sql = "SELECT configType,configurationJsonDocList from `" + 
+				getApplicationDatabase() + "`.`NrfSystemOptions` where recordOwner='"+getNrfInstanceId()+"'"
+						+ " and configType in  ('OCNRF_SYSTEM_OPTIONS','OCNRF_ENG_SYSTEM_OPTIONS');";	
+			logMsg.clear();
+			logMsg.put("logMsg","Executing the SQL query");
+			logMsg.put("sql",sql);
+			logger.info(logMsg.toString());
+			ResultSet resultSet = stmt.executeQuery(sql);			
+			int numStatements = 0;
+			 while (resultSet.next()) {
+				 
+		            String configType = resultSet.getString("configType");
+		            String configurationJsonDocList = resultSet.getString("configurationJsonDocList");		            
+		            logMsg.clear();
+					logMsg.put("logMsg","configType & configurationJsonDocList fetched");
+					logMsg.put("configType",configType);
+					logMsg.put("configurationJsonDocList",configurationJsonDocList);
+					logger.info(logMsg.toString());
+		            if(configType.equals("OCNRF_SYSTEM_OPTIONS"))
+		            {
+		            	jsonStr = addSystemOptionsPreloadedParameters(resultSet);
+		            	jsonStr = jsonStr.replace("\\", "\\\\");
+		            	batchSqls[numStatements] = "update `" + getApplicationDatabase() + "`.`NrfSystemOptions`"
+		            			+ " set configurationJsonDocList ='"+jsonStr+"'  where recordOwner='"+getNrfInstanceId()+"'"
+		            			+ " and configType='OCNRF_SYSTEM_OPTIONS';";
+		            }
+		            else if (configType.equals("OCNRF_ENG_SYSTEM_OPTIONS"))
+		            {
+		            	jsonStr = addEngSystemOptionsPreloadedParameters(resultSet);
+		            	jsonStr = jsonStr.replace("\\", "\\\\");
+		            	batchSqls[numStatements] = "update `" + getApplicationDatabase() + "`.`NrfSystemOptions`"
+		            			+ " set configurationJsonDocList ='"+jsonStr+"'  where recordOwner='"+getNrfInstanceId()+"' "
+		            			+ "and configType='OCNRF_ENG_SYSTEM_OPTIONS';";		            	
+		            }
+
+		            numStatements++;
+		        }
+			 for (int iterator=0;iterator< numStatements;iterator++)
+			 {
+				 logMsg.clear();
+				 logMsg.put("logMsg","Executing sql statement to update entries"
+						 + " in Application database");
+				 logMsg.put("sqlStatement",batchSqls[iterator]);					
+				 logger.info(logMsg.toString());
+				 stmt.executeUpdate(batchSqls[iterator]);
+			 }
+		} catch (SQLException e) {
+			 logMsg.clear();
+			 logMsg.put("logMsg","Not able to execute the SQL query. Exiting...");
+			 logMsg.put("stacktrace",Arrays.toString(e.getStackTrace()));					
+			 logger.error(logMsg.toString());
+			 System.exit(1);
+			}
+	}
+	
+	String   addSystemOptionsPreloadedParameters(ResultSet resultSet)
+	{
+		NrfSystemOptions nrfSystemOptions= null;
+		String versionDocListString= null;
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		NfAuthenticationSystemOptions nfAuthenticationSystemOptions = 
+				prepareNfAuthSystemOptionsPreloadedValue();
+		List<HeartbeatInfo> nfHeartbeatTimers = prepareHeartBeatPreloadedValue();
+		try {
+			String configurationJsonDocList = resultSet.getString("configurationJsonDocList");
+			VersionedJsonDocList versionedJsonDocList  =  mapper.readValue(configurationJsonDocList,
+    				VersionedJsonDocList.class);    				
+    		String doc = getJsonBasedOnVersion("v1",versionedJsonDocList);
+    		logMsg.clear();
+    		logMsg.put("logMsg","NrfSystemOptions json to be modified");
+    		logMsg.put("doc",doc);					
+    		logger.info(logMsg.toString());
+    		nrfSystemOptions= mapper.readValue(doc
+    				, NrfSystemOptions.class);
+    		nrfSystemOptions.setNfAuthenticationSystemOptions(nfAuthenticationSystemOptions);
+    		nrfSystemOptions.getNfManagementSystemOptions().setNfHeartbeatTimers(nfHeartbeatTimers);
+    		versionedJsonDocList.getVersionedJsonDocList().get(0).setDoc(mapper.writeValueAsString(nrfSystemOptions));
+    		//set the updated nrfSystemOptions
+    		versionDocListString = mapper.writeValueAsString(versionedJsonDocList);
+    		logMsg.clear();
+    		logMsg.put("logMsg","modified NrfSystemOptions json list");
+    		logMsg.put("versionDocListString",versionDocListString);					
+    		logger.info(logMsg.toString());
+		} catch (Exception e) {
+			logMsg.clear();
+			logMsg.put("logMsg","Not able to modify NrfSystemOptions json . Exiting...");
+			logMsg.put("stacktrace",Arrays.toString(e.getStackTrace()));					
+			logger.error(logMsg.toString());
+			System.exit(1);
+		}
+		
+		return versionDocListString;
+	}
+	
+	String addEngSystemOptionsPreloadedParameters(ResultSet resultSet)
+	{
+		NrfEngSystemOptions nrfEngSystemOptions= null;
+		String versionDocListString = null;
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		try {
+			String configurationJsonDocList = resultSet.getString("configurationJsonDocList");
+			VersionedJsonDocList versionedJsonDocList  =  mapper.readValue(configurationJsonDocList,
+    				VersionedJsonDocList.class);    				
+    		String doc = versionedJsonDocList.getVersionedJsonDocList().get(0).getDoc();	
+    		logMsg.clear();
+    		logMsg.put("logMsg","NrfEngSystemOptions json to be modified");
+    		logMsg.put("doc",doc);					
+    		logger.info(logMsg.toString());
+    		nrfEngSystemOptions = mapper.readValue(doc
+    				, NrfEngSystemOptions.class);
+    		GeneralEngSystemOptions  generalEngSystemOptions = nrfEngSystemOptions.getGeneralEngSystemOptions();
+    		generalEngSystemOptions.setNfHeartbeatMissAllowedMinValue(0);
+   			generalEngSystemOptions.setNfHeartbeatMissAllowedMaxValue(15);
+           	generalEngSystemOptions.setRetryAfterMinValue(Duration.ofSeconds(60));
+   			generalEngSystemOptions.setRetryAfterMaxValue(Duration.ofHours(1));
+   			List<String> retryAfterErrorCodes = new ArrayList<>(List.of("3xx","413","429","503"));
+   			generalEngSystemOptions.setRetryAfterErrorCodes(retryAfterErrorCodes);
+   			List<String> redirectURLErrorCodes = new ArrayList<>(List.of("3xx"));
+   			generalEngSystemOptions.setRedirectUrlErrorCodes(redirectURLErrorCodes);
+   			versionedJsonDocList.getVersionedJsonDocList().get(0).setDoc(mapper.writeValueAsString(nrfEngSystemOptions));
+    		//set the updated nrfSystemOptions
+   			versionDocListString = mapper.writeValueAsString(versionedJsonDocList);    		 		
+    		logMsg.clear();
+    		logMsg.put("logMsg","modified NrfEngSystemOptions json" );
+    		logMsg.put("vDocString",versionDocListString);					
+    		logger.info(logMsg.toString());
+		} catch (Exception e) {
+			logMsg.clear();
+			logMsg.put("logMsg","Not able to modify NrfEngSystemOptions json. Exiting...");
+			logMsg.put("stacktrace",Arrays.toString(e.getStackTrace()));					
+			logger.error(logMsg.toString());
+			System.exit(1);
+		}
+		return versionDocListString;
+	}
+	
+		
+	public NfAuthenticationSystemOptions prepareNfAuthSystemOptionsPreloadedValue()
+	{
+		
+		ErrorInfo nfAuthenticationErrorResponse = new ErrorInfo();
+		nfAuthenticationErrorResponse.setErrorCondition(ErrorCondition.Nf_Fqdn_Authentication_Failure);
+		nfAuthenticationErrorResponse.setErrorCode(401);
+		nfAuthenticationErrorResponse.setErrorResponse("Failed to authenticate NF using FQDN");
+		nfAuthenticationErrorResponse.setRetryAfter(Duration.ofMinutes(5));
+		List<ErrorInfo> nfAuthenticationErrorInfoList = new ArrayList<ErrorInfo>();
+		nfAuthenticationErrorInfoList.add(nfAuthenticationErrorResponse);
+		NfAuthenticationSystemOptions nfAuthenticationSystemOptions = new NfAuthenticationSystemOptions();
+		nfAuthenticationSystemOptions.setNfRegistrationAuthenticationStatus(FeatureStatus.DISABLED);
+		nfAuthenticationSystemOptions.setNfSubscriptionAuthenticationStatus(FeatureStatus.DISABLED);
+		nfAuthenticationSystemOptions.setNfDiscoveryAuthenticationStatus(FeatureStatus.DISABLED);
+		nfAuthenticationSystemOptions.setAccessTokenAuthenticationStatus(FeatureStatus.DISABLED);
+		nfAuthenticationSystemOptions.setNfProfileRetrievalAuthenticationStatus(FeatureStatus.DISABLED);
+		nfAuthenticationSystemOptions.setNfListRetrievalAuthenticationStatus(FeatureStatus.DISABLED);
+		nfAuthenticationSystemOptions.setCheckIfNfIsRegistered(FeatureStatus.DISABLED);
+		nfAuthenticationSystemOptions.setNfAuthenticationErrorResponses(nfAuthenticationErrorInfoList);
+		return nfAuthenticationSystemOptions;
+	}
+	public List<HeartbeatInfo>  prepareHeartBeatPreloadedValue()
+	{
+		HeartbeatInfo heartbeatInfo = new HeartbeatInfo();
+		heartbeatInfo.setNfType("ALL_NF_TYPE");
+		heartbeatInfo.setMinHbTimer(Duration.ofSeconds(30));
+		heartbeatInfo.setMaxHbTimer(Duration.ofMinutes(5));
+		heartbeatInfo.setDefaultHbTimer(Duration.ofSeconds(30));
+		heartbeatInfo.setNfHeartbeatMissAllowed(3);
+		List<HeartbeatInfo> nfHeartbeatTimers = new ArrayList<HeartbeatInfo>();
+		nfHeartbeatTimers.add(heartbeatInfo); 
+		return nfHeartbeatTimers;
+	}
+	
+	
+	
+
+}

@@ -1,0 +1,831 @@
+package com.oracle.cgbu.cne.nrf.dao;
+
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.Date;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
+
+import javax.persistence.Column;
+import javax.persistence.Entity;
+import javax.persistence.Id;
+import javax.persistence.IdClass;
+import javax.persistence.Table;
+import javax.validation.constraints.NotNull;
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.oracle.cgbu.cne.nrf.NrfException;
+import com.oracle.cgbu.cne.nrf.domain.EpochTime;
+import com.oracle.cgbu.cne.nrf.domain.ErrorInfo;
+import com.oracle.cgbu.cne.nrf.domain.ErrorResponses;
+import com.oracle.cgbu.cne.nrf.domain.ForwardingSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.GeneralEngSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.GeneralSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.GeoRedundancyEngSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.GeoRedundancySystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.HeartbeatInfo;
+import com.oracle.cgbu.cne.nrf.domain.LoggingLevelSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.NfAccessTokenEngSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.NfAccessTokenSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.NfAuthenticationSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.NfDiscoverSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.NfDiscoveryEngSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.NfManagementEngSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.NfManagementSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.NfRegistrationEngSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.NfScreeningSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.NfSubscriptionEngSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.NrfAuditorEngSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.NrfEngSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.NrfSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.NrfSystemOptionsId;
+import com.oracle.cgbu.cne.nrf.domain.ProblemDetails;
+import com.oracle.cgbu.cne.nrf.domain.SlfSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.VersionedJsonDoc;
+import com.oracle.cgbu.cne.nrf.domain.VersionedJsonDocList;
+
+@Entity
+@IdClass(NrfSystemOptionsId.class)
+@Table(name = "NrfSystemOptions")
+public class NrfSystemOptionsDao {
+	
+	private static Logger logger = LogManager.getLogger(NrfSystemOptionsDao.class);
+	
+	private static final ObjectMapper objectMapper = new ObjectMapper();
+	
+	@Id
+	@Column(name = "configType", nullable = false, updatable = false)
+	@NotNull
+	private String configType;
+
+	@Id
+	@NotNull
+	@Column(name = "recordOwner", nullable = false, updatable = false)
+	private String recordOwner;
+	
+	@NotNull
+	@Column(name = "configurationJsonDocList", columnDefinition = "json")
+	private String configurationJsonDocList;
+	
+	@NotNull
+	@Column(name="lastUpdateTimestamp", nullable=false)
+	private long lastUpdateTimestamp;
+	
+	public NrfSystemOptionsDao() {
+		super();
+	}
+
+	public NrfSystemOptionsDao(NrfSystemOptionsDao  oldNrfSystemOptionsDao, NrfSystemOptions nrfSystemOptions,String version) {
+		this.configType = oldNrfSystemOptionsDao.getConfigType();
+		this.recordOwner = oldNrfSystemOptionsDao.getRecordOwner();
+		NrfSystemOptions nrfSystemOptionsOld = (NrfSystemOptions) oldNrfSystemOptionsDao.toDomain(version);
+		if(this.configType.equals("OCNRF_SYSTEM_OPTIONS"))
+		{
+			if (nrfSystemOptions.getNfScreeningSystemOptions()!=null) { 
+				NfScreeningSystemOptions nfScreeningSystemOptions = nrfSystemOptions.getNfScreeningSystemOptions();
+				NfScreeningSystemOptions nfScreeningSystemOptionsOld = nrfSystemOptionsOld.getNfScreeningSystemOptions();
+				nfScreeningSystemOptionsOld.setNfScreeningFeatureStatus((nfScreeningSystemOptions.getNfScreeningFeatureStatus()!=null)?
+						nfScreeningSystemOptions.getNfScreeningFeatureStatus():
+							nfScreeningSystemOptionsOld.getNfScreeningFeatureStatus());
+				nfScreeningSystemOptionsOld.setNfScreeningFailureHttpCode((nfScreeningSystemOptions.getNfScreeningFailureHttpCode()!=null)?
+						nfScreeningSystemOptions.getNfScreeningFailureHttpCode():
+							nfScreeningSystemOptionsOld.getNfScreeningFailureHttpCode());
+				nrfSystemOptionsOld.setNfScreeningSystemOptions(nfScreeningSystemOptionsOld);
+			}
+
+			if(nrfSystemOptions.getNfManagementSystemOptions()!=null) {
+				NfManagementSystemOptions nfManagement = nrfSystemOptions.getNfManagementSystemOptions();
+				NfManagementSystemOptions nfManagementOld = nrfSystemOptionsOld.getNfManagementSystemOptions();
+				
+				if (nfManagement.getNfHeartbeatTimers()!=null &&
+						!nfManagement.getNfHeartbeatTimers().isEmpty()) {					
+					nfManagementOld.setNfHeartbeatTimers(nfManagement.getNfHeartbeatTimers());
+				}
+				
+				nfManagementOld.setNfNotifyLoadThreshold((nfManagement.getNfNotifyLoadThreshold()!=null)?
+						nfManagement.getNfNotifyLoadThreshold():
+							nfManagementOld.getNfNotifyLoadThreshold());
+				nfManagementOld.setNrfSupportForProfileChangesInResponse((nfManagement.getNrfSupportForProfileChangesInResponse()!=null)?
+						nfManagement.getNrfSupportForProfileChangesInResponse():
+							nfManagementOld.getNrfSupportForProfileChangesInResponse());
+				nfManagementOld.setSubscriptionValidityDuration((nfManagement.getSubscriptionValidityDuration()!=null)?
+						nfManagement.getSubscriptionValidityDuration():
+							nfManagementOld.getSubscriptionValidityDuration());
+				nfManagementOld.setNrfSupportForProfileChangesInNotification((nfManagement.getNrfSupportForProfileChangesInNotification()!=null)?
+						nfManagement.getNrfSupportForProfileChangesInNotification():
+							nfManagementOld.getNrfSupportForProfileChangesInNotification());
+				nfManagementOld.setNfProfileSuspendDuration((nfManagement.getNfProfileSuspendDuration()!=null)?
+						nfManagement.getNfProfileSuspendDuration():
+							nfManagementOld.getNfProfileSuspendDuration());
+				nfManagementOld.setErrorResponseCodeForServiceUnavailable((nfManagement.getErrorResponseCodeForServiceUnavailable()!=null)?
+						nfManagement.getErrorResponseCodeForServiceUnavailable():
+							nfManagementOld.getErrorResponseCodeForServiceUnavailable());
+				nfManagementOld.setRetryAfter((nfManagement.getRetryAfter()!=null)?
+						nfManagement.getRetryAfter():
+							nfManagementOld.getRetryAfter());
+				nfManagementOld.setAcceptAdditionalAttributes((nfManagement.getAcceptAdditionalAttributes()!=null)?
+						nfManagement.getAcceptAdditionalAttributes():
+							nfManagementOld.getAcceptAdditionalAttributes());
+				nfManagementOld.setAllowDuplicateSubscriptions((nfManagement.getAllowDuplicateSubscriptions()!=null) ? 
+						nfManagement.getAllowDuplicateSubscriptions() : nfManagementOld.getAllowDuplicateSubscriptions());
+				nrfSystemOptionsOld.setNfManagementSystemOptions(nfManagementOld);
+			}
+
+			if (nrfSystemOptions.getGeneralSystemOptions()!=null) {
+				GeneralSystemOptions general = nrfSystemOptions.getGeneralSystemOptions();
+				GeneralSystemOptions generalOld = nrfSystemOptionsOld.getGeneralSystemOptions();
+				generalOld.setNrfPlmnList((general.getNrfPlmnList()!=null)?
+						general.getNrfPlmnList():
+							generalOld.getNrfPlmnList());
+				generalOld.setEnableF3((general.isEnableF3()!=null)?
+						general.isEnableF3():
+		                	generalOld.isEnableF3());
+				generalOld.setEnableF5((general.getEnableF5()!=null)?
+						general.getEnableF5():
+		                	generalOld.getEnableF5());
+				generalOld.setMaximumHopCount((general.getMaximumHopCount()!=null)?
+						general.getMaximumHopCount():
+		                	generalOld.getMaximumHopCount());
+				generalOld.setAddLoadInNFProfile((general.getAddLoadInNFProfile()!=null)?
+						general.getAddLoadInNFProfile():
+							generalOld.getAddLoadInNFProfile());
+				generalOld.setAddPriorityInNFProfile((general.getAddPriorityInNFProfile()!=null)?
+						general.getAddPriorityInNFProfile():
+							generalOld.getAddPriorityInNFProfile());
+				generalOld.setDefaultPriority((general.getDefaultPriority()!=null)?
+						general.getDefaultPriority():
+							generalOld.getDefaultPriority());
+				generalOld.setDefaultLoad((general.getDefaultLoad()!=null)?
+						general.getDefaultLoad():
+							generalOld.getDefaultLoad());
+				generalOld.setOcnrfEndPointHost((general.getOcnrfEndPointHost()!=null && !(general.getOcnrfEndPointHost().isEmpty()) )?
+				        general.getOcnrfEndPointHost():
+				        	generalOld.getOcnrfEndPointHost());
+				generalOld.setOcnrfEndPointPort((general.getOcnrfEndPointPort()!=null)?
+				        general.getOcnrfEndPointPort():
+				        	generalOld.getOcnrfEndPointPort());
+				
+				nrfSystemOptionsOld.setGeneralSystemOptions(generalOld);
+			}
+			
+			if (nrfSystemOptions.getNfDiscoverSystemOptions()!=null) {
+				NfDiscoverSystemOptions nfDiscover = nrfSystemOptions.getNfDiscoverSystemOptions();
+				NfDiscoverSystemOptions nfDiscoverOld = nrfSystemOptionsOld.getNfDiscoverSystemOptions();
+				nfDiscoverOld.setDiscoveryValidityPeriod((nfDiscover.getDiscoveryValidityPeriod()!=null)?
+						nfDiscover.getDiscoveryValidityPeriod():
+							nfDiscoverOld.getDiscoveryValidityPeriod());
+				
+				nfDiscoverOld.setDiscoveryResultLoadThreshold(
+						(nfDiscover.getDiscoveryResultLoadThreshold()!=null)?
+						    (nfDiscover.getDiscoveryResultLoadThreshold()==0 ? null 
+								: nfDiscover.getDiscoveryResultLoadThreshold())
+						    :nfDiscoverOld.getDiscoveryResultLoadThreshold());
+				nfDiscoverOld.setProfilesCountInDiscoveryResponse(
+						(nfDiscover.getProfilesCountInDiscoveryResponse()!=null)?
+							(nfDiscover.getProfilesCountInDiscoveryResponse()==0 ? null
+						        : nfDiscover.getProfilesCountInDiscoveryResponse())
+							:nfDiscoverOld.getProfilesCountInDiscoveryResponse());
+				nrfSystemOptionsOld.setNfDiscoverSystemOptions(nfDiscoverOld);
+			}
+			
+			if (nrfSystemOptions.getNfAccessTokenSystemOptions()!=null) {
+				NfAccessTokenSystemOptions nfAccessToken = nrfSystemOptions.getNfAccessTokenSystemOptions();
+				NfAccessTokenSystemOptions nfAccessTokenOld = nrfSystemOptionsOld.getNfAccessTokenSystemOptions();
+				nfAccessTokenOld.setOauthTokenExpiryTime((nfAccessToken.getOauthTokenExpiryTime()!=null)?
+						nfAccessToken.getOauthTokenExpiryTime():
+							nrfSystemOptionsOld.getNfAccessTokenSystemOptions().getOauthTokenExpiryTime());							
+				nfAccessTokenOld.setOauthTokenAlgorithm((nfAccessToken.getOauthTokenAlgorithm()!=null)?
+						nfAccessToken.getOauthTokenAlgorithm():
+							nfAccessTokenOld.getOauthTokenAlgorithm());
+				nfAccessTokenOld.setAuthorizeRequesterNf((nfAccessToken.getAuthorizeRequesterNf()!=null)?
+						nfAccessToken.getAuthorizeRequesterNf():
+							nfAccessTokenOld.getAuthorizeRequesterNf());
+				nfAccessTokenOld.setLogicalOperatorForScope((nfAccessToken.getLogicalOperatorForScope()!=null)?
+						nfAccessToken.getLogicalOperatorForScope():
+							nfAccessTokenOld.getLogicalOperatorForScope());
+				nfAccessTokenOld.setAudienceType((nfAccessToken.getAudienceType()!=null)?
+						nfAccessToken.getAudienceType():
+							nfAccessTokenOld.getAudienceType());
+				if (nfAccessToken.getAuthFeatureConfig()!=null) {
+					nfAccessTokenOld.getAuthFeatureConfig().setAuthConfig((nfAccessToken.getAuthFeatureConfig().getAuthConfig()!=null)?
+							nfAccessToken.getAuthFeatureConfig().getAuthConfig()
+							:nfAccessTokenOld.getAuthFeatureConfig().getAuthConfig());
+					if (nfAccessToken.getAuthFeatureConfig().getAuthErrorResponses() != null) {
+						List<ErrorInfo> authErrorResponsesList = new ArrayList<ErrorInfo>();
+						ErrorInfo authErrorResponse;
+						for (int i = 0;i<nfAccessTokenOld.getAuthFeatureConfig().getAuthErrorResponses().size();i++) {
+							authErrorResponse = nfAccessToken.getAuthFeatureConfig().getAuthErrorResponses().get(i);
+							List<ErrorInfo> authErrorInfoListOld=nfAccessTokenOld.getAuthFeatureConfig().getAuthErrorResponses();  
+							for(ErrorInfo authErrorInfoOld : authErrorInfoListOld ) {
+								if(authErrorInfoOld.getErrorCondition().equals(authErrorResponse.getErrorCondition())){
+									authErrorInfoOld.setErrorCode((authErrorResponse.getErrorCode()!=null)?
+											authErrorResponse.getErrorCode():authErrorInfoOld.getErrorCode());
+									authErrorInfoOld.setErrorResponse((authErrorResponse.getErrorResponse()!=null)?
+											authErrorResponse.getErrorResponse():authErrorInfoOld.getErrorResponse());	
+									authErrorInfoOld.setRedirectUrl((authErrorResponse.getRedirectUrl()!=null)?
+											authErrorResponse.getRedirectUrl():authErrorInfoOld.getRedirectUrl());		
+									authErrorInfoOld.setRetryAfter((authErrorResponse.getRetryAfter()!=null)?
+											authErrorResponse.getRetryAfter():authErrorInfoOld.getRetryAfter());
+									authErrorResponsesList.add(authErrorInfoOld);
+								}
+							}
+						}
+						nfAccessToken.getAuthFeatureConfig().setAuthErrorResponses(authErrorResponsesList);
+					}
+					nfAccessTokenOld.getAuthFeatureConfig().setAuthFeatureStatus((nfAccessToken.getAuthFeatureConfig().getAuthFeatureStatus()!=null)?
+							nfAccessToken.getAuthFeatureConfig().getAuthFeatureStatus()
+							:nfAccessTokenOld.getAuthFeatureConfig().getAuthFeatureStatus());
+				}
+
+				nrfSystemOptionsOld.setNfAccessTokenSystemOptions(nfAccessTokenOld);
+
+			}
+
+			if (nrfSystemOptions.getLoggingLevelSystemOptions()!=null) {
+				LoggingLevelSystemOptions loggingLevel = nrfSystemOptions.getLoggingLevelSystemOptions();
+				LoggingLevelSystemOptions loggingLevelOld = nrfSystemOptionsOld.getLoggingLevelSystemOptions();
+				loggingLevelOld.setNfAccessTokenLogLevel((loggingLevel.getNfAccessTokenLogLevel()!=null)?
+						loggingLevel.getNfAccessTokenLogLevel():
+							loggingLevelOld.getNfAccessTokenLogLevel());
+				loggingLevelOld.setNfDiscoveryLogLevel((loggingLevel.getNfDiscoveryLogLevel()!=null)?
+						loggingLevel.getNfDiscoveryLogLevel():
+							loggingLevelOld.getNfDiscoveryLogLevel());
+				loggingLevelOld.setNfRegistrationLogLevel((loggingLevel.getNfRegistrationLogLevel()!=null)?
+						loggingLevel.getNfRegistrationLogLevel():
+							loggingLevelOld.getNfRegistrationLogLevel());
+				loggingLevelOld.setNfSubscriptionLogLevel((loggingLevel.getNfSubscriptionLogLevel()!=null)?
+						loggingLevel.getNfSubscriptionLogLevel():
+							loggingLevelOld.getNfSubscriptionLogLevel());
+				loggingLevelOld.setNrfAuditorLogLevel((loggingLevel.getNrfAuditorLogLevel()!=null)?
+						loggingLevel.getNrfAuditorLogLevel():
+							loggingLevelOld.getNrfAuditorLogLevel());
+				loggingLevelOld.setNrfConfigurationLogLevel((loggingLevel.getNrfConfigurationLogLevel()!=null)?
+						loggingLevel.getNrfConfigurationLogLevel():
+							loggingLevelOld.getNrfConfigurationLogLevel());
+
+				nrfSystemOptionsOld.setLoggingLevelSystemOptions(loggingLevel);
+			}
+
+
+			if(nrfSystemOptions.getSlfSystemOptions()!=null) {
+
+				SlfSystemOptions slfSystemOptions = nrfSystemOptions.getSlfSystemOptions();
+				SlfSystemOptions slfSystemOptionsOld=nrfSystemOptionsOld.getSlfSystemOptions();
+
+				slfSystemOptionsOld.setSupportedNfTypeList((slfSystemOptions.getSupportedNfTypeList()!=null)?
+						slfSystemOptions.getSupportedNfTypeList():
+							slfSystemOptionsOld.getSupportedNfTypeList());
+				slfSystemOptionsOld.setPreferredSubscriberIdType((slfSystemOptions.getPreferredSubscriberIdType()!=null)?
+						slfSystemOptions.getPreferredSubscriberIdType():
+							slfSystemOptionsOld.getPreferredSubscriberIdType());
+				slfSystemOptionsOld.setSlfFeatureStatus((slfSystemOptions.getSlfFeatureStatus()!=null)?
+						slfSystemOptions.getSlfFeatureStatus():
+							slfSystemOptionsOld.getSlfFeatureStatus());
+				
+				if(slfSystemOptions.getSlfHostConfig()!=null) {
+					Collections.sort(slfSystemOptions.getSlfHostConfig());
+					slfSystemOptionsOld.setSlfHostConfig(slfSystemOptions.getSlfHostConfig());
+				}
+				else {
+					slfSystemOptionsOld.setSlfHostConfig(slfSystemOptionsOld.getSlfHostConfig());
+				}
+				
+				slfSystemOptionsOld.setSlfHostConfig((slfSystemOptions.getSlfHostConfig()!=null)?
+						slfSystemOptions.getSlfHostConfig():
+							slfSystemOptionsOld.getSlfHostConfig());
+				slfSystemOptionsOld.setRerouteOnResponseHttpStatusCodes((slfSystemOptions.getRerouteOnResponseHttpStatusCodes()!=null)?
+						slfSystemOptions.getRerouteOnResponseHttpStatusCodes():
+							slfSystemOptionsOld.getRerouteOnResponseHttpStatusCodes());
+				
+				nrfSystemOptionsOld.setSlfSystemOptions(slfSystemOptionsOld);
+
+			}
+			
+			if(nrfSystemOptions.getForwardingSystemOptions()!=null) {
+				ForwardingSystemOptions forwardingSystemOptions = nrfSystemOptions.getForwardingSystemOptions();
+				ForwardingSystemOptions forwardingSystemOptionsOld = nrfSystemOptionsOld.getForwardingSystemOptions();
+				
+				forwardingSystemOptionsOld.setAccessTokenForwardingStatus((forwardingSystemOptions.getAccessTokenForwardingStatus()!=null)?
+						forwardingSystemOptions.getAccessTokenForwardingStatus():
+							forwardingSystemOptionsOld.getAccessTokenForwardingStatus());
+				forwardingSystemOptionsOld.setDiscoveryForwardingStatus((forwardingSystemOptions.getDiscoveryForwardingStatus()!=null)?
+						forwardingSystemOptions.getDiscoveryForwardingStatus():
+							forwardingSystemOptionsOld.getDiscoveryForwardingStatus());
+				forwardingSystemOptionsOld.setProfileRetreivalForwardingStatus((forwardingSystemOptions.getProfileRetreivalForwardingStatus()!=null)?
+						forwardingSystemOptions.getProfileRetreivalForwardingStatus():
+							forwardingSystemOptionsOld.getProfileRetreivalForwardingStatus());
+				forwardingSystemOptionsOld.setSubscriptionForwardingStatus((forwardingSystemOptions.getSubscriptionForwardingStatus()!=null)?
+						forwardingSystemOptions.getSubscriptionForwardingStatus():
+							forwardingSystemOptionsOld.getSubscriptionForwardingStatus());
+				
+				if(forwardingSystemOptions.getNrfHostConfig()!=null) {
+					Collections.sort(forwardingSystemOptions.getNrfHostConfig());
+					forwardingSystemOptionsOld.setNrfHostConfig(forwardingSystemOptions.getNrfHostConfig());
+				}
+				else {
+					forwardingSystemOptionsOld.setNrfHostConfig(forwardingSystemOptionsOld.getNrfHostConfig());
+				}
+				
+				forwardingSystemOptionsOld.setNrfRerouteOnResponseHttpStatusCodes((forwardingSystemOptions.getNrfRerouteOnResponseHttpStatusCodes()!=null)?
+						forwardingSystemOptions.getNrfRerouteOnResponseHttpStatusCodes():
+							forwardingSystemOptionsOld.getNrfRerouteOnResponseHttpStatusCodes());
+						
+				nrfSystemOptionsOld.setForwardingSystemOptions(forwardingSystemOptionsOld);
+				
+			}
+			
+			if(nrfSystemOptions.getGeoRedundancySystemOptions()!=null) {
+				GeoRedundancySystemOptions geoRedundancySystemOptions = nrfSystemOptions.getGeoRedundancySystemOptions();
+				GeoRedundancySystemOptions geoRedundancySystemOptionsOld = nrfSystemOptionsOld.getGeoRedundancySystemOptions();
+				geoRedundancySystemOptionsOld.setGeoRedundancyFeatureStatus((geoRedundancySystemOptions.getGeoRedundancyFeatureStatus()!=null)?
+						geoRedundancySystemOptions.getGeoRedundancyFeatureStatus():
+							geoRedundancySystemOptionsOld.getGeoRedundancyFeatureStatus());
+				geoRedundancySystemOptionsOld.setReplicationLatency((geoRedundancySystemOptions.getReplicationLatency()!=null)?
+						geoRedundancySystemOptions.getReplicationLatency():
+							geoRedundancySystemOptionsOld.getReplicationLatency());
+				geoRedundancySystemOptionsOld.setMonitorNrfServiceStatusInterval((geoRedundancySystemOptions.getMonitorNrfServiceStatusInterval()!=null)?
+						geoRedundancySystemOptions.getMonitorNrfServiceStatusInterval():
+							geoRedundancySystemOptionsOld.getMonitorNrfServiceStatusInterval());
+				geoRedundancySystemOptionsOld.setMonitorDBReplicationStatusInterval((geoRedundancySystemOptions.getMonitorDBReplicationStatusInterval()!=null)?
+						geoRedundancySystemOptions.getMonitorDBReplicationStatusInterval():
+							geoRedundancySystemOptionsOld.getMonitorDBReplicationStatusInterval());
+
+				nrfSystemOptions.setGeoRedundancySystemOptions(geoRedundancySystemOptionsOld);
+			}
+			
+			if(nrfSystemOptions.getNfAuthenticationSystemOptions()!=null) {
+				NfAuthenticationSystemOptions nfAuthenticationSystemOptions = nrfSystemOptions.getNfAuthenticationSystemOptions();
+				NfAuthenticationSystemOptions nfAuthenticationSystemOptionsOld = nrfSystemOptionsOld.getNfAuthenticationSystemOptions();
+				nfAuthenticationSystemOptionsOld.setNfRegistrationAuthenticationStatus((nfAuthenticationSystemOptions.getNfRegistrationAuthenticationStatus()!=null)?
+						nfAuthenticationSystemOptions.getNfRegistrationAuthenticationStatus():
+							nfAuthenticationSystemOptionsOld.getNfRegistrationAuthenticationStatus());
+				nfAuthenticationSystemOptionsOld.setNfSubscriptionAuthenticationStatus((nfAuthenticationSystemOptions.getNfSubscriptionAuthenticationStatus()!=null)?
+						nfAuthenticationSystemOptions.getNfSubscriptionAuthenticationStatus():
+							nfAuthenticationSystemOptionsOld.getNfSubscriptionAuthenticationStatus());
+				nfAuthenticationSystemOptionsOld.setNfDiscoveryAuthenticationStatus((nfAuthenticationSystemOptions.getNfDiscoveryAuthenticationStatus()!=null)?
+						nfAuthenticationSystemOptions.getNfDiscoveryAuthenticationStatus():
+							nfAuthenticationSystemOptionsOld.getNfDiscoveryAuthenticationStatus());
+				nfAuthenticationSystemOptionsOld.setAccessTokenAuthenticationStatus((nfAuthenticationSystemOptions.getAccessTokenAuthenticationStatus()!=null)?
+						nfAuthenticationSystemOptions.getAccessTokenAuthenticationStatus():
+							nfAuthenticationSystemOptionsOld.getAccessTokenAuthenticationStatus());
+				nfAuthenticationSystemOptionsOld.setNfProfileRetrievalAuthenticationStatus((nfAuthenticationSystemOptions.getNfProfileRetrievalAuthenticationStatus()!=null)?
+						nfAuthenticationSystemOptions.getNfProfileRetrievalAuthenticationStatus():
+							nfAuthenticationSystemOptionsOld.getNfProfileRetrievalAuthenticationStatus());
+				nfAuthenticationSystemOptionsOld.setNfListRetrievalAuthenticationStatus((nfAuthenticationSystemOptions.getNfListRetrievalAuthenticationStatus()!=null)?
+						nfAuthenticationSystemOptions.getNfListRetrievalAuthenticationStatus():
+							nfAuthenticationSystemOptionsOld.getNfListRetrievalAuthenticationStatus());
+				nfAuthenticationSystemOptionsOld.setCheckIfNfIsRegistered((nfAuthenticationSystemOptions.getCheckIfNfIsRegistered()!=null)?
+						nfAuthenticationSystemOptions.getCheckIfNfIsRegistered():
+							nfAuthenticationSystemOptionsOld.getCheckIfNfIsRegistered());
+				
+				if(nfAuthenticationSystemOptions.getNfAuthenticationErrorResponses()!=null) {
+					List<ErrorInfo> nfAuthenticationErrorInfoList = nfAuthenticationSystemOptions.getNfAuthenticationErrorResponses();
+					for (ErrorInfo nfAuthenticationErrorInfoNew : nfAuthenticationErrorInfoList) {
+						List<ErrorInfo> nfAuthenticationErrorInfoListOld = nfAuthenticationSystemOptionsOld.getNfAuthenticationErrorResponses();
+						for(ErrorInfo nfAuthenticationErrorInfoOld : nfAuthenticationErrorInfoListOld) {
+							if(nfAuthenticationErrorInfoOld.getErrorCondition().equals(nfAuthenticationErrorInfoNew.getErrorCondition())) {
+								nfAuthenticationErrorInfoOld.setErrorCode((nfAuthenticationErrorInfoNew.getErrorCode()!=null)?
+										nfAuthenticationErrorInfoNew.getErrorCode():nfAuthenticationErrorInfoOld.getErrorCode());
+								nfAuthenticationErrorInfoOld.setErrorResponse((nfAuthenticationErrorInfoNew.getErrorResponse()!=null)?
+										nfAuthenticationErrorInfoNew.getErrorResponse():nfAuthenticationErrorInfoOld.getErrorResponse());	
+								nfAuthenticationErrorInfoOld.setRedirectUrl((nfAuthenticationErrorInfoNew.getRedirectUrl()!=null)?
+										nfAuthenticationErrorInfoNew.getRedirectUrl():nfAuthenticationErrorInfoOld.getRedirectUrl());		
+								nfAuthenticationErrorInfoOld.setRetryAfter((nfAuthenticationErrorInfoNew.getRetryAfter()!=null)?
+										nfAuthenticationErrorInfoNew.getRetryAfter():nfAuthenticationErrorInfoOld.getRetryAfter());
+							}
+						}
+					}
+				}
+				
+				nrfSystemOptions.setNfAuthenticationSystemOptions(nfAuthenticationSystemOptionsOld);
+			}
+			
+		}
+		else {
+
+			if(nrfSystemOptions.getErrorResponses()!=null) {
+				ErrorResponses errorResponses = nrfSystemOptions.getErrorResponses();
+				ErrorResponses errorResponsesOld=nrfSystemOptionsOld.getErrorResponses();
+				if(errorResponses.getSlfErrorResponses()!=null) {
+					List<ErrorInfo> errorInfoList=errorResponses.getSlfErrorResponses();
+					for (ErrorInfo errorInfoNew : errorInfoList){
+						List<ErrorInfo> errorInfoListOld=errorResponsesOld.getSlfErrorResponses();  
+						for(ErrorInfo errorInfoOld : errorInfoListOld ) {
+							if(errorInfoOld.getErrorCondition().equals(errorInfoNew.getErrorCondition())){
+								errorInfoOld.setErrorCode((errorInfoNew.getErrorCode()!=null)?
+										errorInfoNew.getErrorCode():errorInfoOld.getErrorCode());
+								errorInfoOld.setErrorResponse((errorInfoNew.getErrorResponse()!=null)?
+										errorInfoNew.getErrorResponse():errorInfoOld.getErrorResponse());
+								errorInfoOld.setErrorDetectionResultCode((errorInfoNew.getErrorDetectionResultCode()!=null)?
+										errorInfoNew.getErrorDetectionResultCode():errorInfoOld.getErrorDetectionResultCode());
+								errorInfoOld.setUseErrorCodeReturned((errorInfoNew.getUseErrorCodeReturned()!=null)?
+										errorInfoNew.getUseErrorCodeReturned():errorInfoOld.getUseErrorCodeReturned());
+									
+							}
+						}
+					}
+				}
+				if(errorResponses.getNrfForwardingErrorResponses()!=null) {
+					List<ErrorInfo> nrfForwardingErrorInfoList=errorResponses.getNrfForwardingErrorResponses();
+					for (ErrorInfo nrfForwardingErrorInfoNew : nrfForwardingErrorInfoList){
+						List<ErrorInfo> nrfForwardingErrorInfoListOld=errorResponsesOld.getNrfForwardingErrorResponses();  
+						for(ErrorInfo nrfForwardingErrorInfoOld : nrfForwardingErrorInfoListOld ) {
+							if(nrfForwardingErrorInfoOld.getErrorCondition().equals(nrfForwardingErrorInfoNew.getErrorCondition())){
+								nrfForwardingErrorInfoOld.setErrorCode((nrfForwardingErrorInfoNew.getErrorCode()!=null)?
+										nrfForwardingErrorInfoNew.getErrorCode():nrfForwardingErrorInfoOld.getErrorCode());
+								nrfForwardingErrorInfoOld.setErrorResponse((nrfForwardingErrorInfoNew.getErrorResponse()!=null)?
+										nrfForwardingErrorInfoNew.getErrorResponse():nrfForwardingErrorInfoOld.getErrorResponse());			
+							}
+						}
+					}
+				}
+				
+				/*
+				if(errorResponses.getGeneralErrorResponses()!=null) {
+					List<ErrorInfo> generalErrorInfoList=errorResponses.getGeneralErrorResponses();
+					for (ErrorInfo generalErrorInfoNew : generalErrorInfoList){
+						List<ErrorInfo> generalErrorInfoListOld=errorResponsesOld.getGeneralErrorResponses();  
+						for(ErrorInfo generalErrorInfoOld : generalErrorInfoListOld ) {
+							if(generalErrorInfoOld.getErrorCondition().equals(generalErrorInfoNew.getErrorCondition())){
+								generalErrorInfoOld.setErrorCode((generalErrorInfoNew.getErrorCode()!=null)?
+										generalErrorInfoNew.getErrorCode():generalErrorInfoOld.getErrorCode());
+								generalErrorInfoOld.setErrorResponse((generalErrorInfoNew.getErrorResponse()!=null)?
+										generalErrorInfoNew.getErrorResponse():generalErrorInfoOld.getErrorResponse());	
+								generalErrorInfoOld.setRedirectURL((generalErrorInfoNew.getRedirectURL()!=null)?
+										generalErrorInfoNew.getRedirectURL():generalErrorInfoOld.getRedirectURL());		
+								generalErrorInfoOld.setRetryAfter((generalErrorInfoNew.getRetryAfter()!=null)?
+										generalErrorInfoNew.getRetryAfter():generalErrorInfoOld.getRetryAfter());								
+							}
+						}
+					}
+				}*/
+				nrfSystemOptionsOld.setErrorResponses(errorResponsesOld);
+
+			}
+		}
+		
+		
+		Date currDate = new Date();
+		nrfSystemOptionsOld.setLastUpdateTimestamp(currDate);
+        this.setLastUpdateTimestamp(currDate);
+        List<VersionedJsonDoc> versionedDocList = new ArrayList<>();
+		VersionedJsonDoc versionJsonDoc = new VersionedJsonDoc();
+		versionJsonDoc.setVersion(version);
+		versionJsonDoc.setDoc(nrfSystemOptionsOld.toString());
+		versionedDocList.add(versionJsonDoc);
+		VersionedJsonDocList versionJsonDocList = new VersionedJsonDocList();
+		versionJsonDocList.setVersionedJsonDocList(versionedDocList);
+		this.configurationJsonDocList = versionJsonDocList.toString();
+	}
+	
+	public NrfSystemOptionsDao(NrfSystemOptionsDao  oldNrfSystemOptionsDao, NrfEngSystemOptions nrfEngSystemOptions,String version)   {
+		this.configType = oldNrfSystemOptionsDao.configType;
+		this.recordOwner = oldNrfSystemOptionsDao.recordOwner;
+		NrfEngSystemOptions nrfEngSystemOptionsOld = (NrfEngSystemOptions) oldNrfSystemOptionsDao.toDomain_NrfEngSystemOptions(version);
+		if(this.configType.equals("OCNRF_ENG_SYSTEM_OPTIONS"))
+		{
+			//updating values for eng system config
+			if(nrfEngSystemOptions.getNfAccessTokenEngSystemOptions() != null) {
+				NfAccessTokenEngSystemOptions nfAccessToken = nrfEngSystemOptions.getNfAccessTokenEngSystemOptions();
+				NfAccessTokenEngSystemOptions nfAccessTokenOld = nrfEngSystemOptionsOld.getNfAccessTokenEngSystemOptions();
+				nfAccessTokenOld.setTokenExpiryTimeMaxRange((nfAccessToken.getTokenExpiryTimeMaxRange()!=null)?
+						nfAccessToken.getTokenExpiryTimeMaxRange():
+							nfAccessTokenOld.getTokenExpiryTimeMaxRange());
+				nfAccessTokenOld.setTokenExpiryTimeMinRange((nfAccessToken.getTokenExpiryTimeMinRange()!=null)?
+						nfAccessToken.getTokenExpiryTimeMinRange():
+							nfAccessTokenOld.getTokenExpiryTimeMinRange());
+				nfAccessTokenOld.setHttpClientPingInterval((nfAccessToken.getHttpClientPingInterval()!=null)?
+						nfAccessToken.getHttpClientPingInterval():
+							nfAccessTokenOld.getHttpClientPingInterval());
+				nrfEngSystemOptionsOld.setNfAccessTokenEngSystemOptions(nfAccessTokenOld);
+				
+			}
+			if(nrfEngSystemOptions.getGeneralEngSystemOptions() != null) {
+				GeneralEngSystemOptions generalEngSystemOptions = nrfEngSystemOptions.getGeneralEngSystemOptions();
+				GeneralEngSystemOptions generalEngSystemOptionsOld = nrfEngSystemOptionsOld.getGeneralEngSystemOptions();
+				generalEngSystemOptionsOld.setNfNotifyLoadThresholdMaxValue((generalEngSystemOptions.getNfNotifyLoadThresholdMaxValue() != null) ? generalEngSystemOptions.getNfNotifyLoadThresholdMaxValue() : generalEngSystemOptionsOld.getNfNotifyLoadThresholdMaxValue());
+				generalEngSystemOptionsOld.setNfNotifyLoadThresholdMinValue((generalEngSystemOptions.getNfNotifyLoadThresholdMinValue() != null) ? generalEngSystemOptions.getNfNotifyLoadThresholdMinValue() : generalEngSystemOptionsOld.getNfNotifyLoadThresholdMinValue());
+				generalEngSystemOptionsOld.setMaximumHopCountRangeMaxValue((generalEngSystemOptions.getMaximumHopCountRangeMaxValue()!=null)? generalEngSystemOptions.getMaximumHopCountRangeMaxValue():generalEngSystemOptionsOld.getMaximumHopCountRangeMaxValue());
+				generalEngSystemOptionsOld.setMaximumHopCountRangeMinValue((generalEngSystemOptions.getMaximumHopCountRangeMinValue()!=null)? generalEngSystemOptions.getMaximumHopCountRangeMinValue():generalEngSystemOptionsOld.getMaximumHopCountRangeMinValue());
+				generalEngSystemOptionsOld.setMaxEventRetentionTime((generalEngSystemOptions.getMaxEventRetentionTime()!=null)? generalEngSystemOptions.getMaxEventRetentionTime(): generalEngSystemOptionsOld.getMaxEventRetentionTime());
+				generalEngSystemOptionsOld.setNfHeartBeatMissAllowedMinValue(nfHeartBeatMissAllowedMinValue);((generalEngSystemOptions.getRetryAfterMinValue()!=null) ? generalEngSystemOptions.getRetryAfterMinValue() : generalEngSystemOptionsOld.getRetryAfterMinValue());
+				generalEngSystemOptionsOld.setRetryAfterMaxValue((generalEngSystemOptions.getRetryAfterMaxValue()!=null) ? generalEngSystemOptions.getRetryAfterMaxValue() : generalEngSystemOptionsOld.getRetryAfterMaxValue());
+				if (generalEngSystemOptions.getRetryAfterErrorCodes()!=null && !generalEngSystemOptions.getRetryAfterErrorCodes().isEmpty()) {
+					List<String> retryAfterErrorCodes = generalEngSystemOptions.getRetryAfterErrorCodes();
+					List<String> updatedRetryAfterErrorCodes = new ArrayList<String>();
+					//Updating only umbrella value of error in db, if present
+					if (retryAfterErrorCodes.contains("3xx")) {
+						retryAfterErrorCodes = retryAfterErrorCodes.stream().filter(str -> !str.startsWith("3")).collect(Collectors.toList());
+						updatedRetryAfterErrorCodes.add("3xx");
+					}
+					if (retryAfterErrorCodes.contains("4xx")) {
+						retryAfterErrorCodes = retryAfterErrorCodes.stream().filter(str -> !str.startsWith("4")).collect(Collectors.toList());
+						updatedRetryAfterErrorCodes.add("4xx");
+					}
+					if (retryAfterErrorCodes.contains("5xx")) {
+						retryAfterErrorCodes = retryAfterErrorCodes.stream().filter(str -> !str.startsWith("5")).collect(Collectors.toList());
+						updatedRetryAfterErrorCodes.add("5xx");
+					}
+					updatedRetryAfterErrorCodes.addAll(retryAfterErrorCodes);
+					generalEngSystemOptionsOld.setRetryAfterErrorCodes(updatedRetryAfterErrorCodes);
+				}
+				if (generalEngSystemOptions.getRedirectUrlErrorCodes()!=null && !generalEngSystemOptions.getRedirectUrlErrorCodes().isEmpty()) {
+					List<String> redirectURLErrorCodes = generalEngSystemOptions.getRedirectUrlErrorCodes();
+					List<String> updatedRedirectURLErrorCodes = new ArrayList<String>();
+					//Updating only umbrella value of error in db, if present
+					if (redirectURLErrorCodes.contains("3xx")) {
+						redirectURLErrorCodes = redirectURLErrorCodes.stream().filter(str -> !str.startsWith("3")).collect(Collectors.toList());
+						updatedRedirectURLErrorCodes.add("3xx");
+					}
+					if (redirectURLErrorCodes.contains("4xx")) {
+						redirectURLErrorCodes = redirectURLErrorCodes.stream().filter(str -> !str.startsWith("4")).collect(Collectors.toList());
+						updatedRedirectURLErrorCodes.add("4xx");
+					}
+					if (redirectURLErrorCodes.contains("5xx")) {
+						redirectURLErrorCodes = redirectURLErrorCodes.stream().filter(str -> !str.startsWith("5")).collect(Collectors.toList());
+						updatedRedirectURLErrorCodes.add("5xx");
+					}
+					updatedRedirectURLErrorCodes.addAll(redirectURLErrorCodes);
+					generalEngSystemOptionsOld.setRedirectUrlErrorCodes(updatedRedirectURLErrorCodes);
+				}
+				nrfEngSystemOptionsOld.setGeneralEngSystemOptions(generalEngSystemOptionsOld);
+			}
+			if(nrfEngSystemOptions.getNfDiscoveryEngSystemOptions() != null) {
+				NfDiscoveryEngSystemOptions nfDiscoveryEngSystemOptions = nrfEngSystemOptions.getNfDiscoveryEngSystemOptions();
+				NfDiscoveryEngSystemOptions nfDiscoveryEngSystemOptionsOld = nrfEngSystemOptionsOld.getNfDiscoveryEngSystemOptions();
+				nfDiscoveryEngSystemOptionsOld.setResultLoadThresholdMaxValue((nfDiscoveryEngSystemOptions.getResultLoadThresholdMaxValue() != null) ? nfDiscoveryEngSystemOptions.getResultLoadThresholdMaxValue() : nfDiscoveryEngSystemOptionsOld.getResultLoadThresholdMinValue());
+				nfDiscoveryEngSystemOptionsOld.setResultLoadThresholdMinValue((nfDiscoveryEngSystemOptions.getResultLoadThresholdMinValue() != null) ? nfDiscoveryEngSystemOptions.getResultLoadThresholdMinValue() : nfDiscoveryEngSystemOptionsOld.getResultLoadThresholdMinValue());
+				nfDiscoveryEngSystemOptionsOld.setMaxRetriesToPeer((nfDiscoveryEngSystemOptions.getMaxRetriesToPeer() != null) ? nfDiscoveryEngSystemOptions.getMaxRetriesToPeer() : nfDiscoveryEngSystemOptionsOld.getMaxRetriesToPeer());
+				nfDiscoveryEngSystemOptionsOld.setProfilesCountInDiscoveryResponseMaxValue((nfDiscoveryEngSystemOptions.getProfilesCountInDiscoveryResponseMaxValue() != null) ? nfDiscoveryEngSystemOptions.getProfilesCountInDiscoveryResponseMaxValue() : nfDiscoveryEngSystemOptionsOld.getProfilesCountInDiscoveryResponseMaxValue());
+				nfDiscoveryEngSystemOptionsOld.setProfilesCountInDiscoveryResponseMinValue((nfDiscoveryEngSystemOptions.getProfilesCountInDiscoveryResponseMinValue() != null) ? nfDiscoveryEngSystemOptions.getProfilesCountInDiscoveryResponseMinValue() : nfDiscoveryEngSystemOptionsOld.getProfilesCountInDiscoveryResponseMinValue());
+				nfDiscoveryEngSystemOptionsOld.setValidityPeriodMaxValue((nfDiscoveryEngSystemOptions.getValidityPeriodMaxValue() != null) ? nfDiscoveryEngSystemOptions.getValidityPeriodMaxValue() : nfDiscoveryEngSystemOptionsOld.getValidityPeriodMaxValue());
+				nfDiscoveryEngSystemOptionsOld.setValidityPeriodMinValue((nfDiscoveryEngSystemOptions.getValidityPeriodMinValue() != null) ? nfDiscoveryEngSystemOptions.getValidityPeriodMinValue() : nfDiscoveryEngSystemOptionsOld.getValidityPeriodMinValue());
+				nfDiscoveryEngSystemOptionsOld.setHttpClientPingInterval((nfDiscoveryEngSystemOptions.getHttpClientPingInterval()!=null)?nfDiscoveryEngSystemOptions.getHttpClientPingInterval():nfDiscoveryEngSystemOptionsOld.getHttpClientPingInterval());
+				nrfEngSystemOptionsOld.setNfDiscoveryEngSystemOptions(nfDiscoveryEngSystemOptionsOld);
+			}
+			if(nrfEngSystemOptions.getNfRegistrationEngSystemOptions() != null) {
+				NfRegistrationEngSystemOptions nfRegistrationEngSystemOptions = nrfEngSystemOptions.getNfRegistrationEngSystemOptions();
+				NfRegistrationEngSystemOptions nfRegistrationEngSystemOptionsOld = nrfEngSystemOptionsOld.getNfRegistrationEngSystemOptions();
+				nfRegistrationEngSystemOptionsOld.setMaxRetriesToPeer((nfRegistrationEngSystemOptions.getMaxRetriesToPeer() != null) ? nfRegistrationEngSystemOptions.getMaxRetriesToPeer() : nfRegistrationEngSystemOptionsOld.getMaxRetriesToPeer());
+				nfRegistrationEngSystemOptionsOld.setRetryInterval((nfRegistrationEngSystemOptions.getRetryInterval() != null) ? nfRegistrationEngSystemOptions.getRetryInterval() : nfRegistrationEngSystemOptionsOld.getRetryInterval());
+				nfRegistrationEngSystemOptionsOld.setRetryOnErrorList((nfRegistrationEngSystemOptions.getRetryOnErrorList() != null) ? nfRegistrationEngSystemOptions.getRetryOnErrorList() : nfRegistrationEngSystemOptionsOld.getRetryOnErrorList());
+				nfRegistrationEngSystemOptionsOld.setHttpClientPingInterval((nfRegistrationEngSystemOptions.getHttpClientPingInterval()!=null)?nfRegistrationEngSystemOptions.getHttpClientPingInterval():nfRegistrationEngSystemOptionsOld.getHttpClientPingInterval());
+				nrfEngSystemOptionsOld.setNfRegistrationEngSystemOptions(nfRegistrationEngSystemOptionsOld);
+			}
+			if(nrfEngSystemOptions.getNfSubscriptionEngSystemOptions() != null) {
+				NfSubscriptionEngSystemOptions nfSubscriptionEngSystemOptions = nrfEngSystemOptions.getNfSubscriptionEngSystemOptions();
+				NfSubscriptionEngSystemOptions nfSubscriptionEngSystemOptionsOld = nrfEngSystemOptionsOld.getNfSubscriptionEngSystemOptions();
+				nfSubscriptionEngSystemOptionsOld.setMaxRetriesToPeer((nfSubscriptionEngSystemOptions.getMaxRetriesToPeer() != null) ? nfSubscriptionEngSystemOptions.getMaxRetriesToPeer() : nfSubscriptionEngSystemOptionsOld.getMaxRetriesToPeer());
+				nfSubscriptionEngSystemOptionsOld.setSubscriptionValidityDurationMaxValue((nfSubscriptionEngSystemOptions.getSubscriptionValidityDurationMaxValue() != null) ? nfSubscriptionEngSystemOptions.getSubscriptionValidityDurationMaxValue() : nfSubscriptionEngSystemOptionsOld.getSubscriptionValidityDurationMaxValue());
+				nfSubscriptionEngSystemOptionsOld.setSubscriptionValidityDurationMinValue((nfSubscriptionEngSystemOptions.getSubscriptionValidityDurationMinValue() != null) ? nfSubscriptionEngSystemOptions.getSubscriptionValidityDurationMinValue() : nfSubscriptionEngSystemOptionsOld.getSubscriptionValidityDurationMinValue());
+				nfSubscriptionEngSystemOptionsOld.setHttpClientPingInterval((nfSubscriptionEngSystemOptions.getHttpClientPingInterval()!=null)?nfSubscriptionEngSystemOptions.getHttpClientPingInterval():nfSubscriptionEngSystemOptionsOld.getHttpClientPingInterval());
+				nrfEngSystemOptionsOld.setNfSubscriptionEngSystemOptions(nfSubscriptionEngSystemOptionsOld);
+			}
+			if(nrfEngSystemOptions.getGeoRedundancyEngSystemOptions() != null) {
+				GeoRedundancyEngSystemOptions geoRedundancyEngSystemOptions = nrfEngSystemOptions.getGeoRedundancyEngSystemOptions();
+				GeoRedundancyEngSystemOptions geoRedundancyEngSystemOptionsOld = nrfEngSystemOptionsOld.getGeoRedundancyEngSystemOptions();
+				geoRedundancyEngSystemOptionsOld.setReplicationLatencyMaxValue((geoRedundancyEngSystemOptions.getReplicationLatencyMaxValue() != null)?
+						geoRedundancyEngSystemOptions.getReplicationLatencyMaxValue():geoRedundancyEngSystemOptionsOld.getReplicationLatencyMaxValue());
+				geoRedundancyEngSystemOptionsOld.setReplicationLatencyMinValue((geoRedundancyEngSystemOptions.getReplicationLatencyMinValue() != null)?
+						geoRedundancyEngSystemOptions.getReplicationLatencyMinValue():geoRedundancyEngSystemOptionsOld.getReplicationLatencyMinValue());
+				geoRedundancyEngSystemOptionsOld.setMonitorNrfServiceStatusIntervalMaxValue((geoRedundancyEngSystemOptions.getMonitorNrfServiceStatusIntervalMaxValue() != null)?
+						geoRedundancyEngSystemOptions.getMonitorNrfServiceStatusIntervalMaxValue():geoRedundancyEngSystemOptionsOld.getMonitorNrfServiceStatusIntervalMaxValue());
+				geoRedundancyEngSystemOptionsOld.setMonitorNrfServiceStatusIntervalMinValue((geoRedundancyEngSystemOptions.getMonitorNrfServiceStatusIntervalMinValue() != null)?
+						geoRedundancyEngSystemOptions.getMonitorNrfServiceStatusIntervalMinValue():geoRedundancyEngSystemOptionsOld.getMonitorNrfServiceStatusIntervalMinValue());
+				geoRedundancyEngSystemOptionsOld.setMonitorDBReplicationStatusIntervalMinValue((geoRedundancyEngSystemOptions.getMonitorDBReplicationStatusIntervalMinValue() != null)?
+						geoRedundancyEngSystemOptions.getMonitorDBReplicationStatusIntervalMinValue():geoRedundancyEngSystemOptionsOld.getMonitorDBReplicationStatusIntervalMinValue());
+				geoRedundancyEngSystemOptionsOld.setMonitorDBReplicationStatusIntervalMaxValue((geoRedundancyEngSystemOptions.getMonitorDBReplicationStatusIntervalMaxValue() != null)?
+						geoRedundancyEngSystemOptions.getMonitorDBReplicationStatusIntervalMaxValue():geoRedundancyEngSystemOptionsOld.getMonitorDBReplicationStatusIntervalMaxValue());
+				nrfEngSystemOptionsOld.setGeoRedundancyEngSystemOptions(geoRedundancyEngSystemOptionsOld);				
+			}
+			
+			if(nrfEngSystemOptions.getNrfAuditorEngSystemOptions() != null) {
+				NrfAuditorEngSystemOptions nrfAuditorEngSystemOptions = nrfEngSystemOptions.getNrfAuditorEngSystemOptions();
+				NrfAuditorEngSystemOptions nrfAuditorEngSystemOptionsOld = nrfEngSystemOptionsOld.getNrfAuditorEngSystemOptions();
+				nrfAuditorEngSystemOptionsOld.setHttpClientPingInterval((nrfAuditorEngSystemOptions.getHttpClientPingInterval() != null) ? nrfAuditorEngSystemOptions.getHttpClientPingInterval() : nrfAuditorEngSystemOptionsOld.getHttpClientPingInterval());
+				nrfAuditorEngSystemOptionsOld.setMaxRetriesToPeer((nrfAuditorEngSystemOptions.getMaxRetriesToPeer() != null) ? nrfAuditorEngSystemOptions.getMaxRetriesToPeer() : nrfAuditorEngSystemOptionsOld.getMaxRetriesToPeer());
+				nrfAuditorEngSystemOptionsOld.setRetryInterval((nrfAuditorEngSystemOptions.getRetryInterval() != null) ? nrfAuditorEngSystemOptions.getRetryInterval() : nrfAuditorEngSystemOptionsOld.getRetryInterval());
+				nrfAuditorEngSystemOptionsOld.setRetryOnErrorList((nrfAuditorEngSystemOptions.getRetryOnErrorList() != null) ? nrfAuditorEngSystemOptions.getRetryOnErrorList() : nrfAuditorEngSystemOptionsOld.getRetryOnErrorList());
+				nrfEngSystemOptionsOld.setNrfAuditorEngSystemOptions(nrfAuditorEngSystemOptionsOld);
+			}
+			
+			if(nrfEngSystemOptions.getNfManagementEngSystemOptions() != null) {
+				NfManagementEngSystemOptions nfManagementEngSystemOptions = nrfEngSystemOptions.getNfManagementEngSystemOptions();
+				NfManagementEngSystemOptions nfManagementEngSystemOptionsOld = nrfEngSystemOptionsOld.getNfManagementEngSystemOptions();
+				nfManagementEngSystemOptionsOld.setMinAllowedHbRange((nfManagementEngSystemOptions.getMinAllowedHbRange() != null) ? nfManagementEngSystemOptions.getMinAllowedHbRange() : nfManagementEngSystemOptionsOld.getMinAllowedHbRange());
+				nfManagementEngSystemOptionsOld.setMaxAllowedHbRange((nfManagementEngSystemOptions.getMaxAllowedHbRange() != null) ? nfManagementEngSystemOptions.getMaxAllowedHbRange() : nfManagementEngSystemOptionsOld.getMaxAllowedHbRange());
+				nrfEngSystemOptionsOld.setNfManagementEngSystemOptions(nfManagementEngSystemOptionsOld);
+			}
+			
+		}else {
+			
+		
+		if(nrfEngSystemOptions.getErrorResponses()!=null) {
+			ErrorResponses errorResponses = nrfEngSystemOptions.getErrorResponses();
+			ErrorResponses errorResponsesOld=nrfEngSystemOptionsOld.getErrorResponses();
+			List<ErrorInfo> errorInfoList=errorResponses.getSlfErrorResponses();
+			for (ErrorInfo errorInfoNew : errorInfoList){
+				int counter = 0;
+				List<ErrorInfo> errorInfoListOld=errorResponsesOld.getSlfErrorResponses(); 
+				for(ErrorInfo errorInfoOld : errorInfoListOld ) {
+					if(errorInfoOld.getErrorCondition().equals(errorInfoNew.getErrorCondition())){
+						errorInfoOld.setErrorCode((errorInfoNew.getErrorCode()!=null)?
+								errorInfoNew.getErrorCode():errorInfoOld.getErrorCode());
+						errorInfoOld.setErrorResponse((errorInfoNew.getErrorResponse()!=null)?
+								errorInfoNew.getErrorResponse():errorInfoOld.getErrorResponse());
+						errorInfoOld.setErrorDetectionResultCode((errorInfoNew.getErrorDetectionResultCode()!=null)?
+								errorInfoNew.getErrorDetectionResultCode():errorInfoOld.getErrorDetectionResultCode());
+						errorInfoOld.setUseErrorCodeReturned((errorInfoNew.getUseErrorCodeReturned()!=null)?
+								errorInfoNew.getUseErrorCodeReturned():errorInfoOld.getUseErrorCodeReturned());
+						counter++;
+					}
+				}
+				if(counter == 0) {
+					errorInfoListOld.add(errorInfoNew);
+				}
+			}
+			nrfEngSystemOptionsOld.setErrorResponses(errorResponsesOld);
+		}
+		
+
+		}
+		
+		Date currDate = new Date();
+		nrfEngSystemOptionsOld.setLastUpdateTimestamp(currDate);
+        this.setLastUpdateTimestamp(currDate);
+        List<VersionedJsonDoc> versionedDocList = new ArrayList<>();
+		VersionedJsonDoc versionJsonDoc = new VersionedJsonDoc();
+		versionJsonDoc.setVersion(version);
+		versionJsonDoc.setDoc(nrfEngSystemOptionsOld.toString());
+		versionedDocList.add(versionJsonDoc);
+		VersionedJsonDocList versionJsonDocList = new VersionedJsonDocList();
+		versionJsonDocList.setVersionedJsonDocList(versionedDocList);
+		this.configurationJsonDocList = versionJsonDocList.toString();
+	}
+	
+
+
+
+
+	public Object toDomain(String version) {
+		
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		logMsg.clear();
+		logMsg.put("logMsg", "Entering toDomain function");
+		logMsg.put("version",version);
+		logger.trace(logMsg.toString());
+		
+		NrfSystemOptions nrfSystemOptions = null;
+		VersionedJsonDocList versionedJsonDocList = null;
+		try {
+			versionedJsonDocList = objectMapper.readValue(this.getConfigurationJsonDocList(), VersionedJsonDocList.class);
+		} catch (Exception exception) {
+			ProblemDetails prob = ProblemDetails.forInternalError();
+			prob.setCause("Could not fetch VersionedJsonDocList due to an unexpected error.");
+			logMsg.clear();
+			logMsg.put("logMsg", exception.getMessage());
+			logMsg.put("stackTrace", Arrays.toString(exception.getStackTrace()));
+			logMsg.put("versionJsonDocList",this.getConfigurationJsonDocList());
+			logger.error(logMsg.toString());
+			throw new NrfException(prob);
+		}
+		List<VersionedJsonDoc> versionedDocList = versionedJsonDocList.getVersionedJsonDocList();
+		if (!versionedDocList.isEmpty()) {
+			Iterator<VersionedJsonDoc> versionedDocListIterator = versionedDocList.iterator();
+			VersionedJsonDoc jsonDoc;
+			while (versionedDocListIterator.hasNext()) {
+				jsonDoc = versionedDocListIterator.next();
+				if (jsonDoc.getVersion().equals(version)) {
+					logMsg.clear();
+					logMsg.put("logMsg", "Record");
+					logMsg.put("VersionedJsonDoc",jsonDoc.toString());
+					logger.trace(logMsg.toString());
+					try {
+						nrfSystemOptions = objectMapper.readValue(jsonDoc.getDoc(),
+								NrfSystemOptions.class);
+					} catch (Exception e) {
+						ProblemDetails prob = ProblemDetails.forInternalError();
+						prob.setCause("Could not fetch NrfSystemOptions due to an unexpected error.");
+						logMsg.clear();
+						logMsg.put("logMsg", e.getMessage());
+						logMsg.put("stackTrace",Arrays.toString(e.getStackTrace()));
+						logMsg.put("jsonDoc", jsonDoc.getDoc());
+						logger.error(logMsg.toString());
+						throw new NrfException(prob);
+					}
+
+				}
+			}
+		}
+		logMsg.clear();
+		logMsg.put("logMsg", "Exit from toDomain function");
+		logMsg.put("version",version);
+		logMsg.put("Doc", nrfSystemOptions);
+		logger.trace(logMsg.toString());
+		return nrfSystemOptions;
+	}
+	
+	public Object toDomain_NrfEngSystemOptions(String version) {
+		
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		logMsg.clear();
+		logMsg.put("logMsg", "Entering toDomain_NrfEngSystemOptions function");
+		logMsg.put("version",version);
+		logger.trace(logMsg.toString());
+		
+		NrfEngSystemOptions nrfEngSystemOptions = null;
+		VersionedJsonDocList versionedJsonDocList = null;
+		try {
+			versionedJsonDocList = objectMapper.readValue(this.getConfigurationJsonDocList(), VersionedJsonDocList.class);
+		} catch (Exception exception) {
+			ProblemDetails prob = ProblemDetails.forInternalError();
+			prob.setCause("Could not fetch VersionedJsonDocList due to an unexpected error.");
+			logMsg.clear();
+			logMsg.put("logMsg", exception.getMessage());
+			logMsg.put("stackTrace", Arrays.toString(exception.getStackTrace()));
+			logMsg.put("versionJsonDocList",this.getConfigurationJsonDocList());
+			logger.error(logMsg.toString());
+			throw new NrfException(prob);
+		}
+		List<VersionedJsonDoc> versionedDocList = versionedJsonDocList.getVersionedJsonDocList();
+		if (!versionedDocList.isEmpty()) {
+			Iterator<VersionedJsonDoc> versionedDocListIterator = versionedDocList.iterator();
+			VersionedJsonDoc jsonDoc;
+			while (versionedDocListIterator.hasNext()) {
+				jsonDoc = versionedDocListIterator.next();
+				if (jsonDoc.getVersion().equals(version)) {
+					logMsg.clear();
+					logMsg.put("logMsg", "Record");
+					logMsg.put("VersionedJsonDoc",jsonDoc.toString());
+					logger.trace(logMsg.toString());
+					try {
+						nrfEngSystemOptions = objectMapper.readValue(jsonDoc.getDoc(),
+								NrfEngSystemOptions.class);
+					} catch (Exception e) {
+						ProblemDetails prob = ProblemDetails.forInternalError();
+						prob.setCause("Could not fetch NrfEngSystemOptions due to an unexpected error.");
+						logMsg.clear();
+						logMsg.put("logMsg", e.getMessage());
+						logMsg.put("stackTrace",Arrays.toString(e.getStackTrace()));
+						logMsg.put("jsonDoc", jsonDoc.getDoc());
+						logger.error(logMsg.toString());
+						throw new NrfException(prob);
+					}
+
+				}
+			}
+		}
+		logMsg.clear();
+		logMsg.put("logMsg", "Exit from toDomain_NrfEngSystemOptions function");
+		logMsg.put("version",version);
+		logMsg.put("Doc", nrfEngSystemOptions);
+		logger.trace(logMsg.toString());
+		return nrfEngSystemOptions;
+	}
+
+
+	public long getLastUpdateTimestamp() {
+		return lastUpdateTimestamp;
+	}
+
+	public void setLastUpdateTimestamp(Object lastUpdateTimestamp) {
+		if(lastUpdateTimestamp instanceof Date) {
+			this.lastUpdateTimestamp = EpochTime.fetchEpochFromDate((Date) lastUpdateTimestamp);
+		}else{
+			this.lastUpdateTimestamp = (long)lastUpdateTimestamp;
+		}
+	}
+
+	public String getConfigType() {
+		return configType;
+	}
+
+	public void setConfigType(String configType) {
+		this.configType = configType;
+	}
+
+	public String getRecordOwner() {
+		return recordOwner;
+	}
+
+	public void setRecordOwner(String recordOwner) {
+		this.recordOwner = recordOwner;
+	}
+
+	public String getConfigurationJsonDocList() {
+		return configurationJsonDocList;
+	}
+
+	public void setConfigurationJsonDocList(String configurationJsonDocList) {
+		this.configurationJsonDocList = configurationJsonDocList;
+	}
+
+	
+}

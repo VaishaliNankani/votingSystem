@@ -1,0 +1,35 @@
+package com.oracle.cgbu.cne.nrf.metrics;
+
+import org.springframework.context.annotation.Configuration;
+import org.springframework.stereotype.Component;
+import org.springframework.web.bind.annotation.RequestMethod;
+
+@Component
+@Configuration
+public class MetricsDimension {
+	
+	private RequestMethod method;
+	private String dbOperation;
+	private String serviceOperation;
+	public RequestMethod getMethod() {
+		return method;
+	}
+	public void setMethod(RequestMethod method) {
+		this.method = method;
+	}
+	public String getDbOperation() {
+		return dbOperation;
+	}
+	public void setDbOperation(String dbOperation) {
+		this.dbOperation = dbOperation;
+	}
+	public String getServiceOperation() {
+		return serviceOperation;
+	}
+	public void setServiceOperation(String serviceOperation) {
+		this.serviceOperation = serviceOperation;
+	}
+	
+	
+
+}

@@ -1,0 +1,479 @@
+// Copyright 2018 (C), Oracle and/or its affiliates. All rights reserved.
+
+package com.oracle.cgbu.cne.nrf.audit;
+
+import java.io.IOException;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.Date;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.ListIterator;
+import java.util.Map;
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.apache.logging.log4j.ThreadContext;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Component;
+import org.springframework.web.bind.annotation.RequestMethod;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.oracle.cgbu.cne.nrf.NrfException;
+import com.oracle.cgbu.cne.nrf.config.NrfConfigurations;
+import com.oracle.cgbu.cne.nrf.dao.NfInstance;
+import com.oracle.cgbu.cne.nrf.dao.NfInstancesRepository;
+import com.oracle.cgbu.cne.nrf.dao.NfStatusMonitor;
+import com.oracle.cgbu.cne.nrf.dao.NfStatusMonitorRepository;
+import com.oracle.cgbu.cne.nrf.dao.NrfSystemOptionsDao;
+import com.oracle.cgbu.cne.nrf.dao.NrfSystemOptionsRepository;
+import com.oracle.cgbu.cne.nrf.domain.EpochTime;
+import com.oracle.cgbu.cne.nrf.domain.Events;
+import com.oracle.cgbu.cne.nrf.domain.NFStatus;
+import com.oracle.cgbu.cne.nrf.domain.NfHeartBeat;
+import com.oracle.cgbu.cne.nrf.domain.NfProfile;
+import com.oracle.cgbu.cne.nrf.domain.NotificationData;
+import com.oracle.cgbu.cne.nrf.domain.NotificationEventType;
+import com.oracle.cgbu.cne.nrf.domain.NrfEngSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.NrfSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.ProblemDetails;
+import com.oracle.cgbu.cne.nrf.metrics.CommonNrfMetrics;
+import com.oracle.cgbu.cne.nrf.metrics.MetricsDimension;
+import com.oracle.cgbu.cne.nrf.service.NfUpgradeServiceImpl;
+import com.oracle.cgbu.cne.nrf.metrics.NrfMetrics;
+import com.oracle.cgbu.cne.nrf.service.NrfEventManager;
+import com.oracle.cgbu.cne.nrf.service.ReplicationStatus;
+import com.oracle.cgbu.cne.nrf.service.RestClient;
+
+import io.micrometer.core.instrument.Metrics;
+
+//import sun.jvm.hotspot.debugger.ThreadContext;
+
+@Component
+public class NfProfileAuditor extends Thread {
+	private Logger logger = LogManager.getLogger(getClass());
+	private static final  String VERSION = "v1";
+	
+	@Autowired
+	private NrfConfigurations config;
+	@Autowired
+	private NfStatusMonitorRepository hbRepo;
+	@Autowired
+	private NfInstancesRepository nfRepo;
+	@Autowired
+	RestClient restClient;
+	
+	@Autowired
+	private NfUpgradeServiceImpl nfUpgradeServiceImpl;
+	
+	@Autowired
+	CommonNrfMetrics commonNrfMetrics;
+	
+	@Autowired
+	NrfMetrics nrfMetrics;
+	
+	@Autowired
+	MetricsDimension metricsDimension;
+	
+	@Autowired
+	private NrfEventManager nrfEventManager;
+	
+	public MetricsDimension getMetricsDimension() {
+		return metricsDimension;
+	}
+
+	public void setMetricsDimension(MetricsDimension metricsDimension) {
+		this.metricsDimension = metricsDimension;
+	}
+
+	public CommonNrfMetrics getCommonNrfMetrics() {
+		return commonNrfMetrics;
+	}
+
+	public void setCommonNrfMetrics(CommonNrfMetrics commonNrfMetrics) {
+		this.commonNrfMetrics = commonNrfMetrics;
+	}
+
+	@Autowired
+	ObjectMapper om;
+	
+	@Autowired
+	private NrfSystemOptionsRepository nrfSystemOptionsRepository;
+	
+	private NrfSystemOptions nrfSystemOptions;
+	
+	private NrfEngSystemOptions nrfEngSystemOptions;
+	
+	private int numOfProfiles = 0;
+	private String serviceOperation="NrfAuditor";
+	private String FIND="find";
+	private String NF_STATUS_MONITOR="NfStatusMonitor";
+	private String NF_INSTANCES="NfInstances";
+	private String NRF_SYSTEMOPTIONS="NrfSystemOptions";
+	private String DELETE="delete";
+	private static String UPDATE="update";
+	
+	@Override
+	public void run() {
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		while (!AuditManager.stopAudit) {
+			if (!AuditManager.pauseAudit) {
+				// Fetch the latest NrfSystemOptions
+				try {
+					setNrfSystemAndEngineeringOptions();
+				}
+				catch(Exception e) {
+					logMsg.clear();
+					logMsg.put("logMsg", "Failed to load System Options. Skipping the audit cycle.");
+					logger.error(logMsg.toString());
+					continue;
+				}
+				
+				Duration maxSuspDuration = getNrfSystemOptions().getNfManagementOptions().getNfProfileSuspendDuration();
+				auditCycle(maxSuspDuration);
+				try {
+					Thread.sleep(config.getAudit().getNfProfileAuditInterval().toMillis());
+				} catch (InterruptedException e) {
+					logMsg.clear();
+					logMsg.put("logMsg", "An exception occured");
+					logMsg.put("stackTrace", e.toString());
+					logger.error(logMsg.toString());
+					break;
+				}
+			} else {
+				try {
+					logMsg.clear();
+					logMsg.put("logMsg", "Pausing NF Profile auditor as Nnrf_NfManagement service is down");
+					logger.warn(logMsg.toString());
+					Thread.sleep(1000);
+				} catch (InterruptedException e) {
+					logMsg.clear();
+					logMsg.put("logMsg", "An exception occured");
+					logMsg.put("stackTrace", e.toString());
+					logger.error(logMsg.toString());
+				}
+			}
+		}
+	}
+	
+	public void fillThreadContext(String ServiceOperation) {
+		String nrfTxId = "nrf-tx-" + (int)(Math.random()*Integer.MAX_VALUE);
+		ThreadContext.clearMap();
+		ThreadContext.put("nrfTxId", nrfTxId);
+		ThreadContext.put("subsystem",  ServiceOperation);
+		ThreadContext.put("hostname", System.getenv("HOSTNAME"));
+	}
+	
+	public void auditCycle(Duration maxSuspDuration) {
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		fillThreadContext("NfProfileAudit");
+		// Fetch the latest NrfSystemOptions
+		try {
+			setNrfSystemAndEngineeringOptions();
+		}
+		catch (Exception e) {
+			logMsg.clear();
+			logMsg.put("logMsg", "Failed to load System Options. Skipping the audit cycle.");
+			logger.error(logMsg.toString());
+			return;
+		}
+		maxSuspDuration = getNrfSystemOptions().getNfManagementOptions().getNfProfileSuspendDuration();
+		NotificationData notificationData = new NotificationData();
+		Date now = new Date();
+		Date timestamp = new Date(now.getTime() - maxSuspDuration.toMillis());
+
+		logMsg.clear();
+		logMsg.put("logMsg", "Find NFs suspended since timestamp and NFs that are deregistered");
+		logMsg.put("timestamp", timestamp);
+		logger.info(logMsg.toString());
+		List<NfStatusMonitor> hbList = null;
+		// Fetch all records that have been suspended for maxSuspDuration and those records whose NfStatus is 'DEREGISTERED'
+		try {
+			hbList = hbRepo.findSuspendedAndDeregisteredDeleteCandidates(config.getGlobalConfig().getNrfInstanceId(),
+					EpochTime.fetchEpochFromDate(timestamp));
+			commonNrfMetrics.pegNrfDbMetricsSuccessTotal(null, FIND, serviceOperation, NF_STATUS_MONITOR);
+		} catch (Exception e) {
+			commonNrfMetrics.pegNrfDbMetricsFailuresTotal(null, FIND, serviceOperation, e, NF_STATUS_MONITOR);
+		}
+		ListIterator<NfStatusMonitor> iter = hbList.listIterator();
+		numOfProfiles = hbList.size();
+		
+		logMsg.clear();
+		logMsg.put("logMsg", "NFs suspended for NfProfileSuspendDuration /  NFs whose Nfstatus is Deregistered.");
+		logMsg.put("Number of profiles", numOfProfiles);
+		logger.warn(logMsg.toString());
+		
+		while(iter.hasNext()) {
+			NfStatusMonitor hbRec = iter.next();
+			Boolean sendNotification = false;
+			Boolean markAsDeregistered = false;
+			List<NfStatusMonitor> records = null;
+			// check if any remote records exist for the NfInstance
+			try {
+				records = hbRepo.findHbRecordsOtherThanCurrentNRF(hbRec.getNfInstanceId(),config.getGlobalConfig().getNrfInstanceId());
+				commonNrfMetrics.pegNrfDbMetricsSuccessTotal(null, FIND, serviceOperation, NF_STATUS_MONITOR);
+			} catch (Exception e) {
+				commonNrfMetrics.pegNrfDbMetricsFailuresTotal(null, FIND, serviceOperation, e, NF_STATUS_MONITOR);
+				continue;
+			}
+			// No remote records exist for this NfInstance.
+			if (records.size() == 0) {
+			    // The record has been in 'SUSPENDED' state for maxSuspDuration. The record shall be deleted and notification shall be generated. 
+				if (hbRec.getNfStatus().equals(NFStatus.SUSPENDED)) {
+					logMsg.clear();
+					logMsg.put("logMsg", "NF suspended since time");
+					logMsg.put("nfInstanceId", hbRec.getNfInstanceId());
+					logMsg.put("suspended timestamp", hbRec.getSuspendedTimestamp());
+					logger.warn(logMsg.toString());
+					sendNotification = true;
+				}
+			} else if (Date.from(Instant.ofEpochMilli(records.get(0).getLastUpdateTimestamp()/1000)).before(Date.from(Instant.ofEpochMilli(hbRec.getLastUpdateTimestamp()/1000)))) {
+				// Remote records exist. Remote records are older than the given NRFs. 
+			    // The record cannot be deleted.
+				if(hbRec.getNfStatus().equals(NFStatus.SUSPENDED)) {
+					//The suspended record can't be deleted,instead will be marked as DEREGISTERED.
+					logMsg.clear();
+					logMsg.put("logMsg", "NF suspended since time");
+					logMsg.put("nfInstanceId", hbRec.getNfInstanceId());
+					logMsg.put("suspended timestamp", hbRec.getSuspendedTimestamp());
+					logger.warn(logMsg.toString());
+					sendNotification = true;
+					markAsDeregistered = true;
+				} else {
+				logMsg.clear();
+				logMsg.put("logMsg", "An older NfStatusMonitor record exists with same NfInstanceId, hence skipping deleting the record");
+				logMsg.put("nfInstanceId", hbRec.getNfInstanceId());
+				logMsg.put("Current record timestamp", hbRec.getLastUpdateTimestamp());
+				logMsg.put("New record timestamp", records.get(0).getLastUpdateTimestamp());
+				logger.warn(logMsg.toString());
+				iter.remove();
+				continue;
+				}
+			}
+
+			NfProfile profile = null;
+			String nfFqdn = null;
+			NfInstance nfInstance = null;
+
+            // Send Notification for those profiles who had nfStatus 'SUSPENDED' for maxSuspDuration
+			if (sendNotification) {
+				logMsg.clear();
+				logMsg.put("logMsg", "Trigger notifications for NfProfile");
+				logMsg.put("nfInstanceId", hbRec.getNfInstanceId());
+				logger.warn(logMsg.toString());
+				try {
+					nfInstance = nfRepo.findByNfInstanceIdAndRecordOwner(hbRec.getNfInstanceId(),
+							config.getGlobalConfig().getNrfInstanceId());
+					commonNrfMetrics.pegNrfDbMetricsSuccessTotal(null, FIND, serviceOperation, NF_INSTANCES);
+				} catch (Exception e) {
+					commonNrfMetrics.pegNrfDbMetricsFailuresTotal(null, FIND, serviceOperation, e, NF_INSTANCES);
+				}
+				if (nfInstance == null) {
+					continue;
+				}
+				String str = null;
+				try {
+					/* find version specific entry from VersionedJsonDocList */
+					str = nfUpgradeServiceImpl.findNfProfileWithVersion(VERSION, nfInstance);
+					profile = om.readValue(str, NfProfile.class);
+					if(profile != null)
+						nfFqdn = profile.getFqdn();
+				} catch (IOException e) {
+					logMsg.clear();
+					logMsg.put("logMsg", "An exception occured");
+					logMsg.put("stackTrace", e.toString());
+					logger.error(logMsg.toString());
+					logMsg.clear();
+					logMsg.put("logMsg", "Failed to read NF profile from json doc");
+					logMsg.put("NfProfileJsonDocList", nfInstance.getNfProfileJsonDocList());
+					logger.error(logMsg.toString());
+					iter.remove();
+					continue;
+				}
+				
+				notificationData.setEvent(NotificationEventType.NF_DEREGISTERED);
+				notificationData.setNfProfile(profile);
+				logMsg.clear();
+				logMsg.put("logMsg", "Sending NF_DEREGISTERED notification");
+				logMsg.put("Notification data", notificationData.toString());
+				logger.info(logMsg.toString());
+				restClient.setNrfEngSystemOptions(this.nrfEngSystemOptions);
+				restClient.sendNotificationEvent(notificationData);
+				logMsg.clear();
+				logMsg.put("logMsg", "Forced deregistered NF with profile");
+				logMsg.put("Heartbeat record", hbRec);
+				logMsg.put("Profile", profile);
+				logger.warn(logMsg.toString());
+			}
+			
+			if(markAsDeregistered) {
+				//As there are older records present with same NfInstanceId, we can't delete the record.
+				//Instead we can mark the record as DEREGISTERED
+				NfInstance nfDaoSaved = null;
+				NfStatusMonitor nfHbSaved = null;
+				logMsg.clear();
+				logMsg.put("logMsg", "Marking the SUSPENDED record as DEREGISTERED");
+				logMsg.put("NfInstanceId", hbRec.getNfInstanceId());
+
+				logMsg.put("Record owner", hbRec.getRecordOwner());
+				logger.warn(logMsg.toString());
+				profile.setNfStatus(NFStatus.DEREGISTERED);
+				/* modify version specific entry from VersionedJsonDocList */
+				nfInstance = nfUpgradeServiceImpl.modifyVersionSpecificNfInstanceData(VERSION, nfInstance, profile.toString());
+				nfInstance.setNfStatus(NFStatus.DEREGISTERED);
+				nfInstance.setLastUpdateTimestamp(new Date());
+				try {
+					nfDaoSaved = nfRepo.save(nfInstance);
+				}catch(Exception e) {						
+					commonNrfMetrics.pegNrfDbMetricsFailuresTotal(null, UPDATE, serviceOperation, e, NF_INSTANCES); 
+					logMsg.clear();
+					logMsg.put("logMsg", e.getMessage());
+					logMsg.put("stackTrace", (Object[]) e.getStackTrace());
+					logger.error(logMsg.toString());
+				}
+				if (nfDaoSaved != null) {
+					commonNrfMetrics.pegNrfDbMetricsSuccessTotal(null, UPDATE, serviceOperation,NF_INSTANCES);
+					logMsg.clear();
+					logMsg.put("logMsg", "NF status successfully updated to DEREGISTERED for NfInstance record");
+					logMsg.put("nfInstance", nfInstance);
+					logger.warn(logMsg.toString());
+				}else {
+					logMsg.clear();
+					logMsg.put("logMsg", "Could not update NF status for NfInstance record");
+					logMsg.put("nfInstance", nfInstance);
+					logger.error(logMsg.toString());
+					iter.remove();
+					continue;
+				}
+				logMsg.clear();
+				logMsg.put("logMsg","NF status changed, nfInstanceId=" +nfInstance.getNfInstanceId()+ ", Previous status=SUSPENDED, Current status=DEREGISTERED");
+				logger.warn(logMsg.toString());
+				hbRec.setNfStatus(NFStatus.DEREGISTERED);
+				hbRec.setLastUpdateTimestamp(new Date());
+				try {				
+					nfHbSaved = hbRepo.save(hbRec);
+				}catch(Exception e) {
+					commonNrfMetrics.pegNrfDbMetricsFailuresTotal(null, UPDATE, serviceOperation, e, NF_STATUS_MONITOR);
+					logMsg.clear();
+					logMsg.put("logMsg", e.getMessage());
+					logMsg.put("stackTrace", (Object[]) e.getStackTrace());
+					logger.error(logMsg.toString());
+				}
+				if(nfHbSaved!=null) {
+					commonNrfMetrics.pegNrfDbMetricsSuccessTotal(null,UPDATE, serviceOperation, NF_STATUS_MONITOR);
+					logMsg.clear();
+					logMsg.put("logMsg", "NF status successfully updated to DEREGISTERED for HeartBeat record");
+					logMsg.put("nfInstance", nfInstance);
+					logger.warn(logMsg.toString());
+					nrfEventManager.recordNfAuditEvent(hbRec, Events.NFPROFILE_AUDIT_DEREGISTER_EVENT, null);
+				}else {
+					logMsg.clear();
+					logMsg.put("logMsg", "Could not update NF status for HeartBeat record");
+					logMsg.put("nfInstance", nfInstance);
+					logger.error(logMsg.toString());
+				}
+				iter.remove();
+				continue;
+			}
+			// Delete the record from NFStatusMonitor and NfInstance table if replication status is up
+			if(!ReplicationStatus.getReplicationStatus()) {
+				try {
+					logMsg.clear();
+					logMsg.put("logMsg", "Attempting to delete NfInstance record");
+					logMsg.put("NfInstanceId", hbRec.getNfInstanceId());
+					logMsg.put("NrfInstanceId", config.getGlobalConfig().getNrfInstanceId());
+					logger.warn(logMsg.toString());
+					nfRepo.deleteByNfInstanceId(hbRec.getNfInstanceId(), config.getGlobalConfig().getNrfInstanceId());
+					commonNrfMetrics.pegNrfDbMetricsSuccessTotal(null, DELETE, serviceOperation, NF_INSTANCES);
+				} catch (Exception e) {
+					commonNrfMetrics.pegNrfDbMetricsFailuresTotal(null, DELETE, serviceOperation, e, NF_INSTANCES);
+				}
+				try {
+					logMsg.clear();
+					logMsg.put("LogMsg", "Attempting to delete HeartBeat record");
+					logMsg.put("NfInstanceId", hbRec.getNfInstanceId());
+					logMsg.put("NrfInstanceId", config.getGlobalConfig().getNrfInstanceId());
+					logger.warn(logMsg.toString());
+					hbRepo.delete(hbRec);
+					commonNrfMetrics.pegNrfDbMetricsSuccessTotal(null, DELETE, serviceOperation, NF_STATUS_MONITOR);
+					nrfMetrics.pegStaleNfDeleted(hbRec,nfFqdn);
+					//TODO
+					nrfEventManager.recordNfAuditEvent(hbRec, Events.NFPROFILE_AUDIT_DELETE_EVENT, null);
+				} catch (Exception e) {
+					commonNrfMetrics.pegNrfDbMetricsFailuresTotal(null, DELETE, serviceOperation, e, NF_STATUS_MONITOR);
+				}
+			}else {
+				logMsg.clear();
+				logMsg.put("LogMsg", "Cannot delete the record as replication status is down");
+				logMsg.put("NfInstanceId", hbRec.getNfInstanceId());
+				logMsg.put("NrfInstanceId", config.getGlobalConfig().getNrfInstanceId());
+				logger.warn(logMsg.toString());
+			}
+			iter.remove();
+		}
+		numOfProfiles = 0;
+	}
+	
+	public NrfConfigurations getConfig() {
+		return config;
+	}
+
+	public void setConfig(NrfConfigurations config) {
+		this.config = config;
+	}
+
+	public int getNumOfProfiles() {
+		return this.numOfProfiles;
+	}
+
+	public void setOm(ObjectMapper om) {
+		this.om = om;
+	}
+	
+	private NrfSystemOptions getNrfSystemOptions() {
+		return this.nrfSystemOptions;
+	}
+	
+	private void setNrfSystemAndEngineeringOptions() {
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		logMsg.clear();
+		logMsg.put("logMsg", "setNrfSystemOptions() called");
+		logger.debug(logMsg.toString());
+		List<NrfSystemOptionsDao>  nrfSystemOptionsDaoList = null;
+		try {
+
+			nrfSystemOptionsDaoList = this.nrfSystemOptionsRepository.findbyRecordOwner(config.getGlobalConfig().getNrfInstanceId());
+			if(nrfSystemOptionsDaoList != null) {
+				prepareNrfSystemAndEngineeringOptions(nrfSystemOptionsDaoList);
+			}else {
+				ProblemDetails prob = ProblemDetails.forInternalError();
+				prob.setCause("Could not fetch NrfSystemOptions or NrfEngSystemOptions due to an unexpected error.");
+				logMsg.clear();
+				logMsg.put("logMsg", "setNrfSystemOptions setNrfEngSystemOptions failed. Unable to fetch NrfSystemOptions or NrfEngSystemOptions");
+				logger.error(logMsg.toString());
+				throw new NrfException(prob);
+			}
+			
+			commonNrfMetrics.pegNrfDbMetricsSuccessTotal(null, FIND, serviceOperation, NRF_SYSTEMOPTIONS);
+
+		}
+		catch(Exception e) {
+			commonNrfMetrics.pegNrfDbMetricsFailuresTotal(null, FIND, serviceOperation, e, NRF_SYSTEMOPTIONS);
+			ProblemDetails prob = ProblemDetails.forInternalError();
+			prob.setCause("Could not fetch NrfSystemOptions or NrfEngSystemOptions due to an unexpected error.");
+			logMsg.clear();
+			logMsg.put("logMsg", "setNrfSystemOptions() or NrfEngSystemOptions failed with the following error");
+			logMsg.put("Error", e.getMessage());
+			logger.error(logMsg.toString());
+			throw new NrfException(prob);
+		}
+	}
+
+	public final NrfEngSystemOptions getNrfEngSystemOptions() {
+		return nrfEngSystemOptions;
+	}
+
+	public final void setNrfEngSystemOptions(NrfEngSystemOptions nrfEngSystemOptions) {
+		this.nrfEngSystemOptions = nrfEngSystemOptions;
+	}
+}

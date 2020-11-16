@@ -1,0 +1,205 @@
+// Copyright 2018 (C), Oracle and/or its affiliates. All rights reserved.
+
+package com.oracle.oci.votingservice.rest;
+
+import java.net.URI;
+import java.util.ArrayList;
+import java.util.Enumeration;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.ListIterator;
+import java.util.Map;
+
+import javax.servlet.http.HttpServletRequest;
+import javax.validation.Valid;
+
+import com.oracle.oci.votingservice.domain.ProblemDetails ;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.apache.logging.log4j.ThreadContext;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.validation.BindingResult;
+import org.springframework.validation.FieldError;
+import org.springframework.validation.ObjectError;
+import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RequestMethod;
+import org.springframework.web.bind.annotation.RestController;
+
+import com.fasterxml.jackson.annotation.JsonInclude.Include;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.oracle.cgbu.cne.nrf.rest.Link;
+import com.oracle.oci.votingservice.domain.CandidateData;
+import com.oracle.oci.votingservice.domain.RegistrationData;
+
+import com.oracle.oci.votingservice.domain.VoteData;
+import com.oracle.oci.votingservice.service.OciVotingServiceImpl;
+@RestController()
+public class OciVotingServiceApiController implements OciVotingServiceApi {
+	private static Logger logger = LogManager.getLogger(OciVotingServiceApiController.class);
+
+	private final ObjectMapper objectMapper;
+	
+	private final HttpServletRequest request;
+
+	@Autowired
+	OciVotingServiceImpl ociVotingService;
+	
+	@Value("${nrf.sub-svc.pod-name}")
+	private String podName;
+
+	@Autowired
+	public OciVotingServiceApiController(ObjectMapper objectMapper, HttpServletRequest request) {
+		this.objectMapper = objectMapper;
+		this.request = request;
+		this.objectMapper.setSerializationInclusion(Include.NON_NULL);
+		this.objectMapper.setSerializationInclusion(Include.NON_EMPTY);
+		
+	}
+
+	@Override
+	public ResponseEntity<Object> registerVoter(RegistrationData body, BindingResult bindingResult) {
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		logMsg.clear();
+		logMsg.put("logMsg", "Voter Registration request received");
+		logMsg.put("RegistrationData", body);
+		logger.info(logMsg.toString());
+		Object retVal = ociVotingService.createVoterRecord(body);
+		URI loc = null;
+		if(retVal instanceof RegistrationData)
+		{
+			logMsg.clear();
+			logMsg.put("logMsg", "Voter registration success!");
+			logMsg.put("retVal", retVal);
+			logger.info(logMsg.toString());
+			return ResponseEntity.created(loc).body((RegistrationData)retVal);
+		}
+		else
+		{
+			ProblemDetails probDetails = ProblemDetails.forInternalError();
+			logMsg.clear();
+			logMsg.put("logMsg", "Voter registration failed!");
+			logMsg.put("probDetails", probDetails);
+			logger.info(logMsg.toString());
+			return ResponseEntity.status(probDetails.getStatus()).
+					contentType(MediaType.APPLICATION_PROBLEM_JSON).body(probDetails);
+		}
+		
+	}	
+	
+
+	@Override
+	public ResponseEntity<Object> registerCandidate(CandidateData body, BindingResult bindingResult) {
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		logMsg.clear();
+		logMsg.put("logMsg", "Candidate Registration request received");
+		logMsg.put("CandidateData", body);
+		logger.info(logMsg.toString());
+		Object retVal = ociVotingService.createCandidateRecord(body);
+		URI loc = null;
+		if(retVal instanceof CandidateData)
+		{
+			logMsg.clear();
+			logMsg.put("logMsg", "Candidate registration success!");
+			logMsg.put("retVal", retVal);
+			logger.info(logMsg.toString());
+			return ResponseEntity.created(loc).body((RegistrationData)retVal);
+		}
+		else
+		{
+			ProblemDetails probDetails = ProblemDetails.forInternalError();
+			logMsg.clear();
+			logMsg.put("logMsg", "Candidate registration failed!");
+			logMsg.put("probDetails", probDetails);
+			logger.info(logMsg.toString());
+			return ResponseEntity.status(probDetails.getStatus()).
+					contentType(MediaType.APPLICATION_PROBLEM_JSON).body(probDetails);
+		}
+	}
+
+
+	@Override
+	public ResponseEntity<Object> castVote(String voterId, VoteData body, BindingResult bindingResult) 
+	{
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		logMsg.clear();
+		logMsg.put("logMsg", "request received for casting vote");
+		logMsg.put("VoteData", body);
+		logger.info(logMsg.toString());	
+		Object retVal = ociVotingService.updateVotes(body);
+		logMsg.clear();
+		logMsg.put("logMsg", "vote casted with success");
+		logMsg.put("VoteData", body);
+		logger.info(logMsg.toString());	
+		if(retVal instanceof VoteData)
+		{
+			return ResponseEntity.ok().body((VoteData)retVal);
+		}
+		else
+		{
+			ProblemDetails probDetails = ProblemDetails.forInternalError();
+			logMsg.clear();
+			logMsg.put("logMsg", "vote casting failed!");
+			logMsg.put("probDetails", probDetails);
+			logger.info(logMsg.toString());
+			return ResponseEntity.status(probDetails.getStatus()).
+					contentType(MediaType.APPLICATION_PROBLEM_JSON).body(probDetails);
+		}
+	}
+
+	@Override
+	public ResponseEntity<Object> getCandidates() {
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		ArrayList<CandidateData> candidateList = new ArrayList<CandidateData>(); 
+		logMsg.clear();
+		logMsg.put("logMsg", "request received for accessing candidate records");
+		logger.info(logMsg.toString());
+		
+		logMsg.clear();
+		logMsg.put("logMsg", "request received for accessing candidate records");
+		logger.info(logMsg.toString());	
+		return ResponseEntity.ok().header("content-type", "application/3gppHal+json").
+				body(candidateList);
+	}
+
+	@Override
+	public ResponseEntity<Object> getVoters() {
+		
+		return null;
+	}
+     /*This api will be called at the time of login*/
+	@Override
+	public ResponseEntity<Object> getVoterRegistrationData(String voterId) {
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		logMsg.clear();
+		logMsg.put("logMsg", "request received for accessing voter data");
+		logMsg.put("voterId", voterId);
+		logger.info(logMsg.toString());	
+		Object retVal = ociVotingService.getVoterRegistrationData(voterId);
+		if(retVal instanceof RegistrationData)
+		{
+			return ResponseEntity.ok().body((RegistrationData)retVal);
+
+		}
+		else
+		{
+			ProblemDetails probDetails = (ProblemDetails)retVal;
+			return ResponseEntity.status(probDetails.getStatus()).
+					contentType(MediaType.APPLICATION_PROBLEM_JSON).body(probDetails);
+		}
+	}
+
+	
+	
+			
+}

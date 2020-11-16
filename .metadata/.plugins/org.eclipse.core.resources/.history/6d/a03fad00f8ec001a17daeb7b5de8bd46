@@ -1,0 +1,68 @@
+buildscript {
+    ext {
+        springBootVersion="2.3.1.RELEASE"
+    }
+    repositories {
+    maven {
+            url "https://plugins.gradle.org/m2/"
+            url "http://cgbu-nexus-dev.us.oracle.com:8081/nexus/content/groups/public/"
+         }
+        mavenCentral()
+    }
+
+    dependencies {      
+        classpath "org.springframework.boot:spring-boot-gradle-plugin:${springBootVersion}"
+    }
+}
+
+repositories {
+    maven {
+            url "https://plugins.gradle.org/m2/"
+            url "http://cgbu-nexus-dev.us.oracle.com:8081/nexus/content/groups/public/"
+         }
+
+    mavenCentral()
+}
+
+dependencies {
+     implementation group: 'org.apache.logging.log4j', name: 'log4j-slf4j-impl', version: '2.13.3'
+     compile files('/tmp/upgrade-common.jar')     
+     compile group: 'com.google.code.gson', name: 'gson', version: '2.8.6'  
+
+}
+configurations.all {
+        exclude group: "org.springframework.boot", module:"spring-boot-starter-web"
+        exclude group: "com.squareup.okhttp3"
+        exclude group: "io.micrometer"
+        exclude group: "com.github.seancfoley"
+        exclude group: "io.springfox"
+        exclude group: "io.jsonwebtoken"
+        exclude group: "org.apache.httpcomponents"
+        exclude group: "javax.activation"
+        exclude group: "commons-beanutils"
+        exclude group: "com.google.guava"
+        exclude group: "commons-io"
+        exclude group: "io.kubernetes"
+        exclude group: "ch.vorburger.mariaDB4j"
+        exclude group: "com.h2database"
+        exclude group: "org.eclipse.jetty"
+            }
+sourceCompatibility = 14                               // for Java 14
+targetCompatibility = 14
+
+group 'nrf'
+version ''
+
+apply plugin: 'java'                                // plugin for java
+apply plugin: 'org.springframework.boot'            // plugin for spring boot framework
+apply plugin: "io.spring.dependency-management"
+apply plugin: 'application'
+mainClassName = 'com.oracle.cgbu.cne.nrf.hooks.ServiceHookEntryPoint'
+bootJar {
+    baseName = 'ocnrf-nrfauditor-upgrade'             // jar file name
+
+}
+
+
+
+

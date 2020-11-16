@@ -1,0 +1,489 @@
+// Copyright 2018 (C), Oracle and/or its affiliates. All rights reserved.
+
+package com.oracle.cgbu.cne.nrf.rest;
+
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.ListIterator;
+import java.util.Map;
+
+import javax.servlet.http.HttpServletRequest;
+import javax.validation.Valid;
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.apache.logging.log4j.ThreadContext;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.MediaType;
+import org.springframework.http.CacheControl;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.validation.BindingResult;
+import org.springframework.validation.FieldError;
+import org.springframework.validation.ObjectError;
+import org.springframework.web.bind.annotation.ModelAttribute;
+import org.springframework.web.bind.annotation.RestController;
+
+import com.oracle.cgbu.cne.nrf.NrfException;
+import com.oracle.cgbu.cne.nrf.config.NrfConfigurations;
+import com.oracle.cgbu.cne.nrf.config.NrfSystemOptionsManager;
+import com.oracle.cgbu.cne.nrf.domain.AccessTokenReq;
+import com.oracle.cgbu.cne.nrf.domain.AccessTokenRsp;
+import com.oracle.cgbu.cne.nrf.domain.ErrorCondition;
+import com.oracle.cgbu.cne.nrf.domain.ErrorInfo;
+import com.oracle.cgbu.cne.nrf.domain.FeatureStatus;
+import com.oracle.cgbu.cne.nrf.domain.ForwardingData;
+import com.oracle.cgbu.cne.nrf.domain.GenericResponse;
+import com.oracle.cgbu.cne.nrf.domain.NfConfig;
+import com.oracle.cgbu.cne.nrf.domain.NfProfile;
+import com.oracle.cgbu.cne.nrf.domain.NrfEngSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.NrfSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.AccessTokenErr;
+import com.oracle.cgbu.cne.nrf.domain.ProblemDetails;
+import com.oracle.cgbu.cne.nrf.domain.UriScheme;
+import com.oracle.cgbu.cne.nrf.metrics.NrfMetrics;
+import com.oracle.cgbu.cne.nrf.service.AccessTokenService;
+import com.oracle.cgbu.cne.nrf.service.helper.ValidationHelper;
+
+@RestController()
+public class NFAccessTokenController implements NFAccessTokenApi{
+	
+	private static Logger logger = LogManager.getLogger(NFAccessTokenController.class);
+
+	private final HttpServletRequest request;
+	
+	@Autowired
+	private NrfMetrics nrfMetrics;
+	
+	@Autowired
+	private AccessTokenService nrfService;
+	
+	@Autowired
+	private NrfConfigurations nrfConfig;
+	
+	@Autowired
+    private NrfSystemOptionsManager nrfSystemOptionsManager;
+	
+	private NrfEngSystemOptions nrfEngSystemOptions;
+	
+	private NrfSystemOptions nrfSystemOptions;
+	
+	@Autowired
+	private ValidationHelper validationHelper;
+	
+	private static final String PRIMARY = "primary";
+	private static final String SECONDARY = "secondary";
+	public static final Integer HTTP_PORT = 80;
+	public static final Integer HTTPS_PORT = 443;
+	private static final  String VERSION = "v1";
+	private static final int PRIMARY_NRF_INDEX = 0;
+	private static final int SECONDARY_NRF_INDEX = 1;
+	
+	@Value("${nrf.access-token-svc.pod-name}")
+    private String podName;
+	
+	@Autowired
+	public NFAccessTokenController(HttpServletRequest request) {
+		this.request = request;
+	}
+	
+	@Override
+	public ResponseEntity<Object> accessToken(@Valid @ModelAttribute AccessTokenReq body, BindingResult bindingResult) {
+		fillThreadContext("accessToken");
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		setNrfSystemAndEngineeringOptions();
+		nrfService.setNrfSystemAndEngineeringOptions(nrfSystemOptions, nrfEngSystemOptions);
+		nrfMetrics.pegAccessTokenRequest(body);
+		ProblemDetails prob = ProblemDetails.forBadRequest();
+		long startTime = nrfMetrics.getCurrentTime();
+		if(bindingResult.hasErrors()) {
+			logMsg.clear();
+			logMsg.put("logMsg", "AccessTokenReq has errors");
+			logMsg.put("Error",bindingResult.getAllErrors());
+			logger.error(logMsg.toString());
+			AccessTokenErr err = handleBadRequest(bindingResult);
+			nrfMetrics.pegAccessTokenResponse(body, HttpStatus.valueOf(prob.getStatus()),startTime);
+			return ResponseEntity.status(prob.getStatus()).contentType(MediaType.APPLICATION_PROBLEM_JSON).body(err);
+		}
+		System.out.println("logs1");
+		logMsg.clear();
+		logMsg.put("logMsg", "Request to generate access token received with AccessTokenReq body.");
+		logMsg.put("AccessTokenReq",body);
+		logger.info(logMsg.toString());
+		
+		Object response = null;
+		String reqNfType = null;
+		CacheControl cacheControl = CacheControl.noStore();
+		try{
+			ForwardingData forwardingData = new ForwardingData();
+			
+			if ((nrfSystemOptions.getForwardingSystemOptions()!=null) &&
+					(nrfSystemOptions.getForwardingSystemOptions().getAccessTokenForwardingStatus()
+																.equals(FeatureStatus.ENABLED))) {
+				logMsg.clear();
+				logMsg.put("logMsg", "Forwarding Feature Enabled.");
+				logger.info(logMsg.toString());
+				System.out.println("logs2");
+				List<NfConfig> nrfHostConfig = null;
+				nrfHostConfig = nrfSystemOptions.getForwardingSystemOptions().getNrfHostConfig();
+				forwardingData = this.parseViaHeader(this.request,nrfHostConfig);
+				if(forwardingData.isLoop()) {
+					ProblemDetails problemDetails = (ProblemDetails) getFailureResponseByErrorCondition(ErrorCondition.NRF_Forwarding_Loop_Detection);
+					logMsg.clear();
+					logMsg.put("logMsg", "Request to generate access token failed with errorCondition :"+
+							ErrorCondition.NRF_Forwarding_Loop_Detection);
+					logMsg.put("AccessTokenReq",body);
+					logMsg.put("problemDetails", problemDetails);
+					logger.error(logMsg.toString());
+					nrfMetrics.pegAccessTokenForwardingRequests(body);
+					nrfMetrics.pegAccessTokenForwardingResponses(body, problemDetails.getStatus(), "LoopDetected");
+					nrfMetrics.pegAccessTokenResponse(body, HttpStatus.valueOf(problemDetails.getStatus()),startTime);
+					return ResponseEntity.status(problemDetails.getStatus()).contentType(MediaType.APPLICATION_PROBLEM_JSON).body(problemDetails);
+				}
+				if(this.request.getHeader("requesterNfType")!=null) {
+					logMsg.clear();
+					logMsg.put("logMsg", "Received requesterNfType in request Header");
+					logMsg.put("requesterNfType", this.request.getHeader("requesterNfType"));
+					logger.info(logMsg.toString());
+					reqNfType = this.request.getHeader("requesterNfType");
+				}
+			}
+
+			//Set input parameters for validationHelper
+			validationHelper.setValidationParameters(forwardingData, this.request, nrfSystemOptions, nrfEngSystemOptions);
+			response = nrfService.generateAccessToken(body, forwardingData,reqNfType);
+
+			if (response instanceof AccessTokenRsp) {
+				response = (AccessTokenRsp)response;
+				logMsg.clear();
+				logMsg.put("logMsg", "Request to generate access token returned with response body.");
+				logMsg.put("AccessTokenRsp",response);
+				logger.info(logMsg.toString());
+			}
+			else if (response instanceof AccessTokenErr) {
+				response = (AccessTokenErr)response;
+				logMsg.clear();
+				logMsg.put("logMsg", "Request to generate access token returned with error.");
+				logMsg.put("AccessTokenErr",response);
+				logger.error(logMsg.toString());
+				nrfMetrics.pegAccessTokenResponse(body, HttpStatus.BAD_REQUEST,startTime);
+				return ResponseEntity.badRequest().cacheControl(cacheControl).header("Pragma", "no-cache").contentType(MediaType.APPLICATION_JSON).body(response);
+			}
+			else if (response instanceof GenericResponse) {
+				GenericResponse genericResponse = (GenericResponse)response;
+				HttpHeaders httpHeaders = genericResponse.getHeaders();
+				//Check if response from GenericResponse is of ProblemDetails or AccessTokenErr and return accordingly
+				
+				if(genericResponse.getResponse() instanceof ProblemDetails) {
+					ProblemDetails problemDetails = (ProblemDetails)genericResponse.getResponse();
+					logMsg.clear();
+					logMsg.put("logMsg", "Request to generate access token returned problemDetails.");
+					logMsg.put("problemDetails",problemDetails);
+					logger.error(logMsg.toString());
+					//Check for http headers to be sent in response
+					if(httpHeaders==null || httpHeaders.isEmpty()) {
+						return ResponseEntity.status(problemDetails.getStatus()).contentType(MediaType.APPLICATION_PROBLEM_JSON).body(problemDetails);
+					}else {
+						return ResponseEntity.status(problemDetails.getStatus()).headers(httpHeaders).contentType(MediaType.APPLICATION_PROBLEM_JSON).body(problemDetails);
+					}					
+				}
+				if(genericResponse.getResponse() instanceof AccessTokenErr) {
+					AccessTokenErr accessTokenErr = (AccessTokenErr)genericResponse.getResponse();
+					logMsg.clear();
+					logMsg.put("logMsg", "Request to generate access token returned with error.");
+					logMsg.put("AccessTokenErr",accessTokenErr);
+					logger.error(logMsg.toString());
+					//Check for http headers to be sent in response
+					if(httpHeaders==null || httpHeaders.isEmpty()) {
+						return ResponseEntity.badRequest().cacheControl(cacheControl).header("Pragma", "no-cache").contentType(MediaType.APPLICATION_JSON).body(accessTokenErr);
+					}else {
+						return ResponseEntity.badRequest().cacheControl(cacheControl).header("Pragma", "no-cache").headers(httpHeaders).contentType(MediaType.APPLICATION_JSON).body(accessTokenErr);
+					}
+				}				
+			}
+			else
+			{
+				ProblemDetails problemDetails = (ProblemDetails)response;
+				logMsg.clear();
+				logMsg.put("logMsg", "Request to generate access token returned problemDetails.");
+				logMsg.put("problemDetails",problemDetails);
+				logger.error(logMsg.toString());				
+				return ResponseEntity.status(problemDetails.getStatus()).contentType(MediaType.APPLICATION_PROBLEM_JSON).body(problemDetails);
+			}
+		}
+		catch (NrfException e) {
+			logMsg.clear();
+			logMsg.put("logMsg", "Exception occured");
+			logMsg.put("exception",e.getProbDetails());
+			logger.error(logMsg.toString());
+			nrfMetrics.pegAccessTokenResponse(body, HttpStatus.valueOf(e.getProbDetails().getStatus()),startTime);
+			nrfMetrics.pegAccessTokenRejected(body, "InternalError", HttpStatus.valueOf(e.getProbDetails().getStatus()));
+			return ResponseEntity.status(e.getProbDetails().getStatus()).contentType(MediaType.APPLICATION_PROBLEM_JSON).body(e.getProbDetails());
+		}
+		nrfMetrics.pegAccessTokenResponse(body, HttpStatus.OK,startTime);
+		return ResponseEntity.ok().cacheControl(cacheControl).header("Pragma", "no-cache").contentType(MediaType.APPLICATION_JSON).body(response);
+	}
+	
+	private AccessTokenErr handleBadRequest(BindingResult bindingResult) {
+		List<ObjectError> errList = bindingResult.getAllErrors();
+		ListIterator<ObjectError> it = errList.listIterator();
+		AccessTokenErr error = new AccessTokenErr();
+		while(it.hasNext()) {
+			ObjectError err = it.next();
+			if(err instanceof FieldError) {
+				FieldError fErr = (FieldError) err;
+				if(fErr.getField().equals("grant_type")) {
+					error.setError("invalid_grant");
+					error.setError_description(fErr.getDefaultMessage());
+					return error;
+				}
+				else if(fErr.getField().equals("scope")) {
+					error.setError("invalid_scope");
+					error.setError_description(fErr.getDefaultMessage());
+					return error;
+				}
+				else if(fErr.getField().equals("nfType") || fErr.getField().equals("targetNfType")) {
+					error.setError("invalid_request");
+					error.setError_description(fErr.getDefaultMessage());
+					return error;
+				}
+				else if(fErr.getField().contains("nfInstanceId") || fErr.getField().contains("targetPlmn") || fErr.getField().contains("requesterPlmn")) {
+					error.setError("invalid_request");
+					error.setError_description(fErr.getField() + " "+ fErr.getDefaultMessage());
+					return error;
+				}
+				else {
+					error.setError("invalid_request");
+					error.setError_description(fErr.getDefaultMessage());
+					return error;
+				}
+			}
+			else {
+				error.setError("invalid_request");
+				error.setError_description(err.getDefaultMessage());
+				return error;
+			}
+		}
+		return error;
+	}
+	
+	public void fillThreadContext(String ServiceOperation) {
+		String nrfTxId = "nrf-tx-" + (int)(Math.random()*Integer.MAX_VALUE);
+		ThreadContext.clearMap();
+		ThreadContext.put("nrfTxId", nrfTxId);
+		ThreadContext.put("subsystem",  ServiceOperation);
+		ThreadContext.put("hostname", System.getenv("HOSTNAME"));
+		
+		//extract ocLogId from ingressgateway request header and add it in threadcontext for logging
+		String ocLogId = extractUUID();
+		ThreadContext.put("ocLogId", ocLogId);
+	}
+	
+	private String generateTraceId() {
+        StringBuilder traceId = new StringBuilder().append(System.currentTimeMillis()).append("_")
+                        .append(Thread.currentThread().getId()).append("_").append(podName);
+        return traceId.toString();
+    }
+	
+	public String extractUUID() {
+    	Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+    	String ocLogIdGenerated = generateTraceId();
+    	if(this.request.getHeader("ocLogId") == null){
+    		logMsg.clear();
+    		logMsg.put("logMsg", "ocLogId not received in Header");
+    		logMsg.put("ocLogIdGenerated", ocLogIdGenerated);
+    		logger.warn(logMsg.toString());
+    		return ocLogIdGenerated;
+    	}
+		
+		String uuid = this.request.getHeader("ocLogId").toString();
+		
+		logMsg.clear();
+		logMsg.put("logMsg", "ocLogId extracted from Header");
+		logMsg.put("ocLogIdTriggered", uuid);
+		logMsg.put("ocLogIdGenerated", ocLogIdGenerated);
+		logger.info(logMsg.toString());
+		return uuid+":"+ocLogIdGenerated;
+	}
+	
+	public  ForwardingData parseViaHeader(HttpServletRequest request, List<NfConfig> nrfHostConfigList) {
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		
+		ForwardingData forwardingData = new ForwardingData();
+		forwardingData.setLoopDetected(false);
+		forwardingData.setIsForwardingPossible(true);
+		List<String> forwardedFrom = new ArrayList<String>();
+
+		if( this.request.getHeader("Via")!=null ) {
+
+			Iterator<String> viaHeadersList = this.request.getHeaders("Via").asIterator();			
+			while (viaHeadersList.hasNext()) {
+				String viaHeaderValue = viaHeadersList.next();
+				// separating [protocol-name"/"]protocol-version host[":"port] using whitespace
+				String[] viaheaderInfo = viaHeaderValue.split(" ");
+				String protocolVersion = viaheaderInfo[0];
+				String viaHeaderHost = viaheaderInfo[1];
+
+				// By default is HTTP, if protocol-name is empty in Via header
+				String protocolName = "HTTP";
+
+				// if [protocol-name"/"]protocol-version come where protocol-name is optional
+				if(viaheaderInfo[0].contains("/")) {
+					String[] protocolNameAndVersion =viaheaderInfo[0].trim().split("/");
+					protocolName = protocolNameAndVersion[0];
+					protocolVersion = protocolNameAndVersion[1];
+				}
+
+				// By default is HTTP_PORT (80), if port is empty in Via header
+				Integer viaHeaderPort = HTTP_PORT;
+
+				// if host[":"port] come where port is optional
+				if(viaheaderInfo[1].contains(":")) {
+					String[] retrieveHostAndPort =  viaheaderInfo[1].split(":");
+					viaHeaderHost = retrieveHostAndPort[0];
+					viaHeaderPort = Integer.parseInt(retrieveHostAndPort[1]);
+				}
+				logMsg.put("logMsg", "Via header received");
+				logMsg.put("protocolName", protocolName);
+				logMsg.put("protocolVersion", protocolVersion);
+				logMsg.put("host", viaHeaderHost);
+				logMsg.put("port", viaHeaderPort);
+				logger.info(logMsg.toString());
+
+				String selfHostName = nrfSystemOptions.getGeneralSystemOptions().getOcnrfEndPointHost();
+				Integer selfPort = nrfSystemOptions.getGeneralSystemOptions().getOcnrfEndPointPort();
+
+				if( viaHeaderHost.equals(selfHostName) && viaHeaderPort.toString().equals(selfPort.toString())) {
+					forwardingData.setLoopDetected(true);
+					break;
+				}
+
+				if(nrfHostConfigList!=null) {
+					// iterating over nrfHostConfigList to detect forwardedRequest
+					int iter = 0;
+					int nrfHostConfigListSize = nrfHostConfigList.size();
+					while(iter < nrfHostConfigListSize) {
+						Integer nrfHostConfigPort = nrfHostConfigList.get(iter).getPort();
+						String nrfHostConfigHostName = nrfHostConfigList.get(iter).getFqdn();
+						UriScheme uriScheme = nrfHostConfigList.get(iter).getScheme();
+						if (nrfHostConfigPort==null) {
+							if(uriScheme.equals(UriScheme.HTTP)) {
+								nrfHostConfigPort = HTTP_PORT;
+							}else if(uriScheme.equals(UriScheme.HTTPS)) {
+								nrfHostConfigPort = HTTPS_PORT;
+							}
+						}
+
+						if( nrfHostConfigHostName.equals(viaHeaderHost) && nrfHostConfigPort.toString().equals(viaHeaderPort.toString())
+								&& protocolVersion.equals("2.0")) {
+							logMsg.clear();
+							logMsg.put("logMsg", "forwardedRequest received");
+							logMsg.put("nrfHostConfigHostName", nrfHostConfigHostName);
+							logMsg.put("nrfHostConfigPort", nrfHostConfigPort);
+							logger.info(logMsg.toString());
+							
+							if (iter == PRIMARY_NRF_INDEX) {
+								//forwarded from primaryNrf
+								forwardedFrom.add(PRIMARY);
+								if (nrfHostConfigListSize == 1) {
+									//the request is forwarded from the only NRF configured.
+									forwardingData.setIsForwardingPossible(false);
+								}
+							}
+							else if (iter == SECONDARY_NRF_INDEX) {
+								//forwarded from Secondary NRF.
+								forwardedFrom.add(SECONDARY);
+							}
+
+						}
+						iter++;
+					}
+				}
+
+				if(forwardingData.isLoop()) {
+					logMsg.clear();
+					logMsg.put("logMsg", "Header contains loopDetected");
+					logger.warn(logMsg.toString());
+					break;
+				}
+			}
+			forwardingData.setViaHeader(this.request.getHeaders("via").asIterator());
+		}
+		forwardingData.setForwardedFrom(forwardedFrom);
+		if (forwardingData.isForwardedFromPrimaryNrf() == true && forwardingData.isForwardedFromSecondaryNrf() == true) {
+			//forwarded from both primary and secondary NRFs, so further forwarding is not possible.
+			forwardingData.setIsForwardingPossible(false);
+		}
+		logMsg.clear();
+		logMsg.put("logMsg","Exiting parseViaHeader");
+		logMsg.put("isForwardingPossible", forwardingData.isForwardingPossible());
+		logMsg.put("isForwardedFromPrimaryNrf", forwardingData.isForwardedFromPrimaryNrf());
+		logMsg.put("isForwardedFromSecondaryNrf", forwardingData.isForwardedFromSecondaryNrf());
+		logger.info(logMsg.toString());
+		return forwardingData;
+	}
+	
+	public Object getFailureResponseByErrorCondition(ErrorCondition errCondition ) 
+	{
+		List<ErrorInfo> errorInfoList = this.nrfSystemOptions
+				.getErrorResponses().getNrfForwardingErrorResponses();		
+		ProblemDetails prob = null;		
+		Object retVal = null;
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		logMsg.clear();
+		logMsg.put("logMsg", "Entering getFailureResponseByErrorCondition function");
+		logMsg.put("errCondition", errCondition);
+		logMsg.put("errorInfoList", errorInfoList);
+		logger.info(logMsg.toString());
+		for(ErrorInfo errorInfo : errorInfoList)
+		{
+			if(errorInfo.getErrorCondition().equals(errCondition))
+			{
+				logMsg.clear();
+				logMsg.put("logMsg","errorInfo selected for errCondition : "+errCondition );
+				logMsg.put("errorInfo.detectionResultCode", errorInfo.getErrorDetectionResultCode());
+				logMsg.put("errorInfo.errorCode", errorInfo.getErrorCode());
+				logMsg.put("errorInfo.errorResponse", errorInfo.getErrorResponse());
+				logger.info(logMsg.toString());
+				if( HttpStatus.valueOf(errorInfo.getErrorCode()).is2xxSuccessful())
+				{
+					/*case where 2xx is configured as errorCode*/
+					retVal = new ArrayList<NfProfile>();
+				}
+				else
+				{
+					prob = new ProblemDetails();
+					prob.setStatus((int)errorInfo.getErrorCode());
+					prob.setDetail(errorInfo.getErrorResponse());
+				    prob.setTitle(errorInfo.getErrorResponse());
+					prob.setCause(errorInfo.getErrorResponse());
+					retVal = prob ;
+				}
+				break;
+			}
+		}
+		logMsg.clear();
+		logMsg.put("logMsg", "Exit from getFailureResponseByErrorCondition function");
+		logger.info(logMsg.toString());
+		return retVal;		
+	}
+	
+	public void setNrfSystemAndEngineeringOptions() {
+		
+		logger.info("setNrfSystemAndEngineeringOptions() invoked");
+		
+		this.nrfSystemOptions = nrfSystemOptionsManager.getNrfSystemOptions();
+        logger.info("NrfSystemOptions for the request: " + nrfSystemOptions);
+        
+        this.nrfEngSystemOptions = nrfSystemOptionsManager.getNrfEngSystemOptions();
+        logger.info("NrfEngSystemOptions for the request: " + nrfEngSystemOptions);
+        
+	}
+
+}

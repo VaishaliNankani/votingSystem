@@ -1,0 +1,55 @@
+// Copyright 2018 (C), Oracle and/or its affiliates. All rights reserved.
+
+package com.oracle.cgbu.cne.nrf.config;
+import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.PropertySource;
+
+@Configuration
+@PropertySource("classpath:application.properties")
+@ConfigurationProperties("nrf")
+public class NrfConfigurations {
+	
+
+	private GlobalConfig globalConfig;
+
+	public GlobalConfig getGlobalConfig() {
+		return globalConfig;
+	}
+
+	public void setGlobalConfig(GlobalConfig globalConfig) {
+		this.globalConfig = globalConfig;
+	}
+
+	@Override
+	public String toString() {
+		return "NrfConfigurations [ globalConfig=" + globalConfig + "]";
+	}
+
+	public static class GlobalConfig {
+		
+		private String nrfLevel;
+		private String nrfInstanceId;
+		
+		public String getNrfLevel() {
+			return nrfLevel;
+		}
+		public void setNrfLevel(String nrfLevel) {
+			this.nrfLevel = nrfLevel;
+		}
+		
+		public String getNrfInstanceId() {
+			return nrfInstanceId;
+		}
+		public void setNrfInstanceId(String nrfInstanceId) {
+			this.nrfInstanceId = nrfInstanceId;
+		}
+		
+		@Override
+		public String toString() {
+			return "GlobalConfig [nrfLevel=" + nrfLevel + ",  nrfInstanceId=" + nrfInstanceId
+					+ "]";
+		}
+		
+	}
+}

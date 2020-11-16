@@ -1,0 +1,124 @@
+// Copyright 2020 (C), Oracle and/or its affiliates. All rights reserved.
+
+package com.oracle.cgbu.cne.nrf.domain;
+
+import java.util.Date;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.springframework.validation.annotation.Validated;
+
+
+import com.oracle.cgbu.cne.nrf.dao.NrfSystemOptionsDao;
+
+
+public class NfAuditUtils extends SimpleAbstractDto {
+	
+	private static  Logger logger = LogManager.getLogger(NfAuditUtils.class);
+	private static final  String VERSION = "v1";
+	static void prepareNrfSystemAndEngineeringOptions( List<NrfSystemOptionsDao>  nrfSystemOptionsDaoList)
+	{
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		logMsg.clear();
+		logMsg.put("logMsg", "prepareNrfSystemAndEngineeringOptions() called");
+		logger.debug(logMsg.toString());
+		CustomResponse customResponse = new CustomResponse();
+		NrfSystemOptions nrfSystemOptions = new NrfSystemOptions();
+		NrfEngSystemOptions nrfEngSystemOptions = new NrfEngSystemOptions();
+		for(NrfSystemOptionsDao nrfSystemOptionsDao : nrfSystemOptionsDaoList) {
+			switch(nrfSystemOptionsDao.getConfigType())
+			{
+			case "FORWARDING_OPTIONS":	{
+				ForwardingOptions forwardingOptions = nrfSystemOptionsDao.toDomain(VERSION, ForwardingOptions.class);
+				nrfSystemOptions.setForwardingOptions(forwardingOptions);
+			}
+			break;
+
+			case "GENERAL_OPTIONS":	{
+				GeneralOptions generalOptions = nrfSystemOptionsDao.toDomain(VERSION, GeneralOptions.class);
+				nrfSystemOptions.setGeneralOptions(generalOptions);;
+			}
+			break;
+
+			case "GEOREDUNDANCY_OPTIONS":	{
+				GeoRedundancyOptions geoRedundancyOptions = nrfSystemOptionsDao.toDomain(VERSION, GeoRedundancyOptions.class);
+				nrfSystemOptions.setGeoRedundancyOptions(geoRedundancyOptions);
+			}
+			break;
+
+			case "LOG_LEVEL_OPTIONS":	{
+				LogLevelOptions logLevelOptions = nrfSystemOptionsDao.toDomain(VERSION, LogLevelOptions.class);
+				nrfSystemOptions.setLogLevelOptions(logLevelOptions);
+			}
+			break;
+
+			case "NF_ACCESSTOKEN_OPTIONS":	{
+				NfAccessTokenOptions nfAccessTokenOptions = nrfSystemOptionsDao.toDomain(VERSION, NfAccessTokenOptions.class);
+				nrfSystemOptions.setNfAccessTokenOptions(nfAccessTokenOptions);
+			}
+			break;
+
+			case "NF_AUTHENTICATION_OPTIONS":	{
+				NfAuthenticationOptions nfAuthenticationOptions = nrfSystemOptionsDao.toDomain(VERSION, NfAuthenticationOptions.class);
+				nrfSystemOptions.setNfAuthenticationOptions(nfAuthenticationOptions);
+			}
+			break;
+
+			case "NF_DISCOVERY_OPTIONS":	{
+				NfDiscoveryOptions nfDiscoveryOptions = nrfSystemOptionsDao.toDomain(VERSION, NfDiscoveryOptions.class);
+				nrfSystemOptions.setNfDiscoveryOptions(nfDiscoveryOptions);
+			}
+			break;
+
+			case "NF_MANAGEMENT_OPTIONS":	{
+				NfManagementOptions nfManagementOptions = nrfSystemOptionsDao.toDomain(VERSION, NfManagementOptions.class);
+				nrfSystemOptions.setNfManagementOptions(nfManagementOptions);
+			}
+			break;
+
+			case "NF_SCREENING_OPTIONS":	{
+				NfScreeningOptions nfScreeningOptions = nrfSystemOptionsDao.toDomain(VERSION, NfScreeningOptions.class);
+				nrfSystemOptions.setNfScreeningOptions(nfScreeningOptions);
+			}
+			break;
+
+			case "OCNRF_ERROR_RESPONSES":	{
+				ErrorResponses errorResponses = nrfSystemOptionsDao.toDomain(VERSION, ErrorResponses.class);
+				nrfSystemOptions.setErrorResponses(errorResponses);
+			}
+			break;
+
+			case "SLF_OPTIONS":	{
+				SlfOptions slfOptions = nrfSystemOptionsDao.toDomain(VERSION, SlfOptions.class);
+				nrfSystemOptions.setSlfOptions(slfOptions);
+			}
+			break;
+
+			case "OCNRF_ENG_SYSTEM_OPTIONS": {
+				NrfEngSystemOptions convertedNrfEngSystemOptions = (NrfEngSystemOptions) nrfSystemOptionsDao.toDomain_NrfEngSystemOptions(VERSION);
+				nrfEngSystemOptions.setNfRegistrationEngSystemOptions(convertedNrfEngSystemOptions.getNfRegistrationEngSystemOptions());
+				nrfEngSystemOptions.setNfSubscriptionEngSystemOptions(convertedNrfEngSystemOptions.getNfSubscriptionEngSystemOptions());
+				nrfEngSystemOptions.setNfDiscoveryEngSystemOptions(convertedNrfEngSystemOptions.getNfDiscoveryEngSystemOptions());
+				nrfEngSystemOptions.setNfAccessTokenEngSystemOptions(convertedNrfEngSystemOptions.getNfAccessTokenEngSystemOptions());
+				nrfEngSystemOptions.setGeneralEngSystemOptions(convertedNrfEngSystemOptions.getGeneralEngSystemOptions());
+				nrfEngSystemOptions.setNrfAuditorEngSystemOptions(convertedNrfEngSystemOptions.getNrfAuditorEngSystemOptions());
+				nrfEngSystemOptions.setGeoRedundancyEngSystemOptions(convertedNrfEngSystemOptions.getGeoRedundancyEngSystemOptions());
+			}
+			break;
+			case "OCNRF_ENG_ERROR_RESPONSES":    {
+				NrfEngSystemOptions convertedNrfEngSystemOptions = (NrfEngSystemOptions) nrfSystemOptionsDao.toDomain_NrfEngSystemOptions(VERSION);
+				nrfEngSystemOptions.setErrorResponses(convertedNrfEngSystemOptions.getErrorResponses());
+			}
+			break;
+			}
+		}	
+		customResponse.setNrfSystemOptions(nrfSystemOptions);
+		customResponse.setNrfEngSystemOptions(nrfEngSystemOptions);
+		logMsg.clear();
+		logMsg.put("logMsg", "Exit from prepareNrfSystemAndEngineeringOptions()");
+		logger.debug(logMsg.toString());
+	}
+}

@@ -1,0 +1,101 @@
+// Copyright 2018 (C), Oracle and/or its affiliates. All rights reserved.
+
+package com.oracle.cgbu.cne.nrf.service;
+
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import com.oracle.cgbu.cne.nrf.dao.NfInstance;
+import com.oracle.cgbu.cne.nrf.domain.ProblemDetails;
+import com.oracle.cgbu.cne.nrf.service.helper.FilterFqdnExecutor;
+
+
+public class CommonServiceImpl implements CommonService {
+	private static Logger logger = LogManager.getLogger(CommonServiceImpl.class);
+
+	// creation of workers and assigning NfInstances per worker
+	@Override
+	public Object spawnRegisteredFqdnLookupThreads(List<NfInstance> nfInstances, int maxAllowedWorkersInput,
+			int waitTime) {
+		// logger.debug("spawnDiscoveryThreads");
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		logMsg.clear();
+		logMsg.put("logMsg", "spawnDiscoveryThreads");
+		logger.debug(logMsg.toString());
+
+		int sizeOfNfInstances = nfInstances.size();
+		// core pool size is the maximum allowed workers to work on per request
+		int maxAllowedWorkers = maxAllowedWorkersInput;
+		int profilesPerWorker = 4;
+		int numberOfWorkers = (int) Math.ceil((double) sizeOfNfInstances / (double) profilesPerWorker);
+
+		// if number of workers exceeds the Maximum Allowed Workers then each worker
+		// gets extra load to work on
+		if (numberOfWorkers > maxAllowedWorkers) {
+			profilesPerWorker = (int) Math.ceil((double) sizeOfNfInstances / (double) maxAllowedWorkers);
+			numberOfWorkers = (int) Math.ceil((double) sizeOfNfInstances / (double) profilesPerWorker);
+		}
+		// creates a Thread Pool
+		ExecutorService executor = Executors.newFixedThreadPool(numberOfWorkers);
+
+		logMsg.clear();
+		logMsg.put("maxAllowedWorkers", maxAllowedWorkers);
+		logMsg.put("numberOfWorkers", numberOfWorkers);
+		logger.debug(logMsg.toString());
+		List<String> registeredFqdnList = new ArrayList<String>();
+		List<Future<Object>> tasks = new ArrayList<Future<Object>>();
+		FilterFqdnExecutor filterTaskExecutor;
+		// Each worker is assigned with their load
+		for (int worker = 0; worker < numberOfWorkers; worker++) {
+			int start = worker * profilesPerWorker;
+			int count = Math.min((worker + 1) * profilesPerWorker, sizeOfNfInstances) - (worker * profilesPerWorker);
+
+			// Each worker gets sub-list
+			List<NfInstance> subList = nfInstances.subList(start, start + count);
+			filterTaskExecutor = new FilterFqdnExecutor(subList);
+			Future<Object> taskPerWorker = executor.submit(filterTaskExecutor);
+			tasks.add(taskPerWorker);
+		}
+		Future<Object> nfProfilesPerWorker;
+		for (int count = 0; count < tasks.size(); count++) {
+			nfProfilesPerWorker = tasks.get(count);
+			try {
+				Object result = nfProfilesPerWorker.get();
+				if (result instanceof ProblemDetails) {
+					return result;
+				} else {
+					registeredFqdnList.addAll((List<String>) result);
+				}
+			} catch (InterruptedException | ExecutionException e) {
+				logMsg.clear();
+				logMsg.put("logMsg", "nfProfilesPerWorker failed");
+				logger.error(logMsg.toString());
+				return ProblemDetails.forInternalError();
+			}
+		}
+		executor.shutdown();
+		try {
+			executor.awaitTermination(waitTime - 5, TimeUnit.SECONDS);
+		} catch (InterruptedException e) {
+			// TODO Auto-generated catch block
+			logMsg.clear();
+			logMsg.put("logMsg", "An exception occured");
+			logMsg.put("stackTrace", e.toString());
+			logger.error(logMsg.toString());
+		}
+
+		return registeredFqdnList;
+
+	}
+
+}

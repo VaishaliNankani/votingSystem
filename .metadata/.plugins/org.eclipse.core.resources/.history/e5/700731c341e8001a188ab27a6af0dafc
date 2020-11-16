@@ -1,0 +1,779 @@
+// Copyright 2018 (C), Oracle and/or its affiliates. All rights reserved.
+
+package com.oracle.cgbu.cne.nrf.test;
+
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+
+import org.apache.logging.log4j.Level;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.core.Appender;
+import org.apache.logging.log4j.core.LogEvent;
+import org.apache.logging.log4j.core.Logger;
+import org.junit.After;
+import org.junit.Assert;
+import org.junit.Before;
+import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.mockito.ArgumentCaptor;
+import org.mockito.Captor;
+import org.mockito.Mock;
+import org.mockito.MockitoAnnotations;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.http.CacheControl;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.mock.web.MockHttpServletResponse;
+import org.springframework.test.context.ContextConfiguration;
+import org.springframework.test.context.junit4.SpringRunner;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.oracle.cgbu.cne.nrf.config.NrfConfigurations;
+import com.oracle.cgbu.cne.nrf.config.NrfSystemOptionsManager;
+import com.oracle.cgbu.cne.nrf.dao.NrfSystemOptionsDao;
+import com.oracle.cgbu.cne.nrf.domain.AccessTokenErr;
+import com.oracle.cgbu.cne.nrf.domain.AccessTokenRsp;
+import com.oracle.cgbu.cne.nrf.domain.ErrorInfo;
+import com.oracle.cgbu.cne.nrf.domain.FeatureStatus;
+import com.oracle.cgbu.cne.nrf.domain.ForwardingData;
+import com.oracle.cgbu.cne.nrf.domain.GenericResponse;
+import com.oracle.cgbu.cne.nrf.domain.NrfEngSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.NrfSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.ProblemDetails;
+import com.oracle.cgbu.cne.nrf.metrics.MetricsDimension;
+import com.oracle.cgbu.cne.nrf.metrics.NrfMetrics;
+import com.oracle.cgbu.cne.nrf.rest.NFAccessTokenController;
+import com.oracle.cgbu.cne.nrf.service.AccessTokenServiceImpl;
+import com.oracle.cgbu.cne.nrf.service.helper.ValidationHelper;
+
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.Metrics;
+
+
+@RunWith(SpringRunner.class)
+@WebMvcTest(NFAccessTokenController.class)
+@ContextConfiguration(classes = {NFAccessTokenController.class, NrfMetrics.class, NrfConfigurations.class,MetricsDimension.class})
+public class NFAccessTokenControllerTest {
+	
+	@MockBean
+	private AccessTokenServiceImpl service;
+	
+	@Autowired
+	private MockMvc mvc;
+	
+	private Boolean forwardedRequest = false; 
+	
+	@Autowired
+	private ObjectMapper om;
+	
+	@MockBean
+	private NrfSystemOptionsManager nrfSystemOptionsManager;
+	
+	@Captor
+	private ArgumentCaptor<LogEvent> captorLoggingEvent;
+
+	private Logger logger;
+	
+	@Mock
+	private Appender mockAppender;
+	
+	@MockBean
+	private ValidationHelper validationHelper;
+	
+	@Before
+	public void setUp() {
+		MockitoAnnotations.initMocks(this);
+		when(mockAppender.getName()).thenReturn("MockAppender");
+		when(mockAppender.isStarted()).thenReturn(true);
+		when(mockAppender.isStopped()).thenReturn(false);
+		logger = (Logger)LogManager.getRootLogger();
+		logger.addAppender(mockAppender);
+		logger.setLevel(Level.DEBUG);
+       	//when(nrfSystemOptionsRepository.getOcnrfSystemOptions(any())).thenReturn(TestDataGenerator.generateNrfSystemOptionsDao());
+		//when(nrfSystemOptionsRepository.getOcnrfErrorResponses(any())).thenReturn(TestDataGenerator.generateNrfSystemOptionsDao_errorResponses());
+		NrfSystemOptions nrfSystemOptions = TestDataGenerator.generateNrfSystemOptions();
+		NrfEngSystemOptions nrfEngSystemOptions = TestDataGenerator.generateNrfEngSystemOptions();
+		when(nrfSystemOptionsManager.getNrfSystemOptions()).thenReturn(nrfSystemOptions);
+		when(nrfSystemOptionsManager.getNrfEngSystemOptions()).thenReturn(nrfEngSystemOptions);
+	}
+	
+	@After
+	public void teardown() {
+		logger.removeAppender(mockAppender);
+	}
+	
+	@Test
+	public void givenTokenRequest_whenPostOperation_thenReturnTokenResponse() throws Exception {
+		ObjectMapper om = new ObjectMapper();
+		double initial_req = 0;
+		double initial_resp = 0;
+		double initial_msg = 0;
+		try {
+			initial_req = Metrics.globalRegistry.get("ocnrf.accessToken.rx.requests")
+				.tag("Scope", "npcf-policyauthorization,npcf-bdtpolicycontrol")
+				.counter().count();
+		
+		}catch (Exception e) {
+			
+		}
+		
+		try {
+			initial_resp = Metrics.globalRegistry.get("ocnrf.accessToken.rx.responses")
+					.tag("Scope", "npcf-policyauthorization,npcf-bdtpolicycontrol")
+					.counter().count();
+			
+			}catch (Exception e) {
+				
+			}
+		
+		try {
+			initial_msg = Metrics.globalRegistry.get("ocnrf.message.processing.time")
+			.tag("RequesterNfType", "AMF").tag("ServiceOperation", "NfAccessToken").timer().count();
+		} catch (Exception e) {
+			
+		}
+		AccessTokenRsp response = TestDataGenerator.generateAccessResponse();
+		when(service.generateAccessToken(any(),any(),any())).thenReturn(response);
+		
+		MvcResult res = 
+				mvc.perform(post("/oauth2/token")
+						.contentType(MediaType.APPLICATION_FORM_URLENCODED_VALUE)
+						.param("nfInstanceId", "6faf1bbc-6e4a-4454-a507-a14ef8e1bc11")
+						.param("targetNfInstanceId", "6faf1bbc-6e4a-4454-a507-a14ef8e1bc12")
+						.param("grant_type", "client_credentials")
+						.param("scope", "npcf-policyauthorization npcf-bdtpolicycontrol")
+						.param("nfType", "AMF")
+						.param("targetNfType", "PCF")
+						.param("requesterPlmn", "{\"mcc\":\"123\",\"mnc\":\"345\"}"))
+				.andExpect(status().isOk())
+				.andReturn();
+			
+		MockHttpServletResponse respObj = res.getResponse();
+		String jsonStr = respObj.getContentAsString();
+		AccessTokenRsp queryResponse = om.readValue(jsonStr, AccessTokenRsp.class);
+		Assert.assertEquals(queryResponse.getToken_type(), response.getToken_type());
+		Assert.assertEquals(queryResponse.getScope(), response.getScope());
+		Assert.assertEquals(queryResponse.getClass(), response.getClass());
+		Assert.assertEquals(queryResponse.getExpires_in(), response.getExpires_in());
+		Assert.assertEquals(queryResponse.getAccess_token(), response.getAccess_token());
+		
+		
+		Assert.assertEquals(initial_msg+1,Metrics.globalRegistry.get("ocnrf.message.processing.time")
+				.tag("RequesterNfType", "AMF").tag("ServiceOperation", "NfAccessToken").timer().count(),0);
+		
+		Assert.assertEquals(initial_req+1, Metrics.globalRegistry.get("ocnrf.accessToken.rx.requests")
+				.tag("Scope", "npcf-bdtpolicycontrol,npcf-policyauthorization")
+				.counter().count(),0);
+		Assert.assertEquals(initial_resp+1, Metrics.globalRegistry.get("ocnrf.accessToken.tx.responses")
+				.tag("Scope", "npcf-bdtpolicycontrol,npcf-policyauthorization")
+				.counter().count(),0);
+	}
+	
+	
+	@Test
+	public void givenTokenRequest_whenPostOperationWithJsonType_thenReturnError() throws Exception {		
+		AccessTokenRsp response = TestDataGenerator.generateAccessResponse();
+		
+		when(service.generateAccessToken(any(),any(),any())).thenReturn(response);
+		
+		MvcResult res = 
+				mvc.perform(post("/oauth2/token")
+						.contentType(MediaType.APPLICATION_JSON)
+						.param("nfInstanceId", "6faf1bbc-6e4a-4454-a507-a14ef8e1bc11")
+						.param("grant_type", "client_credentials")
+						.param("scope", "service1")
+						.param("requesterPlmn", "{\"mcc\":\"123\",\"mnc\":\"345\"}"))
+				.andExpect(status().isUnsupportedMediaType())
+				.andReturn();	
+		
+	}
+	
+	@Test
+	public void givenTokenRequest_whenPostOperationWithInvaliRequesterPlmn_thenReturnError() throws Exception {
+		ObjectMapper om = new ObjectMapper();
+		double initial_req = 0;
+		double initial_resp = 0;
+		AccessTokenRsp response = TestDataGenerator.generateAccessResponse();
+		try {
+			initial_req = Metrics.globalRegistry.get("ocnrf.accessToken.rx.requests")
+				.tag("Scope", "nudm-ee,nudm-pp,nudm-sdm")
+				.counter().count();
+		
+		when(service.generateAccessToken(any(),any(),any())).thenReturn(response);
+		}catch (Exception e) {
+			
+		}
+		
+		try {
+			initial_resp = Metrics.globalRegistry.get("ocnrf.accessToken.rx.responses")
+					.tag("Scope", "nudm-ee,nudm-pp,nudm-sdm")
+					.counter().count();
+			
+			}catch (Exception e) {
+				
+			}
+		when(service.generateAccessToken(any(),any(),any())).thenReturn(response);
+		
+		MvcResult res = 
+				mvc.perform(post("/oauth2/token")
+						.contentType(MediaType.APPLICATION_FORM_URLENCODED_VALUE)
+						.param("nfInstanceId", "6faf1bbc-6e4a-4454-a507-a14ef8e1bc11")
+						.param("grant_type", "client_credentials")
+						.param("scope", "nudm-sdm nudm-ee nudm-pp")
+						.param("requesterPlmn", "{\"mcc\":\"abc\",\"mnc\":\"123\"}","{}"))    //invalid value
+				.andExpect(status().isBadRequest())
+				.andReturn();	
+		
+		AccessTokenErr retObj = om.readValue(res.getResponse().getContentAsString(),AccessTokenErr.class);
+		Assert.assertEquals("invalid_request", retObj.getError());
+		Assert.assertEquals("requesterPlmn.mcc must match \"^[0-9]{3}$\"", retObj.getError_description());
+		Assert.assertEquals(initial_req+1, Metrics.globalRegistry.get("ocnrf.accessToken.rx.requests")
+				.tag("Scope", "nudm-ee,nudm-pp,nudm-sdm")
+				.counter().count(),0);
+		Assert.assertEquals(initial_resp+1, Metrics.globalRegistry.get("ocnrf.accessToken.tx.responses")
+				.tag("Scope", "nudm-ee,nudm-pp,nudm-sdm")
+				.counter().count(),0);
+		// mcc missing
+		res = 
+				mvc.perform(post("/oauth2/token")
+						.contentType(MediaType.APPLICATION_FORM_URLENCODED_VALUE)
+						.param("nfInstanceId", "6faf1bbc-6e4a-4454-a507-a14ef8e1bc11")
+						.param("grant_type", "client_credentials")
+						.param("scope", "service1")
+						.param("requesterPlmn", "{\"mnc\":\"123\"}"))
+				.andExpect(status().isBadRequest())
+				.andReturn();
+		
+		retObj = om.readValue(res.getResponse().getContentAsString(),AccessTokenErr.class);
+		Assert.assertEquals("invalid_request", retObj.getError());
+		Assert.assertEquals("requesterPlmn.mcc must not be empty", retObj.getError_description());
+		
+		// mnc missing
+		res = 
+				mvc.perform(post("/oauth2/token")
+						.contentType(MediaType.APPLICATION_FORM_URLENCODED_VALUE)
+						.param("nfInstanceId", "6faf1bbc-6e4a-4454-a507-a14ef8e1bc11")
+						.param("grant_type", "client_credentials")
+						.param("scope", "service1")
+						.param("requesterPlmn", "{\"mcc\":\"123\"}"))
+				.andExpect(status().isBadRequest())
+				.andReturn();
+		
+		retObj = om.readValue(res.getResponse().getContentAsString(),AccessTokenErr.class);
+		Assert.assertEquals("invalid_request", retObj.getError());
+		Assert.assertEquals("requesterPlmn.mnc must not be empty", retObj.getError_description());
+	}
+	
+	@Test
+	public void givenTokenRequest_whenPostOperationWithNullNfInstanceId_thenReturnError() throws Exception {
+		ObjectMapper om = new ObjectMapper();
+		
+		AccessTokenRsp response = TestDataGenerator.generateAccessResponse();
+		
+		when(service.generateAccessToken(any(),any(),any())).thenReturn(response);
+		
+		MvcResult res = 
+				mvc.perform(post("/oauth2/token")
+						.contentType(MediaType.APPLICATION_FORM_URLENCODED_VALUE)
+						.param("grant_type", "client_credentials")
+						.param("scope", "service1"))
+				.andExpect(status().isBadRequest())
+				.andReturn();	
+		
+		AccessTokenErr retObj = om.readValue(res.getResponse().getContentAsString(),AccessTokenErr.class);
+		Assert.assertEquals("invalid_request", retObj.getError());
+		Assert.assertEquals("nfInstanceId must not be null", retObj.getError_description());
+	}
+	
+	@Test
+	public void givenTokenRequest_whenPostOperationWithNullScope_thenReturnError() throws Exception {
+		ObjectMapper om = new ObjectMapper();
+		
+		AccessTokenRsp response = TestDataGenerator.generateAccessResponse();
+		
+		when(service.generateAccessToken(any(),any(),any())).thenReturn(response);
+		
+		MvcResult res = 
+				mvc.perform(post("/oauth2/token")
+						.contentType(MediaType.APPLICATION_FORM_URLENCODED_VALUE)
+						.param("nfInstanceId", "6faf1bbc-6e4a-4454-a507-a14ef8e1bc11")
+						.param("grant_type", "client_credentials"))
+				.andExpect(status().isBadRequest())
+				.andReturn();	
+		
+		AccessTokenErr retObj = om.readValue(res.getResponse().getContentAsString(),AccessTokenErr.class);
+		Assert.assertEquals("invalid_scope", retObj.getError());
+		Assert.assertEquals("must not be null", retObj.getError_description());
+	}
+	
+	@Test
+	public void givenTokenRequest_whenPostOperationWithNullGrantType_thenReturnError() throws Exception {
+		ObjectMapper om = new ObjectMapper();
+		
+		AccessTokenRsp response = TestDataGenerator.generateAccessResponse();
+		
+		when(service.generateAccessToken(any(),any(),any())).thenReturn(response);
+		
+		MvcResult res = 
+				mvc.perform(post("/oauth2/token")
+						.contentType(MediaType.APPLICATION_FORM_URLENCODED_VALUE)
+						.param("nfInstanceId", "6faf1bbc-6e4a-4454-a507-a14ef8e1bc11")
+						.param("scope", "service1"))
+				.andExpect(status().isBadRequest())
+				.andReturn();	
+		
+		AccessTokenErr retObj = om.readValue(res.getResponse().getContentAsString(),AccessTokenErr.class);
+		Assert.assertEquals("invalid_grant", retObj.getError());
+		Assert.assertEquals("grant_type should be present with a valid value", retObj.getError_description());
+	}
+	
+	@Test
+	public void givenTokenRequest_whenPostOperationWithInvalidTargetPlmn_thenReturnError() throws Exception {
+		ObjectMapper om = new ObjectMapper();
+		
+		AccessTokenRsp response = TestDataGenerator.generateAccessResponse();
+		
+		when(service.generateAccessToken(any(),any(),any())).thenReturn(response);
+		
+		MvcResult res = 
+				mvc.perform(post("/oauth2/token")
+						.contentType(MediaType.APPLICATION_FORM_URLENCODED_VALUE)
+						.param("nfInstanceId", "6faf1bbc-6e4a-4454-a507-a14ef8e1bc11")
+						.param("grant_type", "client_credentials")
+						.param("scope", "service1")
+						.param("targetPlmn", "{\"mcc\":\"abc\",\"mnc\":\"123\"}"))  //invalid value
+				.andExpect(status().isBadRequest())
+				.andReturn();	
+		
+		AccessTokenErr retObj = om.readValue(res.getResponse().getContentAsString(),AccessTokenErr.class);
+		Assert.assertEquals("invalid_request", retObj.getError());
+		Assert.assertEquals("targetPlmn.mcc must match \"^[0-9]{3}$\"", retObj.getError_description());
+		// mcc missing
+		res = 
+				mvc.perform(post("/oauth2/token")
+						.contentType(MediaType.APPLICATION_FORM_URLENCODED_VALUE)
+						.param("nfInstanceId", "6faf1bbc-6e4a-4454-a507-a14ef8e1bc11")
+						.param("grant_type", "client_credentials")
+						.param("scope", "service1")
+						.param("targetPlmn", "{\"mnc\":\"123\"}"))
+				.andExpect(status().isBadRequest())
+				.andReturn();
+		
+		retObj = om.readValue(res.getResponse().getContentAsString(),AccessTokenErr.class);
+		Assert.assertEquals("invalid_request", retObj.getError());
+		Assert.assertEquals("targetPlmn.mcc must not be empty", retObj.getError_description());
+		
+		// mnc missing
+		res = 
+				mvc.perform(post("/oauth2/token")
+						.contentType(MediaType.APPLICATION_FORM_URLENCODED_VALUE)
+						.param("nfInstanceId", "6faf1bbc-6e4a-4454-a507-a14ef8e1bc11")
+						.param("grant_type", "client_credentials")
+						.param("scope", "service1")
+						.param("targetPlmn", "{\"mcc\":\"123\"}"))
+				.andExpect(status().isBadRequest())
+				.andReturn();
+		
+		retObj = om.readValue(res.getResponse().getContentAsString(),AccessTokenErr.class);
+		Assert.assertEquals("invalid_request", retObj.getError());
+		Assert.assertEquals("targetPlmn.mnc must not be empty", retObj.getError_description());
+		
+	}
+	
+	@Test
+	public void givenTokenRequest_whenInvalidGrantType_thenReturnError() throws Exception {
+		ObjectMapper om = new ObjectMapper();
+		
+		AccessTokenRsp response = TestDataGenerator.generateAccessResponse();
+		
+		when(service.generateAccessToken(any(),any(),any())).thenReturn(response);
+		
+		MvcResult res = 
+				mvc.perform(post("/oauth2/token")
+						.contentType(MediaType.APPLICATION_FORM_URLENCODED_VALUE)
+						.param("nfInstanceId", "6faf1bbc-6e4a-4454-a507-a14ef8e1bc11")
+						.param("targetNfInstanceId", "6faf1bbc-6e4a-4454-a507-a14ef8e1bc12")
+						.param("grant_type", "client_credent")
+						.param("scope", "service1")
+						.param("nfType", "AMF")
+						.param("targetNfType", "NRF")
+						.param("requesterPlmn", "{\"mcc\":\"123\",\"mnc\":\"345\"}"))
+				.andExpect(status().isBadRequest())
+				.andReturn();
+
+		MockHttpServletResponse respObj = res.getResponse();
+		String jsonStr = respObj.getContentAsString();
+		AccessTokenErr queryResponse = om .readValue(jsonStr, AccessTokenErr.class);
+		Assert.assertEquals("invalid_grant", queryResponse.getError());
+		Assert.assertEquals("grant_type should be present with a valid value", queryResponse.getError_description());
+		Assert.assertEquals(1, Metrics.globalRegistry.get("ocnrf.message.processing.time")
+				.tag("RequesterNfType", "AMF").tag("ServiceOperation", "NfAccessToken").timer().count());
+	}
+	
+	@Test
+	public void givenTokenRequest_whenPostOperationWithInvalidScope_thenReturnError() throws Exception {
+		ObjectMapper om = new ObjectMapper();
+		
+		AccessTokenRsp response = TestDataGenerator.generateAccessResponse();
+		
+		when(service.generateAccessToken(any(),any(),any())).thenReturn(response);
+		
+		MvcResult res = 
+				mvc.perform(post("/oauth2/token")
+						.contentType(MediaType.APPLICATION_FORM_URLENCODED_VALUE)
+						.param("nfInstanceId", "6faf1bbc-6e4a-4454-a507-a14ef8e1bc11")
+						.param("grant_type", "client_credentials")
+						.param("scope", "#"))
+				.andExpect(status().isBadRequest())
+				.andReturn();	
+		
+		AccessTokenErr retObj = om.readValue(res.getResponse().getContentAsString(),AccessTokenErr.class);
+		Assert.assertEquals("invalid_scope", retObj.getError());
+		Assert.assertEquals("must be a valid service names of the NF service producers", retObj.getError_description());
+	}
+
+	@Test
+	public void validateCacheControlAndPragma_inAccessTokenRspHeader() throws Exception {
+		AccessTokenRsp response = TestDataGenerator.generateAccessResponse();
+		
+		when(service.generateAccessToken(any(),any(),any())).thenReturn(response);
+		
+		MvcResult res = 
+				mvc.perform(post("/oauth2/token")
+						.contentType(MediaType.APPLICATION_FORM_URLENCODED_VALUE)
+						.param("nfInstanceId", "6faf1bbc-6e4a-4454-a507-a14ef8e1bc11")
+						.param("grant_type", "client_credentials")
+						.param("scope", "service1"))
+				.andExpect(status().isOk())
+				.andReturn();	
+		
+		MockHttpServletResponse respObj = res.getResponse();
+		String resp_contentType = respObj.getContentType();
+		String respCacheControl = respObj.getHeader("Cache-Control");
+		String respPragma = respObj.getHeader("Pragma");
+		CacheControl expectedCacheControl = CacheControl.noStore();
+		Assert.assertEquals(expectedCacheControl.getHeaderValue(),respCacheControl);
+		Assert.assertEquals("no-cache",respPragma);
+		Assert.assertEquals("application/json", resp_contentType);
+		
+		Assert.assertEquals(1,Metrics.globalRegistry.get("ocnrf.accessToken.rx.requests")
+								.tag("ClientNfInstanceId", "6faf1bbc-6e4a-4454-a507-a14ef8e1bc11")
+								.tag("Scope", "service1")
+								.counter().count(),0);
+	}
+	
+	@Test
+	public void validateCacheControlAndPragma_inAccessTokenErrHeader() throws Exception {
+		AccessTokenErr response = new AccessTokenErr();
+		when(service.generateAccessToken(any(),any(),any())).thenReturn(response);
+		
+		MvcResult res = 
+				mvc.perform(post("/oauth2/token")
+						.contentType(MediaType.APPLICATION_FORM_URLENCODED_VALUE)
+						.param("nfInstanceId", "6faf1bbc-6e4a-4454-a507-a14ef8e1bc10")
+						.param("grant_type", "client_credentials")
+						.param("scope", "service1"))
+				.andExpect(status().isBadRequest())
+				.andReturn();	
+		
+		MockHttpServletResponse respObj = res.getResponse();
+		String resp_contentType = respObj.getContentType();
+		String respCacheControl = respObj.getHeader("Cache-Control");
+		String respPragma = respObj.getHeader("Pragma");
+		CacheControl expectedCacheControl = CacheControl.noStore();
+		Assert.assertEquals(expectedCacheControl.getHeaderValue(),respCacheControl);
+		Assert.assertEquals("no-cache",respPragma);
+		Assert.assertEquals("application/json", resp_contentType);
+	}
+	
+	@Test
+	public void givenRequestForAccessToken_whenNullViaHeaderSent_theReturnHashMap() throws Exception{
+		MockHttpServletRequest request = new MockHttpServletRequest();
+        request.setQueryString("/oauth2/token");
+        request.setContentType(MediaType.APPLICATION_FORM_URLENCODED_VALUE);
+        request.addParameter("nfInstanceId", "6faf1bbc-6e4a-4454-a507-a14ef8e1bc11");
+        request.addParameter("grant_type", "client_credentials");
+		request.addParameter("scope", "service1");
+
+        // when viaHeader is null
+        NFAccessTokenController nFDiscoveryController = new NFAccessTokenController(request);
+        ForwardingData forwardingData = nFDiscoveryController.parseViaHeader(request, null);
+        Assert.assertEquals(false, forwardingData.isLoop());
+        Assert.assertEquals(true, forwardingData.isForwardingPossible());
+	}
+	
+	@Test
+	public void givenTokenRequest_whenViaHeaderSent_theReturnLoopDetetctionError() throws Exception {
+		Counter s = Metrics.globalRegistry.find("ocnrf.forward.accessToken.tx.requests").tag("TargetNfType", "NRF").tag("RequesterNfType","PCF").tag("TargetNfInstanceId","6faf1bbc-6e4a-4454-a507-a14ef8e1bc12").tag("ClientNfInstanceId","6faf1bbc-6e4a-4454-a507-a14ef8e1bc11").tag("Scope", "service1").counter();
+		double prev_requests = (s != null) ? s.count() : 0;
+		Counter t = Metrics.globalRegistry.find("ocnrf.forward.accessToken.rx.responses").tag("TargetNfType", "NRF").tag("RequesterNfType","PCF").tag("TargetNfInstanceId","6faf1bbc-6e4a-4454-a507-a14ef8e1bc12").tag("ClientNfInstanceId","6faf1bbc-6e4a-4454-a507-a14ef8e1bc11").tag("Scope", "service1").tag("HttpStatusCode","508").tag("RejectionReason", "LoopDetected").counter();
+		double prev_responses = (t != null) ? t.count() : 0;
+		ObjectMapper om = new ObjectMapper();
+		
+		NrfSystemOptions nrfSystemOptions = TestDataGenerator.generateNrfSystemOptions();
+		nrfSystemOptions.getForwardingSystemOptions().setAccessTokenForwardingStatus(FeatureStatus.ENABLED);
+		when(nrfSystemOptionsManager.getNrfSystemOptions()).thenReturn(nrfSystemOptions);
+		
+		AccessTokenRsp response = TestDataGenerator.generateAccessResponse();
+		when(service.generateAccessToken(any(),any(),any())).thenReturn(response);
+		
+		MvcResult res = 
+				mvc.perform(post("/oauth2/token")
+						.contentType(MediaType.APPLICATION_FORM_URLENCODED_VALUE)
+						.param("nfInstanceId", "6faf1bbc-6e4a-4454-a507-a14ef8e1bc11")
+						.param("targetNfInstanceId", "6faf1bbc-6e4a-4454-a507-a14ef8e1bc12")
+						.param("grant_type", "client_credentials")
+						.param("scope", "service1")
+						.param("nfType", "PCF")
+						.param("targetNfType", "NRF")
+						.param("requesterPlmn", "{\"mcc\":\"123\",\"mnc\":\"345\"}")
+						.header("Via", "HTTPS/2.0 ocnrf-ingressgateway.ocnrf.svc.cluster.local:80"))
+				.andExpect(status().is(508))
+				.andReturn();
+		
+		verify(mockAppender,atLeastOnce()).append((LogEvent)captorLoggingEvent.capture());
+		List<LogEvent> loggingEvent = captorLoggingEvent.getAllValues();
+		List<String> logs = new ArrayList<String>();
+		for(LogEvent logEvt:loggingEvent) {
+			logs.add(logEvt.getMessage().getFormattedMessage());
+		}
+		Assert.assertTrue(logs.toString().contains("logMsg=Via header received, protocolName=HTTPS, protocolVersion=2.0, host=ocnrf-ingressgateway.ocnrf.svc.cluster.local, port=80"));
+		Assert.assertTrue(logs.toString().contains("logMsg=Request to generate access token failed with errorCondition :NRF_Forwarding_Loop_Detection,"));// 
+		Assert.assertTrue(logs.toString().contains("problemDetails={\"title\":\"Loop Detected\",\"status\":508,\"detail\":\"Loop Detected\",\"cause\":\"Loop Detected\""));
+
+		s = Metrics.globalRegistry.find("ocnrf.forward.accessToken.tx.requests").tag("TargetNfType", "NRF").tag("RequesterNfType","PCF").tag("TargetNfInstanceId","6faf1bbc-6e4a-4454-a507-a14ef8e1bc12").tag("ClientNfInstanceId","6faf1bbc-6e4a-4454-a507-a14ef8e1bc11").tag("Scope", "service1").counter();
+		double prev_response = (s != null) ? s.count() : 0;
+		t = Metrics.globalRegistry.find("ocnrf.forward.accessToken.rx.responses").tag("TargetNfType", "NRF").tag("RequesterNfType","PCF").tag("TargetNfInstanceId","6faf1bbc-6e4a-4454-a507-a14ef8e1bc12").tag("ClientNfInstanceId","6faf1bbc-6e4a-4454-a507-a14ef8e1bc11").tag("Scope", "service1").tag("HttpStatusCode", "508").tag("RejectionReason", "LoopDetected").counter();
+		double after_responses = (t != null) ? t.count() : 0;
+		Assert.assertEquals(prev_response, 1,0.05);
+		Assert.assertEquals(after_responses, 1,0.05);
+	}
+	
+	@Test
+	public void givenTokenRequest_whenViaHeaderSent_thenForwardRequest() throws Exception {
+		ObjectMapper om = new ObjectMapper();
+		
+		AccessTokenRsp response = TestDataGenerator.generateAccessResponse();
+		when(service.generateAccessToken(any(),any(),any())).thenReturn(response);
+		
+		NrfSystemOptions nrfSystemOptions = TestDataGenerator.generateNrfSystemOptions();
+		nrfSystemOptions.getForwardingSystemOptions().setAccessTokenForwardingStatus(FeatureStatus.ENABLED);
+		when(nrfSystemOptionsManager.getNrfSystemOptions()).thenReturn(nrfSystemOptions);
+		
+		MvcResult res = 
+				mvc.perform(post("/oauth2/token")
+						.contentType(MediaType.APPLICATION_FORM_URLENCODED_VALUE)
+						.param("nfInstanceId", "6faf1bbc-6e4a-4454-a507-a14ef8e1bc11")
+						.param("targetNfInstanceId", "6faf1bbc-6e4a-4454-a507-a14ef8e1bc12")
+						.param("grant_type", "client_credentials")
+						.param("scope", "service1")
+						.param("nfType", "PCF")
+						.param("targetNfType", "NRF")
+						.param("requesterPlmn", "{\"mcc\":\"123\",\"mnc\":\"345\"}")
+						.header("Via", "HTTPS/2.0 oracle.com:8090")
+						.header("requesterNfType","NRF"))
+				.andExpect(status().isOk())
+				.andReturn();
+		
+		verify(mockAppender,atLeastOnce()).append((LogEvent)captorLoggingEvent.capture());
+		List<LogEvent> loggingEvent = captorLoggingEvent.getAllValues();
+		List<String> logs = new ArrayList<String>();
+		for(LogEvent logEvt:loggingEvent) {
+			logs.add(logEvt.getMessage().getFormattedMessage());
+		}
+		Assert.assertTrue(logs.toString().contains("logMsg=Via header received, protocolName=HTTPS, protocolVersion=2.0, host=oracle.com, port=8090"));
+		Assert.assertTrue(logs.toString().contains("logMsg=forwardedRequest received, nrfHostConfigHostName=oracle.com, nrfHostConfigPort=8090"));
+		Assert.assertTrue(logs.toString().contains("logMsg=Received requesterNfType in request Header, requesterNfType=NRF"));
+
+	}
+	
+	@Test
+	public void givenTokenRequest_whenFqdnAuthenticationFails_thenReturnProblemDetails() throws Exception {
+		ObjectMapper om = new ObjectMapper();
+		NrfSystemOptionsDao nrfSystemOptionsDao = TestDataGenerator.generateNrfSystemOptionsDao();
+		NrfSystemOptions nrfSystemOptions = (NrfSystemOptions) nrfSystemOptionsDao.toDomain("v1");
+		nrfSystemOptions.getForwardingSystemOptions().setAccessTokenForwardingStatus(FeatureStatus.DISABLED);
+		nrfSystemOptions.getNfAuthenticationSystemOptions().setAccessTokenAuthenticationStatus(FeatureStatus.ENABLED);
+		ErrorInfo errorInfo = nrfSystemOptions.getNfAuthenticationSystemOptions().getNfAuthenticationErrorResponses().get(0);
+		errorInfo.setRedirectUrl("http://www.oracle.com");
+		List<ErrorInfo> nfAuthenticationErrorInfoList = new ArrayList<ErrorInfo>();
+		nfAuthenticationErrorInfoList.add(errorInfo);
+		nrfSystemOptions.getNfAuthenticationSystemOptions().setNfAuthenticationErrorResponses(nfAuthenticationErrorInfoList);
+		GenericResponse genericResponse = new GenericResponse();
+		ProblemDetails problemDetails = new ProblemDetails();
+		problemDetails.setStatus(errorInfo.getErrorCode());
+		problemDetails.setDetail(errorInfo.getErrorResponse());
+		problemDetails.setCause("Could not find nfInstance");
+		genericResponse.setResponse(problemDetails);
+		when(service.generateAccessToken(any(),any(),any())).thenReturn(genericResponse);
+		when(nrfSystemOptionsManager.getNrfSystemOptions()).thenReturn(nrfSystemOptions);
+		//Without headers
+		MvcResult res = 
+				mvc.perform(post("/oauth2/token")
+						.contentType(MediaType.APPLICATION_FORM_URLENCODED_VALUE)
+						.param("nfInstanceId", "6faf1bbc-6e4a-4454-a507-a14ef8e1bc11")
+						.param("targetNfInstanceId", "6faf1bbc-6e4a-4454-a507-a14ef8e1bc12")
+						.param("grant_type", "client_credentials")
+						.param("scope", "service1")
+						.param("nfType", "PCF")
+						.param("targetNfType", "NRF")
+						.param("requesterPlmn", "{\"mcc\":\"123\",\"mnc\":\"345\"}")
+						.header("OC-XFCC-DNS", "PCF.d5g.oracle.com"))
+				.andExpect(status().is4xxClientError())
+				.andReturn();
+		MockHttpServletResponse respObj = res.getResponse();
+		String retryAfterHeader = respObj.getHeader(HttpHeaders.RETRY_AFTER);
+		String locationHeader = respObj.getHeader(HttpHeaders.LOCATION);
+		Assert.assertNull(retryAfterHeader);
+		Assert.assertNull(locationHeader);
+		ProblemDetails actualProblemDetails = om.readValue(res.getResponse().getContentAsString(),
+				ProblemDetails.class);
+		Assert.assertEquals(problemDetails.toString(), actualProblemDetails.toString());
+		verify(mockAppender,atLeastOnce()).append((LogEvent)captorLoggingEvent.capture());
+		List<LogEvent> loggingEvent = captorLoggingEvent.getAllValues();
+		List<String> logs = new ArrayList<String>();
+		for(LogEvent logEvt:loggingEvent) {
+			logs.add(logEvt.getMessage().getFormattedMessage());
+		}
+		Assert.assertTrue(logs.toString().contains("logMsg=Request to generate access token returned problemDetails."));
+		Assert.assertTrue(logs.toString().contains("problemDetails="+problemDetails.toString()));
+		
+		//With headers
+		HttpHeaders httpHeaders = new HttpHeaders();
+		httpHeaders.add(HttpHeaders.RETRY_AFTER, String.valueOf(errorInfo.getRetryAfter().toSeconds()));
+		httpHeaders.add(HttpHeaders.LOCATION, errorInfo.getRedirectUrl());
+		genericResponse.setHeaders(httpHeaders);		
+		res = 
+				mvc.perform(post("/oauth2/token")
+						.contentType(MediaType.APPLICATION_FORM_URLENCODED_VALUE)
+						.param("nfInstanceId", "6faf1bbc-6e4a-4454-a507-a14ef8e1bc11")
+						.param("targetNfInstanceId", "6faf1bbc-6e4a-4454-a507-a14ef8e1bc12")
+						.param("grant_type", "client_credentials")
+						.param("scope", "service1")
+						.param("nfType", "PCF")
+						.param("targetNfType", "NRF")
+						.param("requesterPlmn", "{\"mcc\":\"123\",\"mnc\":\"345\"}")
+						.header("OC-XFCC-DNS", "PCF.d5g.oracle.com"))
+				.andExpect(status().is4xxClientError())
+				.andReturn();
+		respObj = res.getResponse();
+		retryAfterHeader = respObj.getHeader(HttpHeaders.RETRY_AFTER);
+		locationHeader = respObj.getHeader(HttpHeaders.LOCATION);
+		Assert.assertNotNull(retryAfterHeader);
+		Assert.assertNotNull(locationHeader);
+		Assert.assertEquals(retryAfterHeader.toString(),"300");
+		Assert.assertEquals(locationHeader.toString(),"http://www.oracle.com");
+		actualProblemDetails = om.readValue(res.getResponse().getContentAsString(),
+				ProblemDetails.class);
+		Assert.assertEquals(problemDetails.toString(), actualProblemDetails.toString());
+		verify(mockAppender,atLeastOnce()).append((LogEvent)captorLoggingEvent.capture());
+		List<LogEvent> loggingEvent1 = captorLoggingEvent.getAllValues();
+		List<String> logs1 = new ArrayList<String>();
+		for(LogEvent logEvt1:loggingEvent1) {
+			logs1.add(logEvt1.getMessage().getFormattedMessage());
+		}
+		Assert.assertTrue(logs1.toString().contains("logMsg=Request to generate access token returned problemDetails."));
+		Assert.assertTrue(logs1.toString().contains("problemDetails="+problemDetails.toString()));
+	}
+	
+	@Test
+	public void givenTokenRequest_whenFqdnAuthenticationFails_thenReturnAccessTokenErr() throws Exception {
+		ObjectMapper om = new ObjectMapper();
+		NrfSystemOptionsDao nrfSystemOptionsDao = TestDataGenerator.generateNrfSystemOptionsDao();
+		NrfSystemOptions nrfSystemOptions = (NrfSystemOptions) nrfSystemOptionsDao.toDomain("v1");
+		nrfSystemOptions.getForwardingSystemOptions().setAccessTokenForwardingStatus(FeatureStatus.DISABLED);
+		nrfSystemOptions.getNfAuthenticationSystemOptions().setAccessTokenAuthenticationStatus(FeatureStatus.ENABLED);
+		ErrorInfo errorInfo = nrfSystemOptions.getNfAuthenticationSystemOptions().getNfAuthenticationErrorResponses().get(0);
+		errorInfo.setRedirectUrl("http://www.oracle.com");
+		List<ErrorInfo> nfAuthenticationErrorInfoList = new ArrayList<ErrorInfo>();
+		nfAuthenticationErrorInfoList.add(errorInfo);
+		nrfSystemOptions.getNfAuthenticationSystemOptions().setNfAuthenticationErrorResponses(nfAuthenticationErrorInfoList);
+		GenericResponse genericResponse = new GenericResponse();
+		AccessTokenErr accessTokenErr = new AccessTokenErr();
+		accessTokenErr.setError(errorInfo.getErrorCondition().toString());
+		accessTokenErr.setError_description(errorInfo.getErrorResponse());
+		genericResponse.setResponse(accessTokenErr);
+		when(service.generateAccessToken(any(),any())).thenReturn(genericResponse);
+		when(nrfSystemOptionsManager.getNrfSystemOptions()).thenReturn(nrfSystemOptions);
+		//Without headers
+		MvcResult res = 
+				mvc.perform(post("/oauth2/token")
+						.contentType(MediaType.APPLICATION_FORM_URLENCODED_VALUE)
+						.param("nfInstanceId", "6faf1bbc-6e4a-4454-a507-a14ef8e1bc11")
+						.param("targetNfInstanceId", "6faf1bbc-6e4a-4454-a507-a14ef8e1bc12")
+						.param("grant_type", "client_credentials")
+						.param("scope", "service1")
+						.param("nfType", "PCF")
+						.param("targetNfType", "NRF")
+						.param("requesterPlmn", "{\"mcc\":\"123\",\"mnc\":\"345\"}")
+						.header("OC-XFCC-DNS", "PCF.d5g.oracle.com"))
+				.andExpect(status().is4xxClientError())
+				.andReturn();
+		MockHttpServletResponse respObj = res.getResponse();
+		String retryAfterHeader = respObj.getHeader(HttpHeaders.RETRY_AFTER);
+		String locationHeader = respObj.getHeader(HttpHeaders.LOCATION);
+		Assert.assertNull(retryAfterHeader);
+		Assert.assertNull(locationHeader);
+		AccessTokenErr accessTokenErrResponse = om.readValue(res.getResponse().getContentAsString(),
+				AccessTokenErr.class);
+		Assert.assertEquals(accessTokenErr.toString(), accessTokenErrResponse.toString());
+		verify(mockAppender,atLeastOnce()).append((LogEvent)captorLoggingEvent.capture());
+		List<LogEvent> loggingEvent = captorLoggingEvent.getAllValues();
+		List<String> logs = new ArrayList<String>();
+		for(LogEvent logEvt:loggingEvent) {
+			logs.add(logEvt.getMessage().getFormattedMessage());
+		}
+		Assert.assertTrue(logs.toString().contains("logMsg=Request to generate access token returned with error."));
+		Assert.assertTrue(logs.toString().contains("AccessTokenErr="+accessTokenErr.toString()));
+		
+		//With headers
+		HttpHeaders httpHeaders = new HttpHeaders();
+		httpHeaders.add(HttpHeaders.RETRY_AFTER, String.valueOf(errorInfo.getRetryAfter().toSeconds()));
+		httpHeaders.add(HttpHeaders.LOCATION, errorInfo.getRedirectUrl());
+		genericResponse.setHeaders(httpHeaders);		
+		res = 
+				mvc.perform(post("/oauth2/token")
+						.contentType(MediaType.APPLICATION_FORM_URLENCODED_VALUE)
+						.param("nfInstanceId", "6faf1bbc-6e4a-4454-a507-a14ef8e1bc11")
+						.param("targetNfInstanceId", "6faf1bbc-6e4a-4454-a507-a14ef8e1bc12")
+						.param("grant_type", "client_credentials")
+						.param("scope", "service1")
+						.param("nfType", "PCF")
+						.param("targetNfType", "NRF")
+						.param("requesterPlmn", "{\"mcc\":\"123\",\"mnc\":\"345\"}")
+						.header("OC-XFCC-DNS", "PCF.d5g.oracle.com"))
+				.andExpect(status().is4xxClientError())
+				.andReturn();
+		respObj = res.getResponse();
+		retryAfterHeader = respObj.getHeader(HttpHeaders.RETRY_AFTER);
+		locationHeader = respObj.getHeader(HttpHeaders.LOCATION);
+		Assert.assertNotNull(retryAfterHeader);
+		Assert.assertNotNull(locationHeader);
+		Assert.assertEquals(retryAfterHeader.toString(),"300");
+		Assert.assertEquals(locationHeader.toString(),"http://www.oracle.com");
+		accessTokenErrResponse = om.readValue(res.getResponse().getContentAsString(),
+				AccessTokenErr.class);
+		Assert.assertEquals(accessTokenErr.toString(), accessTokenErrResponse.toString());
+		verify(mockAppender,atLeastOnce()).append((LogEvent)captorLoggingEvent.capture());
+		List<LogEvent> loggingEvent1 = captorLoggingEvent.getAllValues();
+		List<String> logs1 = new ArrayList<String>();
+		for(LogEvent logEvt1:loggingEvent1) {
+			logs1.add(logEvt1.getMessage().getFormattedMessage());
+		}
+		Assert.assertTrue(logs1.toString().contains("logMsg=Request to generate access token returned with error."));
+		Assert.assertTrue(logs1.toString().contains("AccessTokenErr="+accessTokenErr.toString()));
+	}
+}

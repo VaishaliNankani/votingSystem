@@ -1,0 +1,320 @@
+package com.oracle.oci.votingservice.service;
+
+import java.net.URI;
+import java.sql.Connection;
+import java.sql.SQLException;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+import javax.servlet.http.HttpServletRequest;
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.HttpStatus;
+import org.springframework.stereotype.Service;
+import org.springframework.web.bind.annotation.RequestMethod;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.oracle.oci.votingservice.dao.DBConnection;
+import com.oracle.oci.votingservice.domain.CandidateData;
+import com.oracle.oci.votingservice.domain.ProblemDetails;
+import com.oracle.oci.votingservice.domain.RegistrationData;
+import com.oracle.oci.votingservice.domain.VoteData;
+
+import oracle.jdbc.OracleConnection;
+import oracle.soda.OracleCollection;
+import oracle.soda.OracleCursor;
+import oracle.soda.OracleDatabase;
+import oracle.soda.OracleDocument;
+import oracle.soda.OracleException;
+import oracle.soda.rdbms.OracleRDBMSClient;
+
+
+
+@Service
+public class OciVotingServiceImpl implements OciVotingService{
+
+	private static Logger logger = LogManager.getLogger(OciVotingServiceImpl.class);	
+	private static final int VOTE_COUNT=1;
+	private static final ObjectMapper objectMapper= new ObjectMapper();  
+	Map<Long , String> voterKeyMap;
+	Map<Long , String> candidateKeyMap;
+	@Autowired
+	DBConnection dbConnection;
+	public OciVotingServiceImpl() {
+		this.voterKeyMap = new HashMap<Long,String>();
+		this.candidateKeyMap = new HashMap<Long,String>();
+	}
+
+	public Object createOrUpdateVoterRecord(RegistrationData registrationData,Long voterId) {
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		logMsg.clear();
+		logMsg.put("logMsg", "Creating Voter Registration record");
+		logMsg.put("RegistrationData", registrationData);
+		logMsg.put("voterId", voterId);
+		logger.info(logMsg.toString());
+		OracleDocument resultDoc=null;
+		OracleConnection connection = null;
+		Object resultContent  = null;
+		try {			
+			connection = dbConnection.getDatabaseConnection();
+			OracleRDBMSClient client = new OracleRDBMSClient();
+			OracleDatabase db = client.getDatabase(connection);
+			OracleCollection collection = db.admin().createCollection("Voters");
+			String registrationDataJson = objectMapper.writeValueAsString(registrationData);
+			//check if document already exists or not
+			String voterKey = this.voterKeyMap.get(voterId);
+			//OracleDocument doc = collection.findOne(voterKey);
+			logMsg.clear();
+			OracleDocument  registrationDoc = db.createDocumentFromString(registrationDataJson);
+			if(voterKey == null )
+			{				
+				logMsg.put("logMsg", "Creating Voter registration record");				
+				logger.info(logMsg.toString());
+				resultDoc = collection.insertAndGet(registrationDoc);
+				this.voterKeyMap.put(registrationData.getVoterId(), resultDoc.getKey());
+			}else
+			{
+				logMsg.put("logMsg","voter Registration record already "
+						+ "exists,updating the record");				
+				logger.info(logMsg.toString());
+				resultDoc = collection.find().key(voterKey).replaceOneAndGet(registrationDoc);
+				
+			}				
+			resultContent = registrationData;
+		} catch (Exception e) {	
+			ProblemDetails prob =  ProblemDetails.forInternalError();
+			resultContent = prob;
+		}finally {
+			try {
+				connection.close();
+			} catch (SQLException e) {
+				e.printStackTrace();
+			}
+		}
+		logMsg.clear();
+		logMsg.put("logMsg", "Created/Updtaed Voter Registration record");
+		logMsg.put("RegistrationData", registrationData);
+		logger.info(logMsg.toString());
+		return resultContent;
+	}
+
+	public Object createOrUpdateCandidateRecord(CandidateData candidateData,Long candidateId) {
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		Object resultContent  = null;
+		logMsg.clear();
+		logMsg.put("logMsg", "Creating/updating Candidate Registration record");
+		logMsg.put("candidateData", candidateData);
+		logger.info(logMsg.toString());
+		OracleDocument resultDoc = null;
+		OracleConnection connection = null;
+		try {
+			connection = dbConnection.getDatabaseConnection();
+			OracleRDBMSClient client = new OracleRDBMSClient();
+			OracleDatabase db = client.getDatabase(connection);
+			OracleCollection collection = db.admin().createCollection("Candidates");
+			String candidateDataJson = objectMapper.writeValueAsString(candidateData);
+			OracleDocument  candidateDoc = db.createDocumentFromString(candidateDataJson);	
+			String candidateKey = this.candidateKeyMap.get(candidateId);
+			if(candidateKey == null )
+			{				
+				logMsg.put("logMsg", "Creating candidate registration record");				
+				logger.info(logMsg.toString());
+				resultDoc = collection.insertAndGet(candidateDoc);
+				this.candidateKeyMap.put(candidateData.getCandidateId(), resultDoc.getKey());
+				logMsg.clear();
+				logMsg.put("logMsg", "key values in map");
+				logMsg.put("dockey", resultDoc.getKey());				
+				logger.info(logMsg.toString());
+			}else
+			{
+				logMsg.put("logMsg", "candidate Registration record already "
+						+ "exists,updating the record");				
+				logger.info(logMsg.toString());
+				resultDoc = collection.find().
+						key(candidateKey).replaceOneAndGet(candidateDoc);
+			}
+			resultContent = candidateData;
+		} catch (Exception e) {
+			ProblemDetails prob =  ProblemDetails.forNotFound();
+			resultContent = prob;			
+		}finally {
+			try {
+				connection.close();
+			} catch (SQLException e) {
+				e.printStackTrace();
+			}
+		}
+		return resultContent;
+	}
+
+	public Object updateVotes(VoteData voteData) {
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		logMsg.clear();
+		logMsg.put("logMsg", "updating votes");
+		logMsg.put("voteData", voteData);
+		logger.info(logMsg.toString());
+		OracleDocument retValDoc = null;
+		OracleConnection connection = null;
+		try {
+
+			connection = 	dbConnection.getDatabaseConnection();
+			OracleRDBMSClient client = new OracleRDBMSClient();
+			OracleDatabase db = client.getDatabase(connection);
+			OracleDocument voterDoc = null;
+			OracleDocument candidateDoc = null;
+			OracleCollection collection = db.admin().createCollection("Candidates");
+			OracleCollection collection = db.admin().createCollection("VOters");
+			//access voter record
+			String voterKey = this.voterKeyMap.get(voteData.getVoterId());
+			//access candidate record
+			RegistrationData voterRecord = null;
+			CandidateData candidateRecord = null;
+			String candidateKey = this.candidateKeyMap.get(voteData.getCandidateId());
+			if(voterKey!=null && candidateKey!=null)
+			{
+				/*get voterRecord and update "voteCasted" attribute as true*/
+				voterDoc = collection.find().key(voterKey).getOne();
+				logMsg.clear();
+				logMsg.put("logMsg", "voterDoc content");
+				logMsg.put("voterDoc", voterDoc.getContentAsString());
+				logger.info(logMsg.toString());
+				voterRecord = objectMapper.readValue(voterDoc.getContentAsString(),RegistrationData.class);
+				voterRecord.setVoteCasted(true);
+				String voterRecordJson = objectMapper.writeValueAsString(voterRecord);
+				OracleDocument  updatedVoterDoc = db.createDocumentFromString(voterRecordJson);
+				retValDoc = collection.find().key(voterKey).replaceOneAndGet(updatedVoterDoc);
+				/* increment the number of votes for candidate*/
+				candidateDoc = collection.find().key(candidateKey).getOne();
+				candidateRecord = objectMapper.readValue(voterDoc.getContentAsString(),CandidateData.class);
+				candidateRecord.setNumVotes(candidateRecord.getNumVotes() + VOTE_COUNT);
+				String candidateRecordJson = objectMapper.writeValueAsString(candidateRecord);
+				OracleDocument  updatedCandidateDoc = db.createDocumentFromString(candidateRecordJson);
+				collection.find().key(candidateKey).replaceOne(updatedCandidateDoc);
+				RegistrationData resultContent = objectMapper.readValue(voterDoc.getContentAsString()
+						,RegistrationData.class);
+				return resultContent;
+			}
+			else
+			{
+				ProblemDetails prob =  ProblemDetails.forNotFound();
+				if(voterKey == null)
+				{
+					prob.setCause("voter registration data not "
+							+ "found for voterid"+voteData.getVoterId());
+				}
+				else if (candidateKey!=null)
+				{
+					prob.setCause("candidate registration data not "
+							+ "found for candidateid"+voteData.getCandidateId());
+				}
+				return prob;
+			}
+		} catch (Exception e) {
+		
+			e.printStackTrace();
+		}finally {
+			try {
+				connection.close();
+			} catch (SQLException e) {
+			
+				e.printStackTrace();
+			}
+		}
+		return retValDoc;
+	}
+	
+	public Object getVoterRegistrationData(Long voterId)
+	{
+		//get VoterRegistrationData
+		OracleDocument voterDoc = null;
+		OracleConnection connection=null;
+		try {
+			String voterKey = this.voterKeyMap.get(voterId);
+			connection = 	dbConnection.getDatabaseConnection();
+			OracleRDBMSClient client = new OracleRDBMSClient();
+			OracleDatabase db = client.getDatabase(connection);
+			OracleCollection collection = db.admin().createCollection("Voters");
+			voterDoc = collection.find().key(voterKey).getOne();
+			RegistrationData resultContent = objectMapper.readValue(voterDoc.getContentAsString()
+					,RegistrationData.class);
+			return resultContent;
+		}catch(Exception e)
+		{
+			ProblemDetails prob =  ProblemDetails.forNotFound();
+			return prob;
+		}finally {
+			try {
+				connection.close();
+			} catch (SQLException e) {
+
+				e.printStackTrace();
+			}
+		}	
+
+	}
+	
+	public Object  getAllCandidates()
+	{
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		ArrayList<CandidateData> candidateList = new ArrayList<CandidateData>(); 
+		OracleDocument resultDoc = null;
+		OracleConnection connection = null;
+		logMsg.clear();
+		logMsg.put("logMsg", "getAllCandidates");
+		logMsg.put("getAllCandidates", this.candidateKeyMap.size());
+		logger.info(logMsg.toString());
+		String docKey = null;
+		try {
+			connection = dbConnection.getDatabaseConnection();
+			OracleRDBMSClient client = new OracleRDBMSClient();
+			OracleDatabase db = client.getDatabase(connection);
+			OracleCollection collection = db.admin().createCollection("Candidates");			
+			for (Long key: this.candidateKeyMap.keySet()) {
+			   /* System.out.println("key : " + key);
+			    System.out.println("value : " + this.candidateKeyMap.get(key));*/
+			   docKey =  this.candidateKeyMap.get(key);
+			   
+			   logMsg.clear();
+				logMsg.put("logMsg", "getAllCandidates");
+				logMsg.put("docKey", docKey);
+				logger.info(logMsg.toString());
+			    resultDoc = collection.find().
+						key(docKey).getOne();
+			    String content = resultDoc.getContentAsString();
+			    logMsg.clear();
+				logMsg.put("logMsg", "resultDoc printing");
+				logMsg.put("content",content );
+				logger.info(logMsg.toString());
+			    CandidateData candidateData = objectMapper.readValue(content
+						,CandidateData.class);	
+			    logMsg.clear();
+				logMsg.put("logMsg", "candidateData printing");
+				logMsg.put("candidateData",candidateData );
+				logger.info(logMsg.toString());
+				candidateList.add(candidateData);
+			}	
+				
+		} catch (Exception e) {			
+			e.printStackTrace();
+		}finally {
+			try {
+				connection.close();
+			} catch (SQLException e) {				
+				e.printStackTrace();
+			}
+		}	
+		return candidateList;
+	}
+	
+	
+}

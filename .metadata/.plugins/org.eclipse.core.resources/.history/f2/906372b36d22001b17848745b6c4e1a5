@@ -1,0 +1,47 @@
+package com.oracle.oci.votingservice.domain;
+
+public class VoteData {
+	
+	private String voterId  = null;
+	
+	
+	private String  voterName = null;
+
+	private String address  = null;
+
+	private String phoneNumber  = null;
+	//wont be received as input
+	private String voteCasted  = null;
+
+	
+	public String getVoterName() {
+		return voterName;
+	}
+	public void setVoterName(String voterName) {
+		this.voterName = voterName;
+	}
+	public String getAddress() {
+		return address;
+	}
+	public void setAddress(String address) {
+		this.address = address;
+	}
+	public String getPhoneNumber() {
+		return phoneNumber;
+	}
+	public void setPhoneNumber(String phoneNumber) {
+		this.phoneNumber = phoneNumber;
+	}
+	public String getVoteCasted() {
+		return voteCasted;
+	}
+	public void setVoteCasted(String voteCasted) {
+		this.voteCasted = voteCasted;
+	}
+	public String getVoterId() {
+		return voterId;
+	}
+	public void setVoterId(String voterId) {
+		this.voterId = voterId;
+	}
+}

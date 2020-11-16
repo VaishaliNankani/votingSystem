@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<session version="1.0">
+<refactoring comment="Copy element &apos;NfDiscService.java&apos; to &apos;ociVotingService/src/main/java/com.oracle.oci.votingservice.service&apos;&#x0A;- Original project: &apos;nfDiscovery&apos;&#x0A;- Destination element: &apos;ociVotingService/src/main/java/com.oracle.oci.votingservice.service&apos;&#x0A;- Original element: &apos;com.oracle.cgbu.cne.nrf.service.NfDiscService.java&apos;" description="Copy compilation unit" destination="=ociVotingService/src\/main\/java=/gradle_scope=/main=/=/gradle_used_by_scope=/main,test=/&lt;com.oracle.oci.votingservice.service" element1="/src\/main\/java=/gradle_scope=/main=/=/gradle_used_by_scope=/main,test=/&lt;com.oracle.cgbu.cne.nrf.service{NfDiscService.java" files="0" flags="589830" folders="0" id="org.eclipse.jdt.ui.copy" policy="org.eclipse.jdt.ui.copyResources" stamp="1604995293738" units="1" version="1.0"/>
+</session>

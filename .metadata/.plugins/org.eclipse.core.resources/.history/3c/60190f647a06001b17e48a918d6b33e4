@@ -1,0 +1,10 @@
+management.endpoint.metrics.enabled=true
+management.endpoints.web.exposure.include=*
+management.endpoint.prometheus.enabled=true
+management.metrics.export.prometheus.enabled=true
+management.metrics.use-global-registry=true
+management.metrics.export.prometheus.pushgateway.enabled=true
+management.metrics.export.prometheus.pushgateway.grouping-key.app_name=${management.metrics.tags.app_name}
+management.metrics.export.prometheus.pushgateway.push-rate=10s
+management.metrics.export.prometheus.pushgateway.job=demo-batch
+management.metrics.export.prometheus.pushgateway.shutdown-operation=push

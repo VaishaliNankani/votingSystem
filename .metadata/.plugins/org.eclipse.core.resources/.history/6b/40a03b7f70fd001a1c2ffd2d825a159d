@@ -1,0 +1,408 @@
+package com.oracle.cgbu.cne.common.test;
+
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+import java.io.BufferedWriter;
+import java.io.File;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.security.KeyStore;
+import java.security.PrivateKey;
+import java.security.cert.X509Certificate;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+import org.apache.commons.lang3.tuple.Pair;
+import org.apache.logging.log4j.Level;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.core.Appender;
+import org.apache.logging.log4j.core.LogEvent;
+import org.apache.logging.log4j.core.Logger;
+import org.junit.After;
+import org.junit.Assert;
+import org.junit.Before;
+import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.mockito.ArgumentCaptor;
+import org.mockito.Captor;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.Mockito;
+import org.mockito.MockitoAnnotations;
+import org.powermock.api.mockito.PowerMockito;
+import org.powermock.core.classloader.annotations.PowerMockIgnore;
+import org.powermock.core.classloader.annotations.PrepareForTest;
+import org.powermock.modules.junit4.PowerMockRunner;
+
+import com.oracle.cgbu.cne.common.config.ConfigurationInfo;
+import com.oracle.cgbu.cne.common.config.ConfigurationInfo.Globalconfig;
+import com.oracle.cgbu.cne.common.config.ConfigurationInfo.Oauthconfig;
+import com.oracle.cgbu.cne.common.config.ConfigurationInfo.Sslconfig;
+import com.oracle.cgbu.cne.common.service.UpdateConfiguration;
+
+
+@PowerMockIgnore({ "javax.management.*", "com.sun.org.apache.*", "javax.xml.*", "org.xml.*", "java.net.ssl",
+	"javax.security.auth.x500.X500Principal", "org.apache.xerces.*", "org.w3c.*", "javax.net.ssl.*" })
+@RunWith(PowerMockRunner.class)
+@PrepareForTest(value = { ConfigurationInfo.class, UpdateConfiguration.class, KeyStore.class })
+
+public class ConfigurationUpdateApplicationTests {
+
+	private Logger logger;
+
+	@InjectMocks
+	private UpdateConfiguration config;
+
+	@Mock
+	private Appender mockAppender;
+
+	@Captor
+	private ArgumentCaptor<LogEvent> captorLoggingEvent;
+
+	@Before
+	public void setUp() {
+		MockitoAnnotations.initMocks(this);
+		when(mockAppender.getName()).thenReturn("MockAppender");
+		when(mockAppender.isStarted()).thenReturn(true);
+		when(mockAppender.isStopped()).thenReturn(false);
+		logger = (Logger) LogManager.getRootLogger();
+		logger.addAppender(mockAppender);
+		logger.setLevel(Level.INFO);
+
+
+
+	}
+	@After
+	public void teardown() {
+		logger.removeAppender(mockAppender);
+	}
+
+	@Test
+	public void test_fillOauthNamespacesAndSecrets() {
+
+		List<String> list = new ArrayList<String>();
+		list.add("hello");
+		list.add("World");
+		// Oauth Config
+		Oauthconfig oauthConfig = new Oauthconfig();
+		oauthConfig.setPrivateKeySecretNameSpace("privateKeySecretNameSpace");
+		oauthConfig.setRsaPrivateKeyFileName("rsaPrivateKeyFileName");
+		oauthConfig.setEcdsaPrivateKeyFileName("ecdsaPrivateKeyFileName");
+		oauthConfig.setCertificateSecretName("certificateSecretName");
+		oauthConfig.setCertificateSecretNameSpace("certificateSecretNameSpace");
+		oauthConfig.setRsaCertificateFileName("rsaCertificateFileName");
+		oauthConfig.setEcdsaCertificateFileName("ecdsaCertificateFileName");
+		oauthConfig.setKeyStorePasswordFileName("keyStorePasswordFileName");
+		oauthConfig.setKeyStorePasswordSecretName("keyStorePasswordSecretName");
+		oauthConfig.setKeyStorePasswordSecretNameSpace("keyStorePasswordSecretNameSpace");
+		oauthConfig.setInitialAlgorithm("ES256");
+
+		// oauthResources
+		Map<String, ArrayList<String>> oauthK8Resources = new HashMap<String, ArrayList<String>>();
+		oauthK8Resources.put("keyStorePasswordSecretNameSpace", (ArrayList<String>) list);
+		oauthK8Resources.put("trustStorePasswordSecretNameSpace", (ArrayList<String>) list);
+		oauthK8Resources.put("privateKeySecretNameSpace",(ArrayList<String>) list);
+
+		UpdateConfiguration updateConfiguration = new UpdateConfiguration();
+		updateConfiguration.setOauthK8Resources(oauthK8Resources);
+
+		// sslConfig
+		ConfigurationInfo configInfo = new ConfigurationInfo();
+		Sslconfig sslConfig = new Sslconfig();
+		Globalconfig globalConfig = new Globalconfig();
+		globalConfig.getInitSsl();
+		sslConfig.setSslenabled(false);
+		sslConfig.setTlsVersion("TLSv1.1");
+		// private key
+		sslConfig.setPrivateKeySecretName("privateKeySecretName");
+		sslConfig.setPrivateKeySecretNameSpace("privateKeySecretNameSpace");
+		sslConfig.setEcdsaPrivateKeyFileName("ecdsaPrivateKeyFileName");
+		sslConfig.setRsaPrivateKeyFileName("rsaPrivateKeyFileName");
+		// certificate
+		sslConfig.setCertificateSecretName("certificateSecretName");
+		sslConfig.setCertificateSecretNameSpace("certificateSecretNameSpace");
+		sslConfig.setRsaCertificateFileName("rsaCertificateFileName");
+		sslConfig.setEcdsaCertificateFileName("ecdsaCertificateFileName");
+		sslConfig.setInitialAlgorithm("ES256");
+		sslConfig.setCaBundleFileName("caBundleFileName");
+		sslConfig.setCaBundleSecretName("caBundleSecretName");
+		sslConfig.setCaBundleSecretNameSpace("caBundleSecretNameSpace");
+		sslConfig.setKeyStorePasswordFileName("keyStorePasswordFileName");
+		sslConfig.setKeyStorePasswordSecretName("keyStorePasswordSecretName");
+		sslConfig.setKeyStorePasswordSecretNameSpace("keyStorePasswordSecretNameSpace");
+		sslConfig.setTrustStorePasswordFileName("trustStorePasswordFileName");
+		sslConfig.setTrustStorePasswordSecretName("trustStorePasswordSecretName");
+		sslConfig.setTrustStorePasswordSecretNameSpace("trustStorePasswordSecretNameSpace");
+		sslConfig.setCipherSuite(new String[] { "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256" });
+		configInfo.setGlobalConfig(globalConfig);
+		configInfo.setOauthConfig(oauthConfig);
+		configInfo.setSslConfig(sslConfig);
+		List<String> logs = new ArrayList<String>();
+
+		config.setOauthK8Resources(oauthK8Resources);
+		config.setConfigInfo(configInfo);
+
+		verify(mockAppender, atLeastOnce()).append((LogEvent) captorLoggingEvent.capture());
+
+		List<LogEvent> loggingEvent = captorLoggingEvent.getAllValues();
+
+		for (LogEvent logEvt : loggingEvent) {
+			logs.add(logEvt.getMessage().getFormattedMessage());
+
+		}
+		
+	}
+
+
+	@Test
+	public void test_fillSslNamespacesAndSecrets() {
+
+		// Oauth Config
+		Oauthconfig oauthConfig = new Oauthconfig();
+		oauthConfig.setPrivateKeySecretNameSpace("privateKeySecretNameSpace");
+		oauthConfig.setRsaPrivateKeyFileName("rsaPrivateKeyFileName");
+		oauthConfig.setEcdsaPrivateKeyFileName("ecdsaPrivateKeyFileName");
+		oauthConfig.setCertificateSecretName("certificateSecretName");
+		oauthConfig.setCertificateSecretNameSpace("certificateSecretNameSpace");
+		oauthConfig.setRsaCertificateFileName("rsaCertificateFileName");
+		oauthConfig.setEcdsaCertificateFileName("ecdsaCertificateFileName");
+		oauthConfig.setKeyStorePasswordFileName("keyStorePasswordFileName");
+		oauthConfig.setKeyStorePasswordSecretName("keyStorePasswordSecretName");
+		oauthConfig.setKeyStorePasswordSecretNameSpace("keyStorePasswordSecretNameSpace");
+		oauthConfig.setInitialAlgorithm("ES256");
+		// oauthResources
+		List<String> list = new ArrayList<String>();
+		list.add("hello");
+		list.add("World");
+
+		Map<String, ArrayList<String>> sslK8Resources = new HashMap<String, ArrayList<String>>();
+		sslK8Resources.put("keyStorePasswordSecretNameSpace", (ArrayList<String>) list);
+		sslK8Resources.put("trustStorePasswordSecretNameSpace", (ArrayList<String>) list);
+		sslK8Resources.put("caBundleSecretNameSpace", (ArrayList<String>) list);
+		sslK8Resources.put("certificateSecretNameSpace", (ArrayList<String>) list);
+		sslK8Resources.put("privateKeySecretNameSpace",(ArrayList<String>) list);	
+
+		UpdateConfiguration updateConfiguration = new UpdateConfiguration();
+		updateConfiguration.setSslK8Resources(sslK8Resources);
+
+		// sslConfig
+		ConfigurationInfo configInfo = new ConfigurationInfo();
+		Sslconfig sslConfig = new Sslconfig();
+		Globalconfig globalConfig = new Globalconfig();
+		globalConfig.getInitSsl();
+		sslConfig.setSslenabled(true);
+		sslConfig.setTlsVersion("TLSv1.1");
+		// private key
+		sslConfig.setPrivateKeySecretName("privateKeySecretName");
+		sslConfig.setPrivateKeySecretNameSpace("privateKeySecretNameSpace");
+		sslConfig.setEcdsaPrivateKeyFileName("ecdsaPrivateKeyFileName");
+		sslConfig.setRsaPrivateKeyFileName("rsaPrivateKeyFileName");
+		// certificate
+		sslConfig.setCertificateSecretName("certificateSecretName");
+		sslConfig.setCertificateSecretNameSpace("certificateSecretNameSpace");
+		sslConfig.setRsaCertificateFileName("rsaCertificateFileName");
+		sslConfig.setEcdsaCertificateFileName("ecdsaCertificateFileName");
+		sslConfig.setInitialAlgorithm("ES256");
+		sslConfig.setCaBundleFileName("caBundleFileName");
+		sslConfig.setCaBundleSecretName("caBundleSecretName");
+		sslConfig.setCaBundleSecretNameSpace("caBundleSecretNameSpace");
+		sslConfig.setKeyStorePasswordFileName("keyStorePasswordFileName");
+		sslConfig.setKeyStorePasswordSecretName("keyStorePasswordSecretName");
+		sslConfig.setKeyStorePasswordSecretNameSpace("keyStorePasswordSecretNameSpace");
+		sslConfig.setTrustStorePasswordFileName("trustStorePasswordFileName");
+		sslConfig.setTrustStorePasswordSecretName("trustStorePasswordSecretName");
+		sslConfig.setTrustStorePasswordSecretNameSpace("trustStorePasswordSecretNameSpace");
+		sslConfig.setCipherSuite(new String[] { "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256" });
+		configInfo.setGlobalConfig(globalConfig);
+		configInfo.setOauthConfig(oauthConfig);
+		configInfo.setSslConfig(sslConfig);
+
+		List<String> logs = new ArrayList<String>();
+
+		config.setSslK8Resources(sslK8Resources);
+		config.setConfigInfo(configInfo);
+
+		verify(mockAppender, atLeastOnce()).append((LogEvent) captorLoggingEvent.capture());
+
+		List<LogEvent> loggingEvent = captorLoggingEvent.getAllValues();
+
+		for (LogEvent logEvt : loggingEvent) {
+			logs.add(logEvt.getMessage().getFormattedMessage());
+
+		}
+
+	}
+
+//	@Test
+//	public void test_monitorOauthConfigurationUpdate() {
+//
+//		// Oauth Config
+//		Oauthconfig oauthConfig = new Oauthconfig();
+//		oauthConfig.setPrivateKeySecretNameSpace("privateKeySecretNameSpace");
+//		oauthConfig.setRsaPrivateKeyFileName("rsaPrivateKeyFileName");
+//		oauthConfig.setEcdsaPrivateKeyFileName("ecdsaPrivateKeyFileName");
+//		oauthConfig.setCertificateSecretName("certificateSecretName");
+//		oauthConfig.setCertificateSecretNameSpace("certificateSecretNameSpace");
+//		oauthConfig.setRsaCertificateFileName("rsaCertificateFileName");
+//		oauthConfig.setEcdsaCertificateFileName("ecdsaCertificateFileName");
+//		oauthConfig.setKeyStorePasswordFileName("keyStorePasswordFileName");
+//		oauthConfig.setKeyStorePasswordSecretName("keyStorePasswordSecretName");
+//		oauthConfig.setKeyStorePasswordSecretNameSpace("keyStorePasswordSecretNameSpace");
+//		oauthConfig.setInitialAlgorithm("ES256");
+//		// oauthResources
+//		List<String> list = new ArrayList<String>();
+//		list.add("hello");
+//		list.add("World");
+//
+//		// oauthResources
+//		Map<String, ArrayList<String>> oauthK8Resources = new HashMap<String, ArrayList<String>>();
+//		oauthK8Resources.put("keyStorePasswordSecretNameSpace", (ArrayList<String>) list);
+//		oauthK8Resources.put("trustStorePasswordSecretNameSpace", (ArrayList<String>) list);
+//		oauthK8Resources.put("privateKeySecretNameSpace",(ArrayList<String>) list);
+//
+//		UpdateConfiguration updateConfiguration = new UpdateConfiguration();
+//		updateConfiguration.setOauthK8Resources(oauthK8Resources);
+//
+//		// sslConfig
+//		ConfigurationInfo configInfo = new ConfigurationInfo();
+//		Sslconfig sslConfig = new Sslconfig();
+//		Globalconfig globalConfig = new Globalconfig();
+//		globalConfig.setInitSsl(false);
+//		sslConfig.setSslenabled(true);
+//		sslConfig.setTlsVersion("TLSv1.1");
+//		// private key
+//		sslConfig.setPrivateKeySecretName("privateKeySecretName");
+//		sslConfig.setPrivateKeySecretNameSpace("privateKeySecretNameSpace");
+//		sslConfig.setEcdsaPrivateKeyFileName("ecdsaPrivateKeyFileName");
+//		sslConfig.setRsaPrivateKeyFileName("rsaPrivateKeyFileName");
+//		// certificate
+//		sslConfig.setCertificateSecretName("certificateSecretName");
+//		sslConfig.setCertificateSecretNameSpace("certificateSecretNameSpace");
+//		sslConfig.setRsaCertificateFileName("rsaCertificateFileName");
+//		sslConfig.setEcdsaCertificateFileName("ecdsaCertificateFileName");
+//		sslConfig.setInitialAlgorithm("ES256");
+//		sslConfig.setCaBundleFileName("caBundleFileName");
+//		sslConfig.setCaBundleSecretName("caBundleSecretName");
+//		sslConfig.setCaBundleSecretNameSpace("caBundleSecretNameSpace");
+//		sslConfig.setKeyStorePasswordFileName("keyStorePasswordFileName");
+//		sslConfig.setKeyStorePasswordSecretName("keyStorePasswordSecretName");
+//		sslConfig.setKeyStorePasswordSecretNameSpace("keyStorePasswordSecretNameSpace");
+//		sslConfig.setTrustStorePasswordFileName("trustStorePasswordFileName");
+//		sslConfig.setTrustStorePasswordSecretName("trustStorePasswordSecretName");
+//		sslConfig.setTrustStorePasswordSecretNameSpace("trustStorePasswordSecretNameSpace");
+//		sslConfig.setCipherSuite(new String[] { "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256" });
+//		configInfo.setGlobalConfig(globalConfig);
+//		configInfo.setOauthConfig(oauthConfig);
+//		configInfo.setSslConfig(sslConfig);
+//
+//		List<String> logs = new ArrayList<String>();
+//
+//		config.setOauthK8Resources(oauthK8Resources);
+//		config.setConfigInfo(configInfo);
+//
+//		verify(mockAppender, atLeastOnce()).append((LogEvent) captorLoggingEvent.capture());
+//
+//		List<LogEvent> loggingEvent = captorLoggingEvent.getAllValues();
+//
+//		for (LogEvent logEvt : loggingEvent) {
+//			logs.add(logEvt.getMessage().getFormattedMessage());
+//
+//		}
+//
+//		Assert.assertTrue(logs.toString()
+//				.contains("monitor oauth configuration"));
+//
+//		Assert.assertTrue(logs.toString()
+//				.contains("number of namespaces to monitor"+oauthK8Resources.keySet().size()));
+//
+//	}
+//	@Test
+//	public void test_monitorSslConfigurationUpdate() {
+//
+//		// Oauth Config
+//		Oauthconfig oauthConfig = new Oauthconfig();
+//		oauthConfig.setPrivateKeySecretNameSpace("privateKeySecretNameSpace");
+//		oauthConfig.setRsaPrivateKeyFileName("rsaPrivateKeyFileName");
+//		oauthConfig.setEcdsaPrivateKeyFileName("ecdsaPrivateKeyFileName");
+//		oauthConfig.setCertificateSecretName("certificateSecretName");
+//		oauthConfig.setCertificateSecretNameSpace("certificateSecretNameSpace");
+//		oauthConfig.setRsaCertificateFileName("rsaCertificateFileName");
+//		oauthConfig.setEcdsaCertificateFileName("ecdsaCertificateFileName");
+//		oauthConfig.setKeyStorePasswordFileName("keyStorePasswordFileName");
+//		oauthConfig.setKeyStorePasswordSecretName("keyStorePasswordSecretName");
+//		oauthConfig.setKeyStorePasswordSecretNameSpace("keyStorePasswordSecretNameSpace");
+//		oauthConfig.setInitialAlgorithm("ES256");
+//		// oauthResources
+//		List<String> list = new ArrayList<String>();
+//		list.add("hello");
+//		list.add("World");
+//
+//		Map<String, ArrayList<String>> sslK8Resources = new HashMap<String, ArrayList<String>>();
+//		sslK8Resources.put("keyStorePasswordSecretNameSpace", (ArrayList<String>) list);
+//		sslK8Resources.put("trustStorePasswordSecretNameSpace", (ArrayList<String>) list);
+//		sslK8Resources.put("caBundleSecretNameSpace", (ArrayList<String>) list);
+//		sslK8Resources.put("certificateSecretNameSpace", (ArrayList<String>) list);
+//		sslK8Resources.put("privateKeySecretNameSpace",(ArrayList<String>) list);	
+//
+//		UpdateConfiguration updateConfiguration = new UpdateConfiguration();
+//		updateConfiguration.setSslK8Resources(sslK8Resources);
+//
+//		// sslConfig
+//		ConfigurationInfo configInfo = new ConfigurationInfo();
+//		Sslconfig sslConfig = new Sslconfig();
+//		Globalconfig globalConfig = new Globalconfig();
+//		globalConfig.setInitSsl(true);
+//		sslConfig.setSslenabled(true);
+//		sslConfig.setTlsVersion("TLSv1.1");
+//		// private key
+//		sslConfig.setPrivateKeySecretName("privateKeySecretName");
+//		sslConfig.setPrivateKeySecretNameSpace("privateKeySecretNameSpace");
+//		sslConfig.setEcdsaPrivateKeyFileName("ecdsaPrivateKeyFileName");
+//		sslConfig.setRsaPrivateKeyFileName("rsaPrivateKeyFileName");
+//		// certificate
+//		sslConfig.setCertificateSecretName("certificateSecretName");
+//		sslConfig.setCertificateSecretNameSpace("certificateSecretNameSpace");
+//		sslConfig.setRsaCertificateFileName("rsaCertificateFileName");
+//		sslConfig.setEcdsaCertificateFileName("ecdsaCertificateFileName");
+//		sslConfig.setInitialAlgorithm("ES256");
+//		sslConfig.setCaBundleFileName("caBundleFileName");
+//		sslConfig.setCaBundleSecretName("caBundleSecretName");
+//		sslConfig.setCaBundleSecretNameSpace("caBundleSecretNameSpace");
+//		sslConfig.setKeyStorePasswordFileName("keyStorePasswordFileName");
+//		sslConfig.setKeyStorePasswordSecretName("keyStorePasswordSecretName");
+//		sslConfig.setKeyStorePasswordSecretNameSpace("keyStorePasswordSecretNameSpace");
+//		sslConfig.setTrustStorePasswordFileName("trustStorePasswordFileName");
+//		sslConfig.setTrustStorePasswordSecretName("trustStorePasswordSecretName");
+//		sslConfig.setTrustStorePasswordSecretNameSpace("trustStorePasswordSecretNameSpace");
+//		sslConfig.setCipherSuite(new String[] { "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256" });
+//		configInfo.setGlobalConfig(globalConfig);
+//		configInfo.setOauthConfig(oauthConfig);
+//		configInfo.setSslConfig(sslConfig);
+//
+//		List<String> logs = new ArrayList<String>();
+//
+//		config.setSslK8Resources(sslK8Resources);
+//		config.setConfigInfo(configInfo);
+//
+//		verify(mockAppender, atLeastOnce()).append((LogEvent) captorLoggingEvent.capture());
+//
+//		List<LogEvent> loggingEvent = captorLoggingEvent.getAllValues();
+//
+//		for (LogEvent logEvt : loggingEvent) {
+//			logs.add(logEvt.getMessage().getFormattedMessage());
+//
+//		}
+//
+//		Assert.assertTrue(logs.toString()
+//				.contains("monitor ssl configuration"));
+//
+//		Assert.assertTrue(logs.toString()
+//				.contains("number of namespaces to monitor"+sslK8Resources.keySet().size()));
+//
+//	}
+}

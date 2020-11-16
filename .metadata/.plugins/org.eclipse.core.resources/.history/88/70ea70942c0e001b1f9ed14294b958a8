@@ -1,0 +1,24 @@
+// Copyright 2020 (C), Oracle and/or its affiliates. All rights reserved.
+
+package com.oracle.cgbu.cne.nrf.domain;
+
+import java.util.Date;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.springframework.validation.annotation.Validated;
+
+
+import com.oracle.cgbu.cne.nrf.dao.NrfSystemOptionsDao;
+
+@Validated
+public class CustomResponse extends SimpleAbstractDto {
+
+	private static  Logger logger = LogManager.getLogger(CustomResponse.class);
+	private NrfSystemOptions nrfSystemOptions;
+	private NrfEngSystemOptions nrfEngSystemOptions;
+	
+}

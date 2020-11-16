@@ -1,0 +1,32 @@
+// Copyright 2018 (C), Oracle and/or its affiliates. All rights reserved.
+
+package com.oracle.oci.votingservice.service;
+
+import java.util.HashMap;
+
+import javax.servlet.http.HttpServletRequest;
+
+import com.oracle.cgbu.cne.nrf.domain.ForwardingData;
+import com.oracle.cgbu.cne.nrf.domain.NrfEngSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.NrfSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.SearchData;
+import com.oracle.cgbu.cne.nrf.domain.SearchResult;
+
+public interface NfDiscService {
+	
+	// To get NfInstances which match NfProfile query parameters like
+	// ( target-nf-type, target-nf-instance-id, target-nf-fqdn, 
+	// preferred-locality, nfStatus) if any of these parameters are present
+	public Object getNfsBasedOnNfProfileAttributes(SearchData searchData);
+
+	// discover NF Profiles based on the search criteria
+	public HashMap<String,Object> discoverNfProfiles(SearchData searchData,ForwardingData forwardingData,String nfFdqn);
+	
+    // limit NF Profiles based on maxpayloadsize
+	public Object limitNfProfilesInResp(SearchResult searchResult, SearchData searchData);
+	
+	public boolean targetNfTypeSupportedForSlfLookup(String targetNfType);
+	
+	public void setNrfSystemAndEngineeringOptions(NrfSystemOptions nrfSystemOptions,
+														NrfEngSystemOptions nrfEngSystemOptions);
+}

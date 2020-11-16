@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<section name="Workbench">
+	<section name="org.eclipse.ui.texteditor.FindReplaceDialog">
+		<item key="wrap" value="true"/>
+		<item key="casesensitive" value="false"/>
+		<item key="wholeword" value="false"/>
+		<item key="incremental" value="false"/>
+		<item key="isRegEx" value="false"/>
+		<item key="selection" value="ArrayList"/>
+		<list key="findhistory">
+			<item value="ArrayLIst"/>
+			<item value="loc"/>
+			<item value="ResponseEntity.ok"/>
+			<item value="created"/>
+			<item value="save"/>
+			<item value="geo"/>
+			<item value="mgmt"/>
+			<item value="when"/>
+			<item value="OCNRF_SYSTEM_OPTIONS"/>
+			<item value="findbyRecordOwner"/>
+			<item value="prepareNrfSystemAndEngineeringOptions"/>
+			<item value="NRF_SYSTEMOPTIONS"/>
+			<item value="NrfSystemOptions"/>
+			<item value="setNrfSystemAndEngineeringOptions"/>
+			<item value="nrfSystemOptions"/>
+		</list>
+		<list key="replacehistory">
+			<item value="System.out.println"/>
+		</list>
+	</section>
+	<section name="org.eclipse.ui.texteditor.FindReplaceDialog_dialogBounds">
+		<item key="DIALOG_X_ORIGIN" value="820"/>
+		<item key="DIALOG_Y_ORIGIN" value="207"/>
+		<item key="DIALOG_WIDTH" value="346"/>
+		<item key="DIALOG_HEIGHT" value="437"/>
+		<item key="DIALOG_FONT_NAME" value="1|Sans|10.0|0|GTK|1|"/>
+	</section>
+</section>

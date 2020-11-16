@@ -1,0 +1,410 @@
+// Copyright 2018 (C), Oracle and/or its affiliates. All rights reserved.
+
+package com.oracle.cgbu.cne.nrf.domain;
+
+import java.net.URI;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+import javax.validation.Valid;
+import javax.validation.constraints.NotNull;
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.springframework.validation.annotation.Validated;
+
+import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.annotation.JsonProperty.Access;
+import com.fasterxml.jackson.databind.annotation.JsonSerialize;
+import com.google.common.net.InetAddresses;
+import com.oracle.cgbu.cne.nrf.CustomDateSerializer;
+import com.oracle.cgbu.cne.nrf.NrfException;
+import com.oracle.cgbu.cne.nrf.annotations.Fqdn;
+import com.oracle.cgbu.cne.nrf.annotations.NFType;
+
+import inet.ipaddr.HostName;
+import inet.ipaddr.IPAddress.IPVersion;
+import io.swagger.annotations.ApiModelProperty;
+
+@JsonInclude(JsonInclude.Include.NON_NULL)
+@Validated
+public class SubscriptionData extends AbstractDto {
+	private static Logger logger = LogManager.getLogger(SubscriptionData.class);
+	@NotNull
+	private URI nfStatusNotificationUri = null;
+
+	private String subscriptionId = null;
+	private List<NotificationEventType> reqNotifEvents = null;
+
+	@NFType
+	private String reqNfType = null;
+
+	@Fqdn
+	private String 	reqNfFqdn = null;
+	
+	@Valid
+	private List<SingleNssai> reqSnssais = null;
+
+	@Valid
+	private Plmn plmnId = null;
+
+	@Valid
+	private SubscrCond subscrCond = null;
+	
+	@Valid
+	NotifCondition	notifCondition = null;
+
+	@JsonSerialize(using = CustomDateSerializer.class)
+	private Date validityTime = null;
+
+	private AdditionalAttributes additionalAttributes = null;
+
+	public Date getValidityTime() {
+		return validityTime;
+	}
+	public void setValidityTime(Date validityTime) {
+		this.validityTime = validityTime;
+	}
+	public URI getNfStatusNotificationUri() {
+		return nfStatusNotificationUri;
+	}
+	public void setNfStatusNotificationUri(URI nfStatusNotificationUri) {
+		this.nfStatusNotificationUri = nfStatusNotificationUri;
+	}
+	public String getSubscriptionId() {
+		return subscriptionId;
+	}
+	public void setSubscriptionId(String subscriptionId) {
+		this.subscriptionId = subscriptionId;
+	}
+	public List<NotificationEventType> getReqNotifEvents() {
+		return reqNotifEvents;
+	}
+	public void setReqNotifEvents(List<NotificationEventType> reqNotifEvents) {
+		this.reqNotifEvents = reqNotifEvents;
+	}
+	public String getReqNfType() {
+		return reqNfType;
+	}
+	public void setReqNfType(@NFType String reqNfType) {
+		this.reqNfType = reqNfType;
+	}
+	public List<SingleNssai> getReqSnssais() {
+		return reqSnssais;
+	}
+	public void setReqSnssais(List<SingleNssai> reqSnssais) {
+		this.reqSnssais = reqSnssais;
+	}
+	public Plmn getPlmnId() {
+		return plmnId;
+	}
+	public void setPlmnId(Plmn plmnId) {
+		this.plmnId = plmnId;
+	}
+	public String getReqNfFqdn() {
+		return reqNfFqdn;
+	}
+	public void setReqNfFqdn(String reqNfFqdn) {
+		this.reqNfFqdn = reqNfFqdn;
+	}
+	
+	public SubscrCond getSubscrCond() {
+		return subscrCond;
+	}
+	
+	public void setSubscrCond(SubscrCond subscrCond) {
+		this.subscrCond = subscrCond;
+	}
+	
+	public NotifCondition getNotifCondition() {
+		return notifCondition;
+	}
+	
+	public void setNotifCondition(NotifCondition notifCondition) {
+		this.notifCondition = notifCondition;
+	}
+
+	public void semanticValidation() throws NrfException{
+		ProblemDetails prob = ProblemDetails.forBadRequest();
+		prob.setInvalidParams(new ArrayList<InvalidParam>());
+		boolean isFailure = false;
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+
+		if(this.reqNotifEvents == null || this.reqNotifEvents.isEmpty()) {
+			this.reqNotifEvents = new ArrayList<NotificationEventType>();
+			this.reqNotifEvents.add(NotificationEventType.NF_REGISTERED);
+			this.reqNotifEvents.add(NotificationEventType.NF_PROFILE_CHANGED);
+			this.reqNotifEvents.add(NotificationEventType.NF_DEREGISTERED);
+		}
+		
+		if(((!this.reqNotifEvents.contains(NotificationEventType.NF_PROFILE_CHANGED))
+				&& (this.notifCondition != null))) 
+		{
+			prob.addInvalidParam(new InvalidParam("SubscriptionData", "notifCondition should be present "
+					+ "only in case reqNotifEvents contains the value NF_PROFILE_CHANGED"));
+			isFailure = true;
+		}
+		boolean isValidCallbackUri = false;
+		String host = nfStatusNotificationUri.getHost();
+		if(host != null)
+		{
+
+			String pattern = "(?=^.{1,254}$)(^(?:(?!\\.|-)[a-zA-Z0-9\\-]{1,63}(?<!-)\\.?)+(?:[a-zA-Z0-9\\-]{1,63}(?<!-)(?<!\\.)){1,}$)";
+			Pattern r = Pattern.compile(pattern, Pattern.CASE_INSENSITIVE);
+			Matcher matcher = r.matcher(host);
+			if( matcher.matches() && (matcher.groupCount() == 1))
+			{
+				isValidCallbackUri = true;
+			}		
+			else if((host.startsWith("[")) && (host.endsWith("]")))
+			{
+				String ipv6 = host.substring(1,host.length()-1);
+				HostName hostName = new HostName(ipv6);
+				if( hostName.isAddress(IPVersion.IPV6) && InetAddresses.isInetAddress(ipv6))
+				{				
+					isValidCallbackUri = true;
+				}
+			}
+		}
+
+		if(isValidCallbackUri == false)
+		{
+			prob.addInvalidParam(new InvalidParam("SubscriptionData.nfStatusNotificationUri",
+					"Invalid Uri Received:"+nfStatusNotificationUri));
+			logMsg.clear();
+			logMsg.put("logMsg", "Invalid URI received for attribute SubscriptionData.nfStatusNotificationUri");
+			logger.error(logMsg.toString());
+			isFailure = true;
+		}
+		
+		
+		try {
+			if(this.subscrCond != null) {
+				this.subscrCond.semanticValidation();
+			}
+		}catch(NrfException e) {
+			isFailure = true;
+			prob.getInvalidParams().addAll(e.getProbDetails().getInvalidParams());
+		}
+
+		try {
+			if(this.notifCondition != null) {
+				this.notifCondition.semanticValidation();
+			}
+		}catch(NrfException e) {
+			isFailure = true;
+			prob.getInvalidParams().addAll(e.getProbDetails().getInvalidParams());
+		}
+
+		if (isFailure == true) {
+			logMsg.clear();
+			logMsg.put("logMsg", "NF registration failed with problemDetails");
+			logMsg.put("problemDetails",prob);
+			logger.error(logMsg.toString());
+			throw new NrfException(prob);
+		}
+
+	}
+	@Override
+	public int hashCode() {
+		return Objects.hash(nfStatusNotificationUri,subscrCond,subscriptionId, reqNfType, reqNfFqdn, reqSnssais, plmnId,
+				reqNotifEvents, validityTime , notifCondition);
+	}
+	@Override
+	public boolean equals(Object obj) {
+		if (this == obj) {
+			return true;
+		}
+		if (obj == null) {
+			return false;
+		}
+		if (!(obj instanceof SubscriptionData)) {
+			return false;
+		}
+		SubscriptionData other = (SubscriptionData) obj;
+		return (this.hashCode() == other.hashCode()) &&
+				Objects.equals(reqNfType, other.reqNfType) && Objects.equals(reqNfFqdn , other.reqNfFqdn )
+				&& Objects.equals(reqSnssais, other.reqSnssais)
+				&& Objects.equals(notifCondition, other.notifCondition) && Objects.equals(subscrCond, other.subscrCond)
+				&& Objects.equals(nfStatusNotificationUri, other.nfStatusNotificationUri)
+				&& Objects.equals(plmnId, other.plmnId)
+				&& Objects.equals(reqNotifEvents, other.reqNotifEvents);
+		       
+	}
+	public boolean applyAuth(NfProfile nfProfile) {
+		boolean includeSub = false;
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+
+		if((this.reqNfType == null) && (this.reqNfFqdn == null) && (this.reqSnssais == null)) {
+			includeSub = true;
+		}
+		// Subscriber Condition reqNfType and reqNfFqdn and reqSnssais
+		List<NfService> nfServices = nfProfile.getNfServices();
+		boolean svcAttributePresent = false;
+		boolean nfTypeAllowedMatch = false;
+		boolean nfFqdnMatch = false;
+		boolean snssaisAllowedMatch = false;
+		
+		// Authorize subscription using reqNfType
+		if(this.reqNfType != null) {
+			// AllowedNfType in NfService prevails over allowedNfType in NfProfile
+			if(nfServices != null) {
+				for(NfService svc:nfServices) {
+					if( svc.getAllowedNfTypes() != null) {
+						svcAttributePresent = true;
+						if(svc.getAllowedNfTypes().contains(this.reqNfType))  {
+							nfTypeAllowedMatch = true;
+							break;
+						}
+					}
+				}
+			}
+			// AlowedNfType is not present in NfServices, check NfProfile.allowedNfType
+			if(!svcAttributePresent) {
+				if(nfProfile.getAllowedNfTypes() != null) {
+					if(nfProfile.getAllowedNfTypes().contains(this.reqNfType)) {
+						nfTypeAllowedMatch = true;
+					}
+				}
+				else {
+					// The profile has no restrictions for access.
+					nfTypeAllowedMatch = true;
+				}
+			}
+			includeSub = nfTypeAllowedMatch;
+			logMsg.clear();
+			logMsg.put("logMsg", "SubscriptionData.applyAuth - reqNfType Match");
+			logMsg.put("includeSub",includeSub);
+			logger.info(logMsg.toString());
+		}
+		svcAttributePresent = false;
+		
+		// Authorize subscription using reqSnssais
+				if(this.reqSnssais != null) {
+					// AllowedNssais in NfService prevails over allowedNfType in NfProfile
+					if(nfServices != null) {
+						for(NfService svc:nfServices) {
+							if( svc.getAllowedNssais() != null) {
+								svcAttributePresent = true;
+								if(svc.getAllowedNssais().stream().anyMatch(snssai -> this.reqSnssais.contains(snssai)))  {
+									snssaisAllowedMatch = true;
+									break;
+								}
+							}
+						}
+					}
+					// AlowedNssais is not present in NfServices, check NfProfile.allowedNssais
+					if(!svcAttributePresent) {
+						if(nfProfile.getAllowedNssais() != null) {
+							if(nfProfile.getAllowedNssais().stream().anyMatch(snssai -> reqSnssais.contains(snssai))) {
+								snssaisAllowedMatch = true;
+							}
+						}
+						else {
+							// The profile has no restrictions for access.
+							snssaisAllowedMatch = true;
+						}
+					}
+					includeSub = snssaisAllowedMatch;
+					logMsg.clear();
+					logMsg.put("logMsg", "SubscriptionData.applyAuth - reqSnssais Match");
+					logMsg.put("includeSub",includeSub);
+					logger.info(logMsg.toString());
+				}
+				
+		svcAttributePresent = false;
+		// Authorize subscription using reqNfFqdn
+		if(reqNfFqdn != null) {
+			includeSub = false;
+			if(nfServices != null) {
+				for(NfService svc:nfServices) {
+					if(svc.getAllowedNfDomains() != null) {
+						svcAttributePresent = true;
+						if( svc.getAllowedNfDomains().stream().filter(v -> reqNfFqdn.toUpperCase().endsWith(v.toUpperCase())).count() > 0 ) {
+							nfFqdnMatch = true;
+							break;
+						}
+					}
+				}
+			}
+			
+			if(!svcAttributePresent) {
+				if(nfProfile.getAllowedNfDomains() != null) {
+					if( nfProfile.getAllowedNfDomains().stream().filter(v -> reqNfFqdn.toUpperCase().endsWith(v.toUpperCase())).count() > 0 ) {
+						nfFqdnMatch = true;
+					}
+				}
+				else {
+					nfFqdnMatch = true;
+				}
+			}
+			includeSub = nfFqdnMatch;
+			logMsg.clear();
+			logMsg.put("logMsg", "SubscriptionData.applyAuth - reqNfFqdn Match");
+			logMsg.put("includeSub",includeSub);
+			logger.info(logMsg.toString());
+		}
+		
+		logMsg.clear();
+		logMsg.put("logMsg", "SubscriptionData.applyAuth : Subscription Authorized");
+		logMsg.put("includeSub",includeSub);
+		logger.info(logMsg.toString());
+		return includeSub;
+	}
+	public boolean applySubscrCriteria(NotificationData notificationData, List<Plmn> nrfPlmnList) {
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+
+		logMsg.clear();
+		logMsg.put("logMsg", "SubscriptionData.applySubscrCriteria");
+		logger.debug(logMsg.toString());
+		boolean includeSub = false;
+		NfProfile nfProfile = notificationData.getNfProfile();
+        includeSub = applyAuth(nfProfile);
+		
+		if(includeSub && (this.plmnId != null)) {
+			includeSub = (nfProfile.getPlmnList()==null)?nrfPlmnList.contains(this.plmnId)
+													:nfProfile.getPlmnList().contains(this.plmnId);
+		}
+		logMsg.clear();
+		logMsg.put("logMsg", "SubscriptionData.applySubscrCriteria : Plmn match");
+		logMsg.put("includeSub",includeSub);
+		logger.info(logMsg.toString());
+	    // Check SubscrCond Criteria
+		if(includeSub && (this.subscrCond != null)) {
+			includeSub = false;
+			if(this.subscrCond.applySubscrCriteria(nfProfile)) 
+				includeSub = true;
+		}
+		
+		// If NotificationEventType is NF_PROFILE_CHANGED, check if the subscription has 
+		// specified a monitored/unmonitored attribute list and validate.
+		if(includeSub && notificationData.getEvent().equals(NotificationEventType.NF_PROFILE_CHANGED) && (this.getNotifCondition() != null)) {
+			includeSub = false;
+			if(this.getNotifCondition().applySubscrCriteria(notificationData.getProfileChanges())) {
+				logMsg.clear();
+				logMsg.put("Include Subscription", this);
+				includeSub = true;
+			}
+		}
+		
+		logMsg.clear();
+		logMsg.put("logMsg", "SubscriptionData.applySubscrCriteria returned");
+		logMsg.put("includeSub",includeSub);
+		logger.info(logMsg.toString());
+		return includeSub;		
+	}
+	public AdditionalAttributes getAdditionalAttributes() {
+		return additionalAttributes;
+	}
+	public void setAdditionalAttributes(AdditionalAttributes additionalAttributes) {
+		this.additionalAttributes = additionalAttributes;
+	}
+	
+}

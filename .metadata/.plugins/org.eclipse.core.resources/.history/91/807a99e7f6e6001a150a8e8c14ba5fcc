@@ -1,0 +1,2281 @@
+// Copyright 2018 (C), Oracle and/or its affiliates. All rights reserved.
+
+package com.oracle.cgbu.cne.nrf.service;
+
+import java.io.IOException;
+import java.io.StringReader;
+import java.net.URI;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
+
+import javax.json.Json;
+import javax.json.JsonArray;
+import javax.json.JsonObject;
+import javax.servlet.http.HttpServletRequest;
+import javax.transaction.Transactional;
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.apache.logging.log4j.ThreadContext;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
+import org.springframework.stereotype.Service;
+import org.springframework.web.bind.annotation.RequestMethod;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonMappingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.oracle.cgbu.cne.nrf.NrfConfigException;
+import com.oracle.cgbu.cne.nrf.NrfException;
+import com.oracle.cgbu.cne.nrf.config.NrfConfigurations;
+import com.oracle.cgbu.cne.nrf.dao.NfInstance;
+import com.oracle.cgbu.cne.nrf.dao.NfInstancesRepository;
+import com.oracle.cgbu.cne.nrf.dao.NfPatchResponse;
+import com.oracle.cgbu.cne.nrf.dao.NfStatusMonitor;
+import com.oracle.cgbu.cne.nrf.dao.NfStatusMonitorDoc;
+import com.oracle.cgbu.cne.nrf.dao.NfStatusMonitorRepository;
+import com.oracle.cgbu.cne.nrf.domain.AdditionalAttributes;
+import com.oracle.cgbu.cne.nrf.domain.ChangeItem;
+import com.oracle.cgbu.cne.nrf.domain.CustomNfInstance;
+import com.oracle.cgbu.cne.nrf.domain.ErrorCondition;
+import com.oracle.cgbu.cne.nrf.domain.ErrorInfo;
+import com.oracle.cgbu.cne.nrf.domain.Events;
+import com.oracle.cgbu.cne.nrf.domain.FeatureStatus;
+import com.oracle.cgbu.cne.nrf.domain.ForwardingData;
+import com.oracle.cgbu.cne.nrf.domain.ForwardingSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.GenericResponse;
+import com.oracle.cgbu.cne.nrf.domain.HeartbeatInfo;
+import com.oracle.cgbu.cne.nrf.domain.InvalidParam;
+import com.oracle.cgbu.cne.nrf.domain.NFStatus;
+import com.oracle.cgbu.cne.nrf.domain.NfHeartBeat;
+import com.oracle.cgbu.cne.nrf.domain.NfProfile;
+import com.oracle.cgbu.cne.nrf.domain.NfPutResponse;
+import com.oracle.cgbu.cne.nrf.domain.NfResponseInfo;
+import com.oracle.cgbu.cne.nrf.domain.NfScreeningFeatureStatus;
+//import com.oracle.cgbu.cne.nrf.domain.NfRegistrationData;
+import com.oracle.cgbu.cne.nrf.domain.NfService;
+import com.oracle.cgbu.cne.nrf.domain.NotificationData;
+import com.oracle.cgbu.cne.nrf.domain.NotificationEventType;
+import com.oracle.cgbu.cne.nrf.domain.NrfEngSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.NrfSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.PatchItem;
+import com.oracle.cgbu.cne.nrf.domain.Plmn;
+import com.oracle.cgbu.cne.nrf.domain.ProblemDetails;
+import com.oracle.cgbu.cne.nrf.domain.UriScheme;
+import com.oracle.cgbu.cne.nrf.forwarding.NrfForwardingService;
+import com.oracle.cgbu.cne.nrf.metrics.CommonNrfMetrics;
+import com.oracle.cgbu.cne.nrf.metrics.MetricsDimension;
+import com.oracle.cgbu.cne.nrf.metrics.NrfMetrics;
+import com.oracle.cgbu.cne.nrf.nfScreening.NfScreeningService;
+import com.oracle.cgbu.cne.nrf.service.helper.NrfEventManager;
+import com.oracle.cgbu.cne.nrf.service.helper.PatchHelper;
+import com.oracle.cgbu.cne.nrf.service.helper.ValidationHelper;
+
+@Service
+public class NfMgmtServiceImpl implements NfMgmtService {
+	private static Logger logger = LogManager.getLogger(NfMgmtServiceImpl.class);
+	private static final int UPPER_DEFAULT_MAX_ALLOWED_WORKERS = 20;
+	private static final int LOWER_DEFAULT_MAX_ALLOWED_WORKERS = 15;
+	
+	@Autowired
+	private CommonNrfMetrics commonNrfMetrics;
+
+	@Autowired
+	NfInstancesRepository nfRepository;
+
+	@Autowired
+	NfStatusMonitorRepository nfStatusMonitorRepository;
+	
+	@Autowired
+	NfUpgradeServiceImpl nfUpgradeServiceImpl;
+	
+	@Autowired
+	ValidationHelper validationHelper;
+
+	public NfUpgradeServiceImpl getNfUpgradeServiceImpl() {
+		return nfUpgradeServiceImpl;
+	}
+
+	public void setNfUpgradeServiceImpl(NfUpgradeServiceImpl nfUpgradeServiceImpl) {
+		this.nfUpgradeServiceImpl = nfUpgradeServiceImpl;
+	}
+
+	@Autowired
+	RestClient restClient;
+	
+	@Autowired
+	private NrfMetrics nrfMetrics;
+
+	@Autowired
+	private NrfConfigurations nrfConfig;
+
+	@Autowired
+	private NfScreeningService nfScreeningSvc;
+	
+	@Autowired
+	private NfDbServiceImpl nfDbSvc;
+
+	@Autowired
+	private MetricsDimension metricsDimension;
+	
+
+	private static final ObjectMapper objectMapper= new ObjectMapper();
+
+	@Autowired
+	private NrfEventManager nrfEventManager;
+	
+	public int maxAllowedWorkers;
+    
+	public MetricsDimension getMetricsDimension() {
+		return metricsDimension;
+	}
+
+	public void setMetricsDimension(MetricsDimension metricsDimension) {
+		this.metricsDimension = metricsDimension;
+	}
+
+	private NrfSystemOptions nrfSystemOptions;
+
+	private NrfEngSystemOptions nrfEngSystemOptions;
+
+	private static String NF_INSTANCES ="NfInstances";
+	private static String NF_STATUSMONITOR ="NfStatusMonitor";
+	private static String NRF_SYSTEMOPTIONS="NrfSystemOptions";
+	private static String FIND="find";
+	private static String CREATE="create";
+	private static String DELETE="delete";
+	private static String UPDATE="update";
+	private static String version = "v1";
+	
+	@Autowired
+	private NrfForwardingService nrfQuerySvc;
+    
+	public NfMgmtServiceImpl() {
+
+	}
+	
+	public CommonNrfMetrics getCommonNrfMetrics() {
+		return commonNrfMetrics;
+	}
+
+	public void setCommonNrfMetrics(CommonNrfMetrics commonNrfMetrics) {
+		this.commonNrfMetrics = commonNrfMetrics;
+	}
+
+	public void setNrfConfig(NrfConfigurations config) {
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+
+		if (config == null || config.getRegSvc() == null) {
+			throw new NrfConfigException("Bad NRF configuration. Missing 'nrf.reg-svc.*' properties.");
+		}
+		this.nrfConfig = config;
+		
+		this.maxAllowedWorkers = nrfConfig.getRegSvc().getMaxThreadPoolSize();
+		if(this.maxAllowedWorkers < 1 || this.maxAllowedWorkers > UPPER_DEFAULT_MAX_ALLOWED_WORKERS) {
+			logMsg.clear();
+			logMsg.put("logMsg", "Invalid 'nrf.reg-svc.max-thread-pool-size' property. The value should be between 1 and upperDefaultMaxAllowedWorkers");
+			logMsg.put("upperDefaultMaxAllowedWorkers", UPPER_DEFAULT_MAX_ALLOWED_WORKERS);
+			logger.error(logMsg.toString());
+		}
+		this.maxAllowedWorkers = Math.max(LOWER_DEFAULT_MAX_ALLOWED_WORKERS,
+								Math.min(this.maxAllowedWorkers, UPPER_DEFAULT_MAX_ALLOWED_WORKERS));
+		//logger.info("Considering nrf.disc-svc.thread-pool-size = "+this.maxAllowedWorkers);
+		logMsg.clear();
+		logMsg.put("logMsg", "Considering nrf.reg-svc.max-thread-pool-size");
+		logMsg.put("maxAllowedWorkers", this.maxAllowedWorkers);
+		logger.info(logMsg.toString());
+
+
+		if (nrfConfig.getSubSvc().getNotify() == null) {
+			throw new NrfConfigException("Bad NRF configuration. Missing 'nrf.reg-svc.notify.*' properties.");
+		} else {
+			NrfConfigurations.ServiceConfig.Notify notifyCfg = nrfConfig.getSubSvc().getNotify();
+			String regNotifApi = notifyCfg.getNfRegisteredApi();
+			String deRegNotifApi = notifyCfg.getNfDeregisteredApi();
+			String profileChgApi = notifyCfg.getNfProfileChangedApi();
+			if ((regNotifApi == null || regNotifApi.isEmpty()) || (deRegNotifApi == null || deRegNotifApi.isEmpty())
+					|| (profileChgApi == null || profileChgApi.isEmpty())) {
+				throw new NrfConfigException("Bad NRF configuration. Missing 'nrf.reg-svc.notify.*' properties.");
+			}
+		}
+
+		if (nrfConfig.getGlobalConfig().getNrfInstanceId() == null) {
+			String errMsg = "Bad NRF configuration. Missing 'nrf.reg-svc.nrfInstanceId' property.";
+
+			logMsg.clear();
+			logMsg.put("logMsg", errMsg);
+			logger.error(logMsg.toString());
+
+			throw new NrfConfigException(errMsg);
+		}
+	}
+	
+	public NrfMetrics getNrfMetrics() {
+		return nrfMetrics;
+	}
+
+	public void setNrfMetrics(NrfMetrics nrfMetrics) {
+		this.nrfMetrics = nrfMetrics;
+	}
+
+	public boolean isNfProfilePresent(String nfInstanceId ) {
+		NfInstance nfInstance;
+		CustomNfInstance customNfInstance;
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		String serviceOperation="NfRegister";
+		metricsDimension.setServiceOperation(serviceOperation);
+		metricsDimension.setMethod(RequestMethod.PUT);
+		try {
+			customNfInstance = nfDbSvc.findNfInstanceByNfInstanceId(nfInstanceId, RequestMethod.PUT, serviceOperation);
+			if(customNfInstance == null) {
+				nfInstance = null;
+			} else {
+				nfInstance = customNfInstance.getNfInstance();
+			}
+			if (nfInstance != null) {
+				commonNrfMetrics.pegNrfDbMetricsSuccessTotal(RequestMethod.PUT, FIND, serviceOperation, NF_INSTANCES);
+				return true;
+			}
+		} catch (Exception e) {
+			commonNrfMetrics.pegNrfDbMetricsFailuresTotal(RequestMethod.PUT, FIND, serviceOperation, e, NF_INSTANCES);
+			ProblemDetails prob = ProblemDetails.forInternalError();
+			prob.setCause("Could not fetch NfInstance due to an unexpected error.");
+			logMsg.clear();
+			logMsg.put("logMsg", e.getMessage());
+			logMsg.put("stackTrace", (Object[]) e.getStackTrace());
+			logger.error(logMsg.toString());
+			throw new NrfException(prob);
+		}
+		return false;
+	}
+
+	@Override
+	public HashMap<String,Object> getNfProfile(String nfInstanceId, ForwardingData forwardingData, 
+			String originatorNfType,boolean subscriptionSvcReq) throws NrfException {
+		// Set NrfSystemOptions and NrfEngSystemOptions for all the dependents beans of NfMgmtServiceImpl
+		nfScreeningSvc.setNrfSystemOptions(nrfSystemOptions);
+		nrfQuerySvc.setNrfSystemAndEngineeringOptions(nrfSystemOptions, nrfEngSystemOptions);
+		
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		logMsg.clear();
+		logMsg.put("logMsg", "getNfProfile called");
+		logMsg.put("nfInstanceId", nfInstanceId);
+		logMsg.put("forwardedRequest", forwardingData.isForwarded());
+		logMsg.put("subscriptionSvcReq", subscriptionSvcReq);
+		logMsg.put("isForwardingPossible", forwardingData.isForwardingPossible());
+		logger.info(logMsg.toString());
+		String serviceOperation="NfProfileRetrieval";
+		HashMap<String,Object> profileRetrievalResponse = new HashMap<String,Object>();
+		NfInstance nfDao;
+		NfProfile profile = null;
+		ProblemDetails prob = null;
+		metricsDimension.setServiceOperation(serviceOperation);
+		metricsDimension.setMethod(RequestMethod.GET);
+		
+		try {
+			nfDao = nfDbSvc.findNfInstanceforNfProfileRetrieval(nfInstanceId, RequestMethod.GET, serviceOperation);
+		} catch (Exception e) {
+			commonNrfMetrics.pegNrfDbMetricsFailuresTotal(RequestMethod.GET, FIND, serviceOperation,e,NF_INSTANCES);
+			prob = ProblemDetails.forInternalError();
+			prob.setCause("Could not fetch NfInstance due to an unexpected error.");
+			logMsg.clear();
+			logMsg.put("logMsg", e.getMessage());
+			logMsg.put("stackTrace", (Object[]) e.getStackTrace());
+			logger.error(logMsg.toString());
+			profileRetrievalResponse.put("response",prob);
+			profileRetrievalResponse.put("profileSearched",false);
+			return profileRetrievalResponse;
+		}
+		try {
+			if (nfDao != null){
+				commonNrfMetrics.pegNrfDbMetricsSuccessTotal(RequestMethod.GET, FIND, serviceOperation, NF_INSTANCES);
+				profile = objectMapper.readValue(nfUpgradeServiceImpl.findNfProfileWithVersion(version,nfDao), NfProfile.class);
+			} else {
+				if (isProfileRetrievalForwardingEnabled()==false || forwardingData.isForwardingPossible()==false || subscriptionSvcReq == true) {
+					prob = ProblemDetails.forNotFound();
+					logMsg.clear();
+					logMsg.put("logMsg", "getNfProfile failed with problemDetails");
+					logMsg.put("problemDetails", prob);
+					logger.error(logMsg.toString());
+					profileRetrievalResponse.put("response",prob );
+					profileRetrievalResponse.put("profileSearched",true);
+					return profileRetrievalResponse;
+				}
+				else
+				{
+					if(forwardingData.isForwardingPossible() == true){
+						return profileRetrievalForwarding(nfInstanceId,originatorNfType,forwardingData);
+					}
+				}
+			}
+		} catch (Exception e) {
+			prob = ProblemDetails.forInternalError();
+			prob.setCause("Could not fetch NfInstance due to an unexpected error.");
+			logMsg.clear();
+			logMsg.put("logMsg", e.getMessage());
+			logMsg.put("stackTrace", e.toString());
+			logger.error(logMsg.toString());
+			profileRetrievalResponse.put("response",prob);
+			profileRetrievalResponse.put("profileSearched",false);
+			return profileRetrievalResponse;
+		}
+		logMsg.clear();
+		logMsg.put("response", profile);
+		logger.info(logMsg.toString());
+		profile.setAdditionalAttributes(null);
+		profileRetrievalResponse.put("response",profile);
+		profileRetrievalResponse.put("profileSearched",true);		
+		return profileRetrievalResponse;
+	}
+	
+	 public boolean isProfileRetrievalForwardingEnabled()
+     {
+		 boolean forwardingEnabled = true;
+         ForwardingSystemOptions forwardingSystemOptions = nrfSystemOptions.getForwardingSystemOptions();
+         if(forwardingSystemOptions.getProfileRetreivalForwardingStatus().equals(FeatureStatus.DISABLED))
+         {
+        	 forwardingEnabled = false;
+         }
+         return forwardingEnabled;
+     }
+	
+	 public HashMap<String,Object> profileRetrievalForwarding(String nfInstanceId,String originatorNfType, ForwardingData forwardingData) {
+		 NfResponseInfo nfResponseInfo = null;
+		 Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		 HashMap<String,Object> profileRetrievalResponse = new HashMap<String,Object>();
+		 logMsg.clear();
+		 logMsg.put("logMsg", "Entering profileRetrievalForwarding function ");
+		 logMsg.put("nfInstanceId",nfInstanceId);
+		 logger.info(logMsg.toString());
+
+		 //FORWARD THE PROFILE RETRIEVAL REQUEST
+		 //FORWARD THE REQUEST BASED ON MAXIMUMHOPCOUNT AND REROUTEONRESPONSEHTTPSTATUSCODES CONDITIONs
+		 nfResponseInfo = nrfQuerySvc.sendNrfForwardingProfileRetrievalRequest(nfInstanceId,originatorNfType,forwardingData);
+		 //if failure response from egress or nrf_not_reachable then handle the error
+		 profileRetrievalResponse = evaluateNrfResponse(nfResponseInfo,nfInstanceId);
+
+		 logMsg.clear();	
+		 logMsg.put("logMsg", "Exit from profileRetrievalForwarding function ");
+		 logMsg.put("currentHop",nfResponseInfo.getCurrentHopCount());	
+		 logger.info(logMsg.toString());	
+		 return profileRetrievalResponse;
+	 }
+		
+		public HashMap<String,Object> evaluateNrfResponse(NfResponseInfo nfResponseInfo,String nfInstanceId) {
+			ErrorCondition errorCondition = null;
+			HashMap<String,Object> response = new HashMap<String,Object>();
+			Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+			Object nrfResponse = null;
+			Object nrfResponseObject = nfResponseInfo.getResponse();
+		    boolean responseFromNrf = nfResponseInfo.getResponseFromNf();
+			logMsg.clear();	
+			logMsg.put("logMsg", "Entering evaluateNrfResponse function ");
+			logMsg.put("nrfResponse",nrfResponseObject);	
+			logMsg.put("responseFromNrf",responseFromNrf);
+			logger.info(logMsg.toString());	
+			response.put("forwardedRequest",true);
+			
+			if(nrfResponseObject instanceof ProblemDetails) {
+		    	ProblemDetails problemDetails = (ProblemDetails) nrfResponseObject;
+		    	if(responseFromNrf == false) {
+		    		if(problemDetails.getStatus() == HttpStatus.SERVICE_UNAVAILABLE.value()){
+		    			errorCondition = ErrorCondition.NRF_Not_Reachable;
+		    			List<ErrorInfo> errorInfoList = nrfSystemOptions
+			    				.getErrorResponses().getNrfForwardingErrorResponses();
+			    		nrfResponse = getFailureResponseByErrorCondition(errorCondition,errorInfoList);
+			    		nrfMetrics.pegProfileRetrievalForwardingResponses(nfInstanceId, problemDetails.getStatus(),"NRFCommunicationFailure");
+		    		}else {
+		    			errorCondition = ErrorCondition.Egress_Gateway_Error;
+		    			nrfResponse = searchByErrorConditionInNrfEngSystemOptions(errorCondition,(ProblemDetails)nrfResponseObject);
+		    			nrfMetrics.pegProfileRetrievalForwardingResponses(nfInstanceId, problemDetails.getStatus(), "InternalError");
+		    		}
+		    		response.put("response",nrfResponse);
+		    		response.put("profileSearched",false);	
+		    	}else {
+		    		response.put("response",nrfResponseObject);
+		    		if (problemDetails.getStatus() == HttpStatus.NOT_FOUND.value()) {
+		    			response.put("profileSearched",true);
+		    		}
+		    		else {
+			    		response.put("profileSearched",false);		    			
+		    		}
+		    		nrfMetrics.pegProfileRetrievalForwardingResponses(nfInstanceId, problemDetails.getStatus(), "ErrorFromNRF");
+		    	}
+		    }else {
+		    	response.put("response",nrfResponseObject);
+	    		response.put("profileSearched",true);		
+	    		nrfMetrics.pegProfileRetrievalForwardingResponses(nfInstanceId, HttpStatus.OK.value(), "NotApplicable");
+		    }
+			logMsg.clear();	
+			logMsg.put("logMsg", "Exit from evaluateNrfResponse function ");
+			logMsg.put("profileRetrievalResponse",response);	
+			logger.info(logMsg.toString());	
+			return response;
+		}
+		
+		public Object getFailureResponseByErrorCondition(ErrorCondition errCondition, List<ErrorInfo> errorInfoList) 
+		{		
+			ProblemDetails prob = null;		
+			Object retVal = null;
+			Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+			logMsg.clear();
+			logMsg.put("logMsg", "Entering getFailureResponseByErrorCondition function");
+			logMsg.put("errCondition", errCondition);
+			logMsg.put("errorInfoList", errorInfoList);
+			logger.info(logMsg.toString());
+			for(ErrorInfo errorInfo : errorInfoList)
+			{
+				if(errorInfo.getErrorCondition().equals(errCondition))
+				{
+					logMsg.clear();
+					logMsg.put("logMsg","errorInfo selected for errCondition : "+errCondition );
+					logMsg.put("errorInfo.detectionResultCode", errorInfo.getErrorDetectionResultCode());
+					logMsg.put("errorInfo.errorCode", errorInfo.getErrorCode());
+					logMsg.put("errorInfo.errorResponse", errorInfo.getErrorResponse());
+					logger.info(logMsg.toString());
+					if( HttpStatus.valueOf(errorInfo.getErrorCode()).is2xxSuccessful())
+					{
+						/*case where 2xx is configured as errorCode*/
+						retVal = new ArrayList<NfProfile>();
+					}
+					else
+					{
+						prob = new ProblemDetails();
+						prob.setStatus((int)errorInfo.getErrorCode());
+						prob.setDetail(errorInfo.getErrorResponse());
+					    prob.setTitle(errorInfo.getErrorResponse());
+						prob.setCause(errorInfo.getErrorResponse());
+						retVal = prob ;
+					}
+					break;
+				}
+			}
+			logMsg.clear();
+			logMsg.put("logMsg", "Exit from getFailureResponseByErrorCondition function");
+			logger.info(logMsg.toString());
+			return retVal;		
+		}
+		
+		public Object searchByErrorConditionInNrfEngSystemOptions(ErrorCondition errCondition,
+				ProblemDetails receivedProb) 
+		{
+			List<ErrorInfo> engErrorInfoList = nrfEngSystemOptions.
+					getErrorResponses().getGeneralErrorResponses();	
+			ProblemDetails prob = null;		
+			Object retVal = null;
+			Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+			logMsg.clear();
+			logMsg.put("logMsg", "Entering searchByErrorConditionInNrfEngSystemOptions function");
+			logMsg.put("errCondition", errCondition);
+			logMsg.put("receivedProb", receivedProb);
+			logMsg.put("engErrorInfoList", engErrorInfoList);
+			logger.info(logMsg.toString());
+			for(ErrorInfo errorInfo : engErrorInfoList)
+			{
+
+
+				if(errorInfo.getErrorCondition().equals(errCondition))
+				{
+					logMsg.clear();
+					logMsg.put("logMsg","errorInfo selected for errCondition : "+errCondition );
+					logMsg.put("errorInfo.detectionResultCode", errorInfo.getErrorDetectionResultCode());
+					logMsg.put("errorInfo.errorCode", errorInfo.getErrorCode());
+					logMsg.put("errorInfo.useErrorCodeReturned", errorInfo.getUseErrorCodeReturned());
+					logMsg.put("errorInfo.errorResponse", errorInfo.getErrorResponse());
+					logger.info(logMsg.toString());
+
+					if(errorInfo.getUseErrorCodeReturned() == false)
+					{
+						if( HttpStatus.valueOf(errorInfo.getErrorCode()).is2xxSuccessful())
+						{
+							/*case where 2xx is configured as errorCode*/
+							retVal = new ArrayList<NfProfile>();
+						}
+						else
+						{
+							prob = new ProblemDetails();
+							prob.setStatus((int)errorInfo.getErrorCode());
+							prob.setDetail(errorInfo.getErrorResponse());
+							prob.setTitle(errorInfo.getErrorResponse());
+							prob.setCause(errorInfo.getErrorResponse());
+							if(receivedProb.getCause()!=null) {
+								prob.setCause(errorInfo.getErrorResponse().concat("."+receivedProb.getCause()));
+							}
+							if(receivedProb.getTitle()!=null) {
+								prob.setTitle(errorInfo.getErrorResponse().concat("."+receivedProb.getTitle()));
+							}
+							if(receivedProb.getDetail()!=null) {
+								prob.setDetail(errorInfo.getErrorResponse().concat("."+receivedProb.getDetail()));
+							}
+							retVal = prob ;
+						}
+					}
+					else
+					{
+						retVal = receivedProb;
+					}
+					break;
+
+				}
+
+			}
+			logMsg.clear();
+			logMsg.put("logMsg", "Exit from searchByErrorConditionInNrfEngSystemOptions function");
+			logMsg.put("retVal",retVal);
+			logger.info(logMsg.toString());
+			return retVal;		
+		}
+
+	/*@Override
+	public boolean getNfProfileForReady(String nfInstanceId) {
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+
+		logMsg.clear();
+		logMsg.put("logMsg", "getNfProfileForReady called");
+		logMsg.put("nfInstanceId", nfInstanceId);
+		logger.debug(logMsg.toString());
+		boolean isReady = true;
+
+		try {
+			nfRepository.findByNfInstanceId(nfInstanceId);
+		} catch (Exception e) {
+			isReady = false;
+		}
+		return isReady;
+	}*/
+
+
+	private NfProfile setDefaultValuesForProfileAttributes(NfProfile profile, HeartbeatInfo heartbeatInfo) {
+		Integer heartBeatTimerMaxValue = (int) heartbeatInfo.getMaxHbTimer().toSeconds();
+		Integer heartBeatTimerMinValue = (int) heartbeatInfo.getMinHbTimer().toSeconds();
+		if (profile.getHeartBeatTimer() != null) {
+			Integer inputHeartbeatTimer = profile.getHeartBeatTimer();
+			if (inputHeartbeatTimer > heartBeatTimerMaxValue ) {
+				profile.setHeartBeatTimer(heartBeatTimerMaxValue);
+			} else if (inputHeartbeatTimer < heartBeatTimerMinValue) {
+				profile.setHeartBeatTimer(heartBeatTimerMinValue);
+			}
+		} else {
+			profile.setHeartBeatTimer((int) heartbeatInfo.getDefaultHbTimer().toSeconds());
+		}
+		return profile;
+	}
+
+	//Extract specific NfType HeartBeatInfo from SystemOptions, if not present, return default NfType HeartBeatInfo
+	private HeartbeatInfo fetchHeartBeatInfo(String nfType) {
+		HeartbeatInfo allNfHeartbeatInfo = new HeartbeatInfo();
+		for(HeartbeatInfo hbInfo:getNrfSystemOptions().getNfManagementSystemOptions().getNfHeartbeatTimers()) {
+			if(hbInfo.getNfType().equals(nfType)) {
+				//If heartbeatInfo for particular NfType is found, return that
+				return hbInfo;
+			} else if(hbInfo.getNfType().equals("ALL_NF_TYPE")) {
+				//Storing heartbeatInfo of ALL_NF_TYPE, so that it can be returned in case of heartbeatInfo for particular NfType is not found
+				allNfHeartbeatInfo = new HeartbeatInfo(hbInfo);
+			} else if(hbInfo.getNfType().equals("CUSTOM_NF_TYPE") && nfType.startsWith("CUSTOM_")) {
+				//Returning CUSTOM_NF_TYPE values
+				return hbInfo;
+			}
+		}
+		//If no match found, then return ALL_NF_TYPE values
+		return allNfHeartbeatInfo;
+	}
+	
+	//@Async("threadPoolTaskExecutor")
+	private void triggerForNFProfileChangeNotificationEvent(String oldProfile, String newProfile,
+			NotificationData notificationData) {
+		JsonObject source, target;
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+
+		if (oldProfile != null && newProfile != null) {
+			List<ChangeItem> profileChanges = new ArrayList<ChangeItem>();
+			ObjectMapper om = new ObjectMapper();
+			ChangeItem changeItem;
+			try {
+				source = Json.createReader(new StringReader(oldProfile)).readObject();
+				target = Json.createReader(new StringReader(newProfile)).readObject();
+				JsonArray jsonArray = Json.createDiff(source, target).toJsonArray();
+
+				for (int obj = 0; obj < jsonArray.size(); obj++) {
+
+					JsonObject jsonObject = jsonArray.get(obj).asJsonObject();
+					PatchItem patchItem = om.readValue(jsonObject.toString(), PatchItem.class);
+					Object origValue = null;
+					if (!patchItem.getOp().equals("add")) {
+						origValue = om.readValue(source.getValue(patchItem.getPath()).toString(), Object.class);
+					}
+					changeItem = new ChangeItem(patchItem, origValue);
+					profileChanges.add(changeItem);
+				}
+				if (profileChanges.size() > 0) {
+					notificationData.setProfileChanges(profileChanges);
+					logMsg.clear();
+					logMsg.put("logMsg", "Notification is sent with notificationData");
+					logMsg.put("notificationData", notificationData);
+					logger.info(logMsg.toString());
+					restClient.sendNotificationEvent(notificationData, nrfEngSystemOptions,ThreadContext.get("ocLogId"));
+				}
+			} catch (IOException e) {
+				logMsg.clear();
+				logMsg.put("logMsg", "Failed to trigger Notification Event");
+				logger.error(logMsg.toString());
+				logMsg.clear();
+				logMsg.put("logMsg", e.getMessage());
+				logMsg.put("stackTrace", (Object[]) e.getStackTrace());
+				logger.error(logMsg.toString());
+			}
+		}
+	}
+
+	@Override
+	@Transactional
+	public NfPutResponse addOrReplaceNfProfile(String nfInstanceId, NfProfile recvdProfile, URI nfInstanceUri) {
+		// Set NrfSystemOptions and NrfEngSystemOptions for all the dependents beans of NfMgmtServiceImpl
+		nfScreeningSvc.setNrfSystemOptions(nrfSystemOptions);
+		nrfQuerySvc.setNrfSystemAndEngineeringOptions(nrfSystemOptions, nrfEngSystemOptions);
+
+		String serviceOperation= "Unknown";
+		// recvdProfile.vendorValidation(recvdProfile.getVendorMap(), true, false);
+		metricsDimension.setServiceOperation(serviceOperation);
+		metricsDimension.setMethod(RequestMethod.PUT);
+		
+		NfPutResponse resp = new NfPutResponse();
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+
+		// NfScreening feature
+		if ((getNrfSystemOptions().getNfScreeningSystemOptions().getNfScreeningFeatureStatus()).equals(NfScreeningFeatureStatus.ENABLED)) {
+			try {
+				nfScreeningSvc.applyNfScreeningRules(recvdProfile);
+			} catch (NrfException e) {
+				logMsg.clear();
+				logMsg.put("logMsg", "addOrReplaceNfProfile() : NFScreening Failed with problemDetails");
+				logMsg.put("problemDetails", e.getProbDetails());
+				logger.error(logMsg.toString());
+				resp.setProblemDetails(e.getProbDetails()); 
+				return resp;
+			} catch (Exception e) {
+				logMsg.clear();
+				logMsg.put("logMsg", "addOrReplaceNfProfile() : NFScreening Failed with exception");
+				logMsg.put("exception", e);
+				logger.error(logMsg.toString());
+			}
+
+		}
+
+		NotificationData notificationData = new NotificationData();
+		boolean exists = false;
+		NfInstance nfDao;
+		NfHeartBeat nfHeartBeat;
+		NfStatusMonitor nfStatusMonitor;
+		boolean sendNotification = true;
+		try {
+			
+			NfProfile profile = objectMapper.readValue(recvdProfile.toString(), NfProfile.class);
+
+			if(getNrfSystemOptions().getGeneralSystemOptions().getNrfPlmnList() == null)
+			{
+				// nrfPlmn in systemOptions is not configured.
+				ProblemDetails prob = ProblemDetails.forInternalError();
+				prob.setDetail("plmn of NRF is not Configured");
+				prob.setCause("Mandatory Configuration is missing");
+				prob.setInstance(nfInstanceUri);
+				resp.setProblemDetails(prob);
+				logMsg.clear();
+				logMsg.put("logMsg", "NF registration failed with problemDetails");
+				logMsg.put("problemDetails", prob);
+				logger.error(logMsg.toString());
+				return resp;
+			}
+
+			// PLMN value from Incoming NF Profile
+			if (profile.getPlmnList() != null && !profile.getPlmnList().isEmpty()) {
+				// PLMN is present in incoming request message
+
+				List<Plmn> plmnsInNfSupportedByNrf = getNrfSystemOptions().getGeneralSystemOptions().getNrfPlmnList().stream()
+						.filter(profile.getPlmnList()::contains).collect(Collectors.toList());
+				if (plmnsInNfSupportedByNrf.isEmpty()) {
+					// PLMN doesn't matches with NRF's PLMNS
+					// Setting Error 501 - Not Implemented
+					ProblemDetails prob = ProblemDetails.forNotImplemented();
+					prob.setDetail("NRF operations for foreign Plmn are not implemented");
+					prob.addInvalidParam(new InvalidParam("plmnList", "different from plmn of NRF"));
+					prob.setCause("Invalid 'plmnList'");
+					prob.setInstance(nfInstanceUri);
+					resp.setProblemDetails(prob);
+					logMsg.clear();
+					logMsg.put("logMsg", "NF registration failed with problemDetails");
+					logMsg.put("problemDetails", prob);
+					logger.error(logMsg.toString());
+					return resp;
+				}
+				else {
+					logMsg.clear();
+					logMsg.put("plmnsInnfSupportedByNrf", plmnsInNfSupportedByNrf);
+					logger.info(logMsg.toString());
+					profile.setPlmnList(plmnsInNfSupportedByNrf);
+				}
+			}
+
+			//fqdn validation if scheme is https
+
+			if (getNrfSystemOptions().getGeneralSystemOptions().getEnableF5()) {
+				if (recvdProfile.getNfServices() != null) {
+					Iterator <NfService> itr = recvdProfile.getNfServices().iterator();
+					while (itr.hasNext()){
+						NfService recvdNfService = itr.next();
+						if (recvdNfService.getScheme().equals(UriScheme.HTTPS)) {
+							if ((recvdProfile.getFqdn() == null) && (recvdNfService.getFqdn() == null)) {
+								ProblemDetails prob = ProblemDetails.forBadRequest();
+								prob.setDetail("FQDN should be provided in the NF Profile or NF Service Profile when URI Scheme is https");
+								prob.setCause("FQDN not provided");
+								prob.setInstance(nfInstanceUri);
+								resp.setProblemDetails(prob);
+								logMsg.clear();
+								logMsg.put("logMsg", "NF registration failed with problemDetails");
+								logMsg.put("problemDetails", prob);
+								logger.error(logMsg.toString());
+								return resp;
+							}						
+						}
+					}
+				}
+			}
+			
+			// validate unique nfServiceInstanceId
+			
+			if (recvdProfile.getNfServices() != null) {
+				HashSet<String> nfServiceInstanceIds = new HashSet<String>();
+				Iterator <NfService> itr = recvdProfile.getNfServices().iterator();
+				while (itr.hasNext()){
+					NfService recvdNfService = itr.next();
+					nfServiceInstanceIds.add(recvdNfService.getServiceInstanceId());
+				}
+				if (nfServiceInstanceIds.size() < recvdProfile.getNfServices().size()) {
+					ProblemDetails prob = ProblemDetails.forBadRequest();
+					prob.setDetail("nfServiceInstanceIds in the nfProfile are not unique");
+					prob.setCause("nfServiceInstanceIds in the nfProfile are not unique");
+					prob.setInstance(nfInstanceUri);
+					resp.setProblemDetails(prob);
+					logMsg.clear();
+					logMsg.put("logMsg", "nfServiceInstanceIds in the nfProfile are not unique.");
+					logMsg.put("nfInstanceId", recvdProfile.getNfInstanceId());
+					logMsg.put("problemDetails", prob);
+					logger.error(logMsg.toString());
+					return resp;
+				}
+			}
+
+			HeartbeatInfo heartBeatInfo = fetchHeartBeatInfo(profile.getNfType());
+			logMsg.clear();
+			logMsg.put("logMsg", "Fetched HeartBeat values from SystemOptions");
+			logMsg.put("heartBeatInfo", heartBeatInfo.toString());
+			logger.info(logMsg.toString());
+			profile = setDefaultValuesForProfileAttributes(profile,heartBeatInfo);
+			nfHeartBeat = new NfHeartBeat(profile.getNfInstanceId(), profile.getNfStatus(), profile.getLoad(),
+					profile.getHeartBeatTimer());
+			
+			nfDao = new NfInstance(profile, nrfConfig.getGlobalConfig().getNrfInstanceId());
+			NfInstance registeredProfile;
+			String remoteNrfInstanceId = null;
+			String source = null, target = profile.toString();
+			Date currDate = new Date();
+
+			CustomNfInstance customNfInstance = null;
+			boolean nfStatusChanged = true;			
+			if (profile.getLoad() != null) {
+				if (nfHeartBeat.getLastNotifLoad() != null) {
+					if ((Math.abs((profile.getLoad()) - (nfHeartBeat.getLastNotifLoad())) >= getNrfSystemOptions().getNfManagementSystemOptions().getNfNotifyLoadThreshold())) {
+						nfHeartBeat.setLastNotifLoad(profile.getLoad());
+					}
+				} else {
+					nfHeartBeat.setLastNotifLoad(profile.getLoad());
+				}
+			}
+			metricsDimension.setServiceOperation(serviceOperation);
+			try {
+				customNfInstance = nfDbSvc.findNfInstanceForNfRegister(profile.getNfInstanceId());
+				if(customNfInstance==null) {
+					registeredProfile = null;
+				} else {
+					registeredProfile = customNfInstance.getNfInstance();
+					remoteNrfInstanceId = customNfInstance.getRemoteNrfInstanceId();
+				}
+				
+			} catch (Exception e) {
+				commonNrfMetrics.pegNrfDbMetricsFailuresTotal(RequestMethod.PUT, FIND, serviceOperation,e, NF_INSTANCES);
+				ProblemDetails prob = ProblemDetails.forInternalError();
+				prob.setCause("Could not fetch NfInstance due to an unexpected error.");
+				logMsg.clear();
+				logMsg.put("logMsg", e.getMessage());
+				logMsg.put("stackTrace", (Object[]) e.getStackTrace());
+				logger.error(logMsg.toString());
+				throw new NrfException(prob);
+			}
+			String previousNfStatus = null;
+			if (registeredProfile != null) {
+				serviceOperation= "NfUpdate";
+				metricsDimension.setServiceOperation(serviceOperation);
+				commonNrfMetrics.pegNrfDbMetricsSuccessTotal(RequestMethod.PUT, FIND, serviceOperation,NF_INSTANCES);
+				if (!recvdProfile.getNfType().trim().equals(registeredProfile.getNfType().trim())) {
+					logMsg.clear();
+					logMsg.put("logMsg", "NfType cannot be updated in an existing profile");
+					logger.error(logMsg.toString());
+					ProblemDetails prob = ProblemDetails.forBadRequest();
+					prob.setDetail("Invalid input data");
+					prob.addInvalidParam(new InvalidParam("nfType", "nfType cannot be updated in an existing profile"));
+					throw new NrfException(prob);
+				}				
+				currDate = new Date();
+				nfDao.setLastUpdateTimestamp(currDate);
+				nfDao.setLastUpdateFromNFTimestamp(currDate);
+				
+				/* find version specific entry from the  DB fetched record {can be v1, v2, v3 and so on} */
+				source = nfUpgradeServiceImpl.findNfProfileWithVersion(version, registeredProfile);
+				
+				/* Do not allow other version specific entries from VersionedJsonDocList to be removed/replaced, due to instantiation of new record */
+				nfDao.setNfProfileJsonDocList(registeredProfile.getNfProfileJsonDocList());
+				
+				NfProfile registeredProfileDoc = objectMapper.readValue(nfUpgradeServiceImpl.findNfProfileWithVersion(version, registeredProfile),NfProfile.class);
+				
+				/*Set the additional attributes of new profile with the additional attributes of the existing profile*/
+				profile.setAdditionalAttributes(registeredProfileDoc.getAdditionalAttributes());
+				target = profile.toString();
+				
+				/* modify the version specific entry from the nfInstance record*/
+				nfDao = nfUpgradeServiceImpl.modifyVersionSpecificNfInstanceData(version,nfDao,profile.toString());
+				exists = true;
+				logMsg.clear();
+				logMsg.put("logMsg", "NF profile already exists for nfInstanceId");
+				logMsg.put("nfInstanceId", nfInstanceId);
+				logger.info(logMsg.toString());
+				previousNfStatus = registeredProfile.getNfStatus().toString();
+
+				if (registeredProfile.getNfStatus() == NFStatus.SUSPENDED
+						&& profile.getNfStatus() == NFStatus.SUSPENDED) {
+					sendNotification = false;
+				}
+				if (registeredProfile.getNfStatus() == NFStatus.UNDISCOVERABLE
+						&& profile.getNfStatus() == NFStatus.UNDISCOVERABLE) {
+					sendNotification = false;
+				}
+				if (registeredProfile.getNfStatus() == profile.getNfStatus()) {
+					nfStatusChanged = false;
+				}
+				try {
+				
+					NfStatusMonitor statusMonitor = nfDbSvc
+							.findNfStatusMonitorByNfInstanceId(profile.getNfInstanceId(),remoteNrfInstanceId);
+					// Create a HeartBeat record if it was not established at profile registration
+					if (statusMonitor == null) {
+						commonNrfMetrics.pegNrfDbMetricsNotFoundTotal(RequestMethod.PUT,FIND, serviceOperation, NF_STATUSMONITOR);
+						logMsg.clear();
+						logMsg.put("logMsg", "Did not find NF heartbeat record");
+						logger.error(logMsg.toString());
+						logMsg.clear();
+						logMsg.put("logMsg", "Creating NF heartbeat record for profile with nfInstanceId");
+						logMsg.put("nfInstanceId", profile.getNfInstanceId());
+						logger.info(logMsg.toString());
+						nfStatusMonitor = new NfStatusMonitor(nfHeartBeat, nrfConfig.getGlobalConfig().getNrfInstanceId());
+						nfStatusMonitor.setLastUpdateFromNFTimestamp(currDate);
+						metricsDimension.setDbOperation("update");
+						nfStatusMonitorRepository.save(nfStatusMonitor);
+						commonNrfMetrics.pegNrfDbMetricsSuccessTotal(RequestMethod.PUT, UPDATE, serviceOperation, NF_STATUSMONITOR);
+					}
+					commonNrfMetrics.pegNrfDbMetricsSuccessTotal(RequestMethod.PUT, FIND, serviceOperation, NF_STATUSMONITOR);
+				} catch (Exception e) {
+					commonNrfMetrics.pegNrfDbMetricsFailuresTotal(RequestMethod.PUT, FIND, serviceOperation, e,NF_STATUSMONITOR );
+					ProblemDetails prob = ProblemDetails.forInternalError();
+					prob.setCause("Could not fetch NfInstance due to an unexpected error.");
+					logMsg.clear();
+					logMsg.put("logMsg", e.getMessage());
+					logMsg.put("stackTrace", (Object[]) e.getStackTrace());
+					logger.error(logMsg.toString());
+					throw new NrfException(prob);
+				}
+			}
+			notificationData.setNfInstanceUri(nfInstanceUri);
+			notificationData.setNfProfile(profile);
+			NfInstance nfDaoSaved=null;
+			try {
+				if(exists) {
+					metricsDimension.setDbOperation("update");
+				}else {
+					metricsDimension.setDbOperation("create");
+				}
+				metricsDimension.setServiceOperation(serviceOperation);
+				nfDaoSaved=nfRepository.save(nfDao);
+			}catch(Exception e) {
+			
+				commonNrfMetrics.pegNrfDbMetricsFailuresTotal(RequestMethod.PUT, CREATE, serviceOperation, e, NF_INSTANCES); 
+			}
+			if (nfDaoSaved!= null) {
+				if (exists) {
+					serviceOperation= "NfUpdate";
+					commonNrfMetrics.pegNrfDbMetricsSuccessTotal(RequestMethod.PUT, UPDATE, serviceOperation, NF_INSTANCES);
+					nfStatusMonitor = updateHeartBeatRecord(profile,remoteNrfInstanceId);
+					nfStatusMonitor.setLastUpdateFromNFTimestamp(currDate);
+					profile = recvdProfile.getNfProfileForPutResponse(profile,
+							(getNrfSystemOptions().getNfManagementSystemOptions()).getNrfSupportForProfileChangesInResponse());
+					//set additionalAttributes to null before sending to operator
+					profile.setAdditionalAttributes(null);
+					resp.setNfProfile(profile);
+					resp.setHttpStatusCode(HttpStatus.OK);
+					metricsDimension.setServiceOperation(serviceOperation);
+					metricsDimension.setDbOperation("update");
+					try {				
+						nfStatusMonitorRepository.save(nfStatusMonitor);
+					}catch(Exception e) {
+						commonNrfMetrics.pegNrfDbMetricsFailuresTotal(RequestMethod.PUT, UPDATE, serviceOperation, e, NF_STATUSMONITOR);
+					}
+					commonNrfMetrics.pegNrfDbMetricsSuccessTotal(RequestMethod.PUT,UPDATE, serviceOperation, NF_STATUSMONITOR);
+					logMsg.clear();
+					logMsg.put("logMsg", "NF profile & heartbeat record updated successfully for nfInstanceId");
+					logMsg.put("nfInstanceId", nfInstanceId);
+					logger.info(logMsg.toString());
+					if (sendNotification == true) {
+						notificationData.setEvent(NotificationEventType.NF_PROFILE_CHANGED);
+						//set additionalAttributes to null before sending to operator
+						profile.setAdditionalAttributes(null);
+						this.triggerForNFProfileChangeNotificationEvent(source, target, notificationData);
+					}
+					if (nfStatusChanged) {
+						logMsg.clear();
+						logMsg.put("logMsg","NF Status Changed");
+						logMsg.put("nfInstanceId", nfInstanceId);
+						logMsg.put("Previous Status", previousNfStatus);
+						logMsg.put("Current Status", profile.getNfStatus());
+						logger.warn(logMsg.toString());
+					}
+					if(remoteNrfInstanceId == null || remoteNrfInstanceId.isBlank()) {
+						nrfEventManager.recordNrfEvent(profile, Events.NFPROFILE_UPDATE_PUT_EVENT);
+					} else {
+						nrfMetrics.pegNfSwitchOver(serviceOperation, nfInstanceId, remoteNrfInstanceId);
+						nrfEventManager.recordNrfEvent(profile, Events.NFPROFILE_SITE_HANDOVER_PUT_EVENT);
+					}
+				} else {
+					serviceOperation= "NfRegister";
+					commonNrfMetrics.pegNrfDbMetricsSuccessTotal(RequestMethod.PUT, CREATE, serviceOperation, NF_INSTANCES);
+					logMsg.clear();
+					logMsg.put("logMsg", "NF profile record created successfully for nfInstanceId");
+					logMsg.put("nfInstanceId", nfInstanceId);
+					logger.warn(logMsg.toString());
+					nfStatusMonitor = new NfStatusMonitor(nfHeartBeat, nrfConfig.getGlobalConfig().getNrfInstanceId());
+					nfStatusMonitor.setLastUpdateFromNFTimestamp(nfDao.getLastUpdateFromNFTimestamp());
+					NfStatusMonitor nfStatusMonitorSaved=null;
+					metricsDimension.setDbOperation("create");
+					metricsDimension.setServiceOperation(serviceOperation);
+					try {					
+						nfStatusMonitorSaved=nfStatusMonitorRepository.save(nfStatusMonitor);
+						commonNrfMetrics.pegNrfDbMetricsSuccessTotal(RequestMethod.PUT, CREATE, serviceOperation, NF_STATUSMONITOR);
+					}catch(Exception e) {
+						commonNrfMetrics.pegNrfDbMetricsFailuresTotal(RequestMethod.PUT, CREATE, serviceOperation, e, NF_STATUSMONITOR);
+					}
+					if (nfStatusMonitorSaved == null) {
+						ProblemDetails prob = ProblemDetails.forInternalError();
+						prob.setCause("Could not establish the NF heartbeat record");
+						prob.setInstance(nfInstanceUri);
+						resp.setProblemDetails(prob);
+						try {
+						nfRepository.delete(nfDao);
+						commonNrfMetrics.pegNrfDbMetricsSuccessTotal(RequestMethod.PUT, DELETE, serviceOperation, NF_INSTANCES);
+						}catch(Exception e) {
+							commonNrfMetrics.pegNrfDbMetricsFailuresTotal(RequestMethod.PUT, DELETE, serviceOperation, e, NF_INSTANCES);
+						}
+						
+						logMsg.clear();
+						logMsg.put("logMsg", "NF registration failed with problemDetails");
+						logMsg.put("problemDetails", prob);
+						logger.error(logMsg.toString());
+					} else {
+						logMsg.clear();
+						logMsg.put("logMsg", "NF heartbeat record created successfully for nfInstanceId");
+						logMsg.put("nfInstanceId", nfInstanceId);
+						logger.warn(logMsg.toString());
+						profile = recvdProfile.getNfProfileForPutResponse(profile,
+								getNrfSystemOptions().getNfManagementSystemOptions().getNrfSupportForProfileChangesInResponse());
+						//setting additionalAttributes to null for operator
+						profile.setAdditionalAttributes(null);
+						resp.setNfProfile(profile);
+						resp.setHttpStatusCode(HttpStatus.CREATED);
+						notificationData.setEvent(NotificationEventType.NF_REGISTERED);
+						//set additionalAttributes to null before sending to operator
+						notificationData.getNfProfile().setAdditionalAttributes(null);
+						logMsg.clear();
+						logMsg.put("logMsg", "Notification is sent with notificationData");
+						logMsg.put("notificationData", notificationData);
+						logger.info(logMsg.toString());
+
+						restClient.sendNotificationEvent(notificationData, nrfEngSystemOptions,ThreadContext.get("ocLogId"));
+                        nrfEventManager.recordNrfEvent(profile, Events.NFREGISTER_EVENT);
+					}
+				}
+			} else {
+				ProblemDetails prob = ProblemDetails.forInternalError();
+				prob.setCause("Could not create NF Profile record");
+				prob.setInstance(nfInstanceUri);
+				resp.setProblemDetails(prob);
+				logMsg.clear();
+				logMsg.put("logMsg", "NF registration failed with problemDetails");
+				logMsg.put("problemDetails", prob);
+				logger.error(logMsg.toString());
+			}
+
+		} catch (IOException e) {
+			ProblemDetails prob = ProblemDetails.forInternalError();
+			prob.setCause("Json processing error");
+			prob.setInstance(nfInstanceUri);
+			resp.setProblemDetails(prob);
+			logMsg.clear();
+			logMsg.put("logMsg", "NF registration failed with problemDetails");
+			logMsg.put("problemDetails", prob);
+			logger.error(logMsg.toString());
+		} catch (NrfException e) {
+			logMsg.clear();
+			logMsg.put("logMsg", e.getMessage());
+			logMsg.put("stackTrace", (Object[]) e.getStackTrace());
+			logger.error(logMsg.toString());
+			throw e;
+		}catch (Exception e) {
+			ProblemDetails prob = ProblemDetails.forInternalError();
+			prob.setCause("Could not complete addOrReplaceNfProfile execution due to an unexpected error.");
+			prob.setInstance(nfInstanceUri);
+			logMsg.clear();
+			logMsg.put("logMsg", e.getMessage());
+			logMsg.put("stackTrace", (Object[]) e.getStackTrace());
+			logger.error(logMsg.toString());
+			throw new NrfException(prob);
+		}
+		return resp;
+	}
+
+	public NfStatusMonitor updateHeartBeatRecord(NfProfile profile,String remoteNrfInstanceId) throws Exception {
+		NfStatusMonitor statusMonitor;
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		String serviceOperation="NfUpdate";
+		metricsDimension.setMethod(RequestMethod.PUT);
+		metricsDimension.setServiceOperation(serviceOperation);
+		try {
+			statusMonitor = nfDbSvc.findNfStatusMonitorByNfInstanceId(profile.getNfInstanceId(),remoteNrfInstanceId);
+		} catch (Exception e) {
+			commonNrfMetrics.pegNrfDbMetricsFailuresTotal(RequestMethod.PUT, FIND, serviceOperation, e, NF_STATUSMONITOR);
+			ProblemDetails prob = ProblemDetails.forInternalError();
+			prob.setCause("Could not fetch NfInstance due to an unexpected error.");
+			logMsg.clear();
+			logMsg.put("logMsg", e.getMessage());
+			logMsg.put("stackTrace", (Object[]) e.getStackTrace());
+			logger.error(logMsg.toString());
+			throw new NrfException(prob);
+		}
+		commonNrfMetrics.pegNrfDbMetricsSuccessTotal(RequestMethod.PUT, FIND, serviceOperation, NF_STATUSMONITOR);
+		
+		/* find version specific entry from VersionedJsonDocList */
+		String doc =  nfUpgradeServiceImpl.findNfStatusMonitorDocWithVersion(version, statusMonitor);
+		NfStatusMonitorDoc nfStatusMonitorDoc = objectMapper.readValue(doc,NfStatusMonitorDoc.class);
+		NfHeartBeat heartBeatRec = new NfHeartBeat(statusMonitor,nfStatusMonitorDoc);
+		Date now = new Date();
+		
+		// Date.getTime() return milliSec while heartBeatRec.getLastHbTimeStamp() returns microSec
+		long dateDiffSecs = (now.getTime() - heartBeatRec.getLastHbTimeStamp()/1000) / 1000;
+		int nMissedHb = (int) (dateDiffSecs / heartBeatRec.getHeartBeatTimer());
+		logMsg.clear();
+		logMsg.put("logMsg", "updateHeartBeatRecord()");
+		logMsg.put("numHbMissedBeforeAudit", nMissedHb);
+		logger.info(logMsg.toString());
+		heartBeatRec.setNumHbMissedBeforeAudit(nMissedHb);
+		heartBeatRec.setNumHbMissed(0);
+		heartBeatRec.setLoad(profile.getLoad());
+		heartBeatRec.setHeartBeatTimer(profile.getHeartBeatTimer());
+		
+		heartBeatRec.setLastHbTimeStamp(new Date());
+		if (heartBeatRec.getNfStatus() != profile.getNfStatus()) {
+			if (profile.getNfStatus() == NFStatus.SUSPENDED) {
+				heartBeatRec.setSuspendedTimestamp(new Date());
+			} else {
+				heartBeatRec.setSuspendedTimestamp(0L);
+			}
+			heartBeatRec.setNfStatus(profile.getNfStatus());
+
+			if (profile.getLoad() != null) {
+				if (heartBeatRec.getLastNotifLoad() != null) {
+					if ((Math.abs((profile.getLoad()) - (heartBeatRec.getLastNotifLoad())) >= getNrfSystemOptions().getNfManagementSystemOptions().getNfNotifyLoadThreshold())) {
+						heartBeatRec.setLastNotifLoad(profile.getLoad());
+					}
+				} else {
+					heartBeatRec.setLastNotifLoad(profile.getLoad());
+				}
+			}
+		} else {
+			if (profile.getNfStatus() == NFStatus.REGISTERED) {
+				if (profile.getLoad() != null) {
+					if (heartBeatRec.getLastNotifLoad() != null) {
+						if ((Math.abs((profile.getLoad()) - (heartBeatRec.getLastNotifLoad())) >= getNrfSystemOptions().getNfManagementSystemOptions().getNfNotifyLoadThreshold())) {
+							heartBeatRec.setLastNotifLoad(profile.getLoad());
+						}
+					} else {
+						heartBeatRec.setLastNotifLoad(profile.getLoad());
+					}
+				}
+			} else {
+				// We are not updating the suspended time stamp and lastNotification load as the
+				// profile change is
+				// from Suspended to Suspended state for NfStatus
+			}
+		}
+		
+		NfStatusMonitorDoc newNfStatusMonitorDoc = new NfStatusMonitorDoc(heartBeatRec,this.nrfConfig.getGlobalConfig().getNrfInstanceId(),new Date());
+		
+		/* set the creation timeStamp of the record with the already existing record entry */
+		newNfStatusMonitorDoc.setCreationTimestamp(nfStatusMonitorDoc.getCreationTimestamp());
+		NfStatusMonitor nfStatusMonitor = new NfStatusMonitor(heartBeatRec, nrfConfig.getGlobalConfig().getNrfInstanceId());
+		
+		/* Do not allow other version specific entries from VersionedJsonDocList to be removed/replaced, due to instantiation of new record */
+		nfStatusMonitor.setNfStatusMonitorJsonDocList(statusMonitor.getNfStatusMonitorJsonDocList());
+		
+		/* modify version specific entry from VersionedJsonDocList */
+		nfStatusMonitor = nfUpgradeServiceImpl.modifyVersionSpecificNfStatusMonitorData(version, newNfStatusMonitorDoc.toString(), nfStatusMonitor);
+		
+		logMsg.clear();
+		logMsg.put("Updated heartbeat record", heartBeatRec);
+		logger.info(logMsg.toString());
+		return nfStatusMonitor;
+	}
+
+	private NfPatchResponse sendProblemDetailsWhenDBRecordNotFound(String nfInstanceId, NfPatchResponse nfPatchResponse,
+			URI nfInstanceUri) {
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+
+		logMsg.clear();
+		logMsg.put("logMsg", "NF profile not found for nfInstanceId");
+		logMsg.put("nfInstanceId", nfInstanceId);
+		logger.error(logMsg.toString());
+		ProblemDetails prob = ProblemDetails.forNotFound();
+		prob.setCause("NF profile not found for nfInstanceId in request");
+		prob.setDetail("NF profile not found for nfInstanceId in request");
+		prob.setInstance(nfInstanceUri);
+		nfPatchResponse.setProblemDetails(prob);
+		return nfPatchResponse;
+	}
+	
+	private NfPatchResponse sendNfAuthenticationFailurePatchResponse(String nfInstanceId, NfPatchResponse nfPatchResponse,
+			URI nfInstanceUri, String reason) {
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+
+		logMsg.clear();
+		logMsg.put("logMsg", "NF Authentication failure occured");
+		logMsg.put("reason", reason);
+		logger.error(logMsg.toString());
+		ProblemDetails problemDetails = new ProblemDetails();
+		problemDetails.setCause(reason);				
+		problemDetails.setInstance(nfInstanceUri);
+		nfPatchResponse.setProblemDetails(problemDetails);
+		return nfPatchResponse;
+	}
+
+	private ProblemDetails getProblemDetailsForConflict(PatchItem patchItem) {
+		ProblemDetails problemDetails = ProblemDetails.forConflict();
+		problemDetails = ProblemDetails.forUnprocessableRequest();
+		problemDetails.setDetail("patch causes the resource to become invalid");
+		problemDetails.addInvalidParam(new InvalidParam("patchItem", patchItem.toString()));
+		return problemDetails;
+	}
+
+	@Override
+	@Transactional
+	public Object updateProfileOnHeartBeat(String nfInstanceId, List<PatchItem> patchData, URI nfInstanceUri, 
+			HttpServletRequest request, String fqdnPresentInRequest) {
+		// Set NrfSystemOptions and NrfEngSystemOptions for all the dependent beans of NfMgmtServiceImpl
+		nfScreeningSvc.setNrfSystemOptions(nrfSystemOptions);
+		nrfQuerySvc.setNrfSystemAndEngineeringOptions(nrfSystemOptions, nrfEngSystemOptions);
+		validationHelper.setNfUpgradeServiceImpl(nfUpgradeServiceImpl);
+		validationHelper.setValidationParameters(null, request, nrfSystemOptions, nrfEngSystemOptions);
+		
+		String serviceOperation ="NfHeartBeat";
+		metricsDimension.setMethod(RequestMethod.PATCH);
+		metricsDimension.setServiceOperation(serviceOperation);
+		
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+
+		// Fetch Nf Instance from DB
+		NfInstance nf;
+		
+		CustomNfInstance customNfInstance = null;
+		String remoteNrfInstanceId = null;
+		FeatureStatus nfRegistrationAuthenticationStatus = (nrfSystemOptions.getNfAuthenticationSystemOptions() == null )? FeatureStatus.DISABLED :
+			nrfSystemOptions.getNfAuthenticationSystemOptions().getNfRegistrationAuthenticationStatus();
+
+		try {
+			customNfInstance = nfDbSvc.findNfInstanceByNfInstanceId(nfInstanceId, RequestMethod.PATCH, serviceOperation);
+			if(customNfInstance == null) {
+				nf = null;
+			} else {
+				nf = customNfInstance.getNfInstance();
+				remoteNrfInstanceId = customNfInstance.getRemoteNrfInstanceId();
+			}
+
+		} catch (Exception e) {
+			commonNrfMetrics.pegNrfDbMetricsFailuresTotal(RequestMethod.PATCH, FIND, serviceOperation, e, NF_INSTANCES);
+			ProblemDetails prob = ProblemDetails.forInternalError();
+			prob.setCause("Could not fetch NfInstance due to an unexpected error.");
+			prob.setInstance(nfInstanceUri);
+			logMsg.clear();
+			logMsg.put("logMsg", e.getMessage());
+			logMsg.put("stackTrace", (Object[]) e.getStackTrace());
+			logger.error(logMsg.toString());
+			throw new NrfException(prob);
+		}
+
+		// Initialize Patch Response
+		NfPatchResponse nfPatchResponse = new NfPatchResponse();
+		nfPatchResponse.setHttpStatus200(false);
+
+		// If no instance found
+		if (nf == null) {
+			if(nfRegistrationAuthenticationStatus.equals(FeatureStatus.ENABLED)) {
+				logMsg.clear();
+				logMsg.put("logMsg", "NF Authentication failed for NfUpdate-heartbeat service operation");
+				logMsg.put("Reason", "NF profile not found for nfInstanceId in Db");
+				logger.error(logMsg.toString());
+				return validationHelper.prepareNfAuthenticationFailureResp("NF profile not found for nfInstanceId", "NfUpdate-heartbeat");
+			}
+			return sendProblemDetailsWhenDBRecordNotFound(nfInstanceId, nfPatchResponse, nfInstanceUri);
+		}
+		commonNrfMetrics.pegNrfDbMetricsSuccessTotal(RequestMethod.PATCH, FIND, serviceOperation, NF_INSTANCES);
+		// Mapping Nf Instance to Nf Profile
+		NfProfile profile;
+		try {
+			profile = objectMapper.readValue(nfUpgradeServiceImpl.findNfProfileWithVersion(version, nf), NfProfile.class);
+		} catch (Exception e) {
+			// In case failure occurs in converting, internal error is thrown
+			nfPatchResponse.setProblemDetails(ProblemDetails.forInternalError());
+			return nfPatchResponse;
+		}
+		
+		if(nfRegistrationAuthenticationStatus.equals(FeatureStatus.ENABLED)) {
+			GenericResponse response = validationHelper.performNfAuthenticationBasedOnNfProfile(profile, fqdnPresentInRequest);
+			if(response.getResponse()!=null) {
+				logMsg.clear();
+				logMsg.put("logMsg", "NF Authentication failed for NfUpdate-heartbeat service operation");
+				logger.error(logMsg.toString());
+				return response;
+			}else {
+				logMsg.clear();
+				logMsg.put("logMsg", "NF Authentication successful");
+				logMsg.put("Reason", "NF profile not found for nfInstanceId in Db");
+				logger.info(logMsg.toString());
+			}
+		}
+
+
+		// Fetch Heartbeat record from DB
+		NfStatusMonitor nfStatusMonitor;
+		try {
+			nfStatusMonitor = nfDbSvc.findNfStatusMonitorByNfInstanceId(nfInstanceId,remoteNrfInstanceId);
+		} catch (Exception e) {
+			commonNrfMetrics.pegNrfDbMetricsFailuresTotal(RequestMethod.PATCH, FIND, serviceOperation, e, NF_STATUSMONITOR);
+			ProblemDetails prob = ProblemDetails.forInternalError();
+			prob.setCause("Could not fetch NfStatusMonitor due to an unexpected error.");
+			prob.setInstance(nfInstanceUri);
+			logMsg.clear();
+			logMsg.put("logMsg", e.getMessage());
+			logMsg.put("stackTrace", (Object[]) e.getStackTrace());
+			logger.error(logMsg.toString());
+			throw new NrfException(prob);
+		}
+		NfStatusMonitorDoc nfStatusMonitorDoc = null;
+		try {
+			nfStatusMonitorDoc = objectMapper.readValue(nfUpgradeServiceImpl.findNfStatusMonitorDocWithVersion(version, nfStatusMonitor),NfStatusMonitorDoc.class);
+		}catch(Exception exception) {
+			ProblemDetails prob = ProblemDetails.forInternalError();
+			prob.setCause("Could not fetch NfStatusMonitorPojo due to an unexpected error.");
+			prob.setInstance(nfInstanceUri);
+			logMsg.clear();
+			logMsg.put("logMsg", exception.getMessage());
+			logMsg.put("stackTrace", (Object[]) exception.getStackTrace());
+			logger.error(logMsg.toString());
+			throw new NrfException(prob);
+		}
+		commonNrfMetrics.pegNrfDbMetricsSuccessTotal(RequestMethod.PATCH, FIND, serviceOperation, NF_STATUSMONITOR);
+		NfHeartBeat heartBeatRec = new NfHeartBeat(nfStatusMonitor,nfStatusMonitorDoc);
+
+		
+		// getting the previous heartbeat timer value
+		int oldHeartBeatTimer = ((NfProfile) profile).getHeartBeatTimer();
+		// indicator to send notification or not
+		boolean notify = false;
+
+		List<ChangeItem> profileChanges = new ArrayList<ChangeItem>();
+
+		try {
+				
+			for (PatchItem item : patchData) {
+				if (item.getPath().equals("/nfStatus")) {
+					// converting incoming value to NFStatus
+					NFStatus value = NFStatus.fromValue(item.getValue().toString());
+
+					// if existing value is different from incoming value then send notification
+					if (profile.getNfStatus() != value) {
+						notify = true;
+						profileChanges.add(new ChangeItem(item, profile.getNfStatus()));
+						heartBeatRec.setNfStatus(value);
+						logMsg.clear();
+						logMsg.put("logMsg","NF Status Changed");
+						logMsg.put("nfInstanceId", profile.getNfInstanceId());
+						logMsg.put("Previous Status", profile.getNfStatus());
+						logMsg.put("Current Status", value);
+						logger.warn(logMsg.toString());						
+					}
+					// assigning value
+					profile.setNfStatus(value);
+				} else if (item.getPath().equals("/load")) {
+					// response is returned with Status 200
+					if (item.getOp().equals("remove")) {
+						profile.setLoad(0);
+						nfPatchResponse.setHttpStatus200(true);
+						profileChanges.add(new ChangeItem(item, profile.getLoad()));
+					} else {
+						Integer load = 0;
+						try {
+							load = Integer.parseInt(item.getValue().toString());
+						} catch (Exception e) {
+							throw new NrfException(getProblemDetailsForConflict(item));
+						}
+						// validating incoming load value
+						if (load >= 0 && load <= 100) {
+							if (profile.getLoad() != load) {
+								nfPatchResponse.setHttpStatus200(true);
+								profileChanges.add(new ChangeItem(item, profile.getLoad()));
+								profile.setLoad(load);
+							}
+							if ((Math.abs(load - heartBeatRec.getLastNotifLoad()) >= getNrfSystemOptions().getNfManagementSystemOptions().getNfNotifyLoadThreshold())) {
+								//notify = true;
+								if(profile.getNfStatus() == NFStatus.REGISTERED)
+									notify = true;
+								heartBeatRec.setLastNotifLoad(profile.getLoad());
+							}
+							heartBeatRec.setLoad(profile.getLoad());
+						} else {
+							// if incoming new load value is beyond range ( Note: range is specified by
+							// spec)
+							throw new NrfException(getProblemDetailsForConflict(item));
+						}
+					}
+				}
+			}
+		
+			// setting default values for load and priority if not present and validating
+			// heartbeat timer value
+			HeartbeatInfo heartBeatInfo = fetchHeartBeatInfo(profile.getNfType());
+			logMsg.clear();
+			logMsg.put("logMsg", "Fetched HeartBeat values from SystemOptions");
+			logMsg.put("heartBeatInfo", heartBeatInfo.toString());
+			logger.info(logMsg.toString());
+			profile = setDefaultValuesForProfileAttributes(profile,heartBeatInfo);
+
+			// if heartbeatTimer configurations are changed by NRF
+			if (oldHeartBeatTimer != (int) (profile).getHeartBeatTimer()) {
+				nfPatchResponse.setHttpStatus200(true);
+
+				// updating heartbeat timer in heartbeat record
+				heartBeatRec.setHeartBeatTimer(profile.getHeartBeatTimer());
+			}
+	
+			/* Don't allow AdditionalAttributes to get modified */
+			AdditionalAttributes oldAdditionalAttributes = profile.getAdditionalAttributes();
+			NfInstance nfInst = new NfInstance(profile, nrfConfig.getGlobalConfig().getNrfInstanceId());
+			
+			/* Don't allow AdditionalAttributes to get modified */
+			profile.setAdditionalAttributes(oldAdditionalAttributes);
+			
+			/* Do not allow other version specific entries from VersionedJsonDocList to be removed/replaced, due to instantiation of new record */
+			nfInst.setNfProfileJsonDocList(nf.getNfProfileJsonDocList());
+			
+			/* modify version specific entry from VersionedJsonDocList */
+			nf = nfUpgradeServiceImpl.modifyVersionSpecificNfInstanceData(version, nfInst, profile.toString());
+			
+			Date date = new Date();
+	
+			heartBeatRec.setLastHbTimeStamp(date);
+			heartBeatRec.setNumHbMissed(0);
+			heartBeatRec.setSuspendedTimestamp(0L);
+
+			// Date.getTime() return milliSec while heartBeatRec.getLastHbTimeStamp() returns microSec
+			long dateDiffSecs = (date.getTime() - heartBeatRec.getLastHbTimeStamp()/1000) / 1000;
+			int nMissedHb = (int) (dateDiffSecs / heartBeatRec.getHeartBeatTimer());
+			logMsg.clear();
+			logMsg.put("logMsg", "updateNfStatusRecordForPatchMsg()");
+			logMsg.put("numHbMissedBeforeAudit", nMissedHb);
+			logger.info(logMsg.toString());
+			heartBeatRec.setNumHbMissedBeforeAudit(nMissedHb);
+
+			// saving heartbeat record any failure, results in exception being thrown
+			if(!(nf.getRecordOwner().equals(nrfConfig.getGlobalConfig().getNrfInstanceId()))) {
+				logMsg.clear();
+				logMsg.put("logMsg", "Ownership of NF with instance ID: " + nf.getNfInstanceId() + " has been changed");
+				logger.info(logMsg.toString());
+			}
+			
+			NfStatusMonitorDoc newNfStatusMonitorDoc = new NfStatusMonitorDoc(heartBeatRec
+					,nrfConfig.getGlobalConfig().getNrfInstanceId(),new Date());	
+			
+			/* set the creation timeStamp of the record with the already existing record entry */
+			newNfStatusMonitorDoc.setCreationTimestamp(nfStatusMonitorDoc.getCreationTimestamp());
+			
+			NfStatusMonitor nfStatusMonitorAfterHeartBeat = new NfStatusMonitor(heartBeatRec
+					, nrfConfig.getGlobalConfig().getNrfInstanceId());	
+			
+			/* Do not allow other version specific entries from VersionedJsonDocList to be removed/replaced, due to instantiation of new record */
+			nfStatusMonitorAfterHeartBeat.setNfStatusMonitorJsonDocList(nfStatusMonitor.getNfStatusMonitorJsonDocList());
+			
+			/* modify version specific entry from VersionedJsonDocList */
+			nfStatusMonitorAfterHeartBeat = nfUpgradeServiceImpl.modifyVersionSpecificNfStatusMonitorData(version
+					,newNfStatusMonitorDoc.toString(), nfStatusMonitorAfterHeartBeat);	
+			nfStatusMonitorAfterHeartBeat.setLastUpdateFromNFTimestamp(date);
+			NfStatusMonitor nfStatusMonitorAfterHeartBeatSaved=null;
+			
+			metricsDimension.setDbOperation("update");
+			try {
+				nfStatusMonitorAfterHeartBeatSaved=nfStatusMonitorRepository.save(nfStatusMonitorAfterHeartBeat);
+			}catch(Exception e) {
+				commonNrfMetrics.pegNrfDbMetricsFailuresTotal(RequestMethod.PATCH, UPDATE, serviceOperation, e, NF_STATUSMONITOR);	
+			}
+			if ( nfStatusMonitorAfterHeartBeatSaved == null) {
+				logMsg.clear();
+				logMsg.put("logMsg", "Could not save heartbeat record");
+				logger.info(logMsg.toString());
+				throw new NrfException(ProblemDetails.forInternalError());
+			}
+			commonNrfMetrics.pegNrfDbMetricsSuccessTotal(RequestMethod.PATCH, UPDATE, serviceOperation, NF_STATUSMONITOR);
+			
+			nf.setLastUpdateTimestamp(date);
+			nf.setLastUpdateFromNFTimestamp(date);
+			// saving profile any failure, results in exception being thrown
+			NfInstance nfSaved=null;
+			try {
+				nfSaved=nfRepository.save(nf);
+			}catch(Exception e) {
+				commonNrfMetrics.pegNrfDbMetricsFailuresTotal(RequestMethod.PATCH, UPDATE, serviceOperation, e,NF_INSTANCES);
+			}
+			if ( nfSaved == null) {
+				logMsg.clear();
+				logMsg.put("logMsg", "Could not save nf instance record");
+				logger.info(logMsg.toString());
+				throw new NrfException(ProblemDetails.forInternalError());
+			}
+			commonNrfMetrics.pegNrfDbMetricsSuccessTotal(RequestMethod.PATCH, UPDATE, serviceOperation, NF_INSTANCES);
+
+		} catch (NrfException e) {
+			nfPatchResponse.setProblemDetails(e.getProbDetails());
+			return nfPatchResponse;
+		} catch (Exception e) {
+			nfPatchResponse.setProblemDetails(ProblemDetails.forInternalError());
+			return nfPatchResponse;
+		}
+
+		// sending notification
+		if (notify) {
+			NotificationData notificationData = new NotificationData();
+			notificationData.setNfInstanceUri(nfInstanceUri);
+			notificationData.setNfProfile(profile);
+			notificationData.setProfileChanges(profileChanges);
+			notificationData.setEvent(NotificationEventType.NF_PROFILE_CHANGED);
+			//set additionalAttributes to null before sending to operator
+			notificationData.getNfProfile().setAdditionalAttributes(null);
+			logMsg.clear();
+			logMsg.put("logMsg", "Notification is sent with notificationData");
+			logMsg.put("notificationData", notificationData);
+			logger.info(logMsg.toString());
+			restClient.sendNotificationEvent(notificationData, nrfEngSystemOptions,ThreadContext.get("ocLogId"));
+		}
+		//set additionalAttributes to null before sending to operator
+		profile.setAdditionalAttributes(null);
+		nfPatchResponse.setNfProfile(profile);
+		if(remoteNrfInstanceId!=null && !remoteNrfInstanceId.isBlank()) {
+			nrfMetrics.pegNfSwitchOver(serviceOperation, nfInstanceId, remoteNrfInstanceId);
+			nrfEventManager.recordNrfEvent(profile, Events.NFPROFILE_SITE_HANDOVER_HB_EVENT);
+		}
+		return nfPatchResponse;
+	}
+
+	@Override
+	@Transactional
+	public Object updateNfProfile(String nfInstanceId, List<PatchItem> patchData, URI nfInstanceUri, 
+			HttpServletRequest request, String fqdnPresentInRequest) {
+		// Set NrfSystemOptions and NrfEngSystemOptions for all the dependent beans of NfMgmtServiceImpl
+		nfScreeningSvc.setNrfSystemOptions(nrfSystemOptions);
+		nrfQuerySvc.setNrfSystemAndEngineeringOptions(nrfSystemOptions, nrfEngSystemOptions);
+		validationHelper.setNfUpgradeServiceImpl(nfUpgradeServiceImpl);
+		validationHelper.setValidationParameters(null, request, nrfSystemOptions, nrfEngSystemOptions);
+
+		String serviceOperation="NfUpdate";
+
+		NfPatchResponse nfPatchResponse = new NfPatchResponse();
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		NotificationData notificationData = new NotificationData();
+		List<ChangeItem> profileChanges = new ArrayList<ChangeItem>();
+		NfProfile profile = null;
+		NfInstance nf;
+		CustomNfInstance customNfInstance = null;
+		String remoteNrfInstanceId = null;
+		FeatureStatus nfRegistrationAuthenticationStatus = (nrfSystemOptions.getNfAuthenticationSystemOptions() == null) ?nrfSystemOptions.getNfAuthenticationSystemOptions().getNfRegistrationAuthenticationStatus();
+
+		metricsDimension.setMethod(RequestMethod.PATCH);
+        metricsDimension.setServiceOperation(serviceOperation);
+		if(getNrfSystemOptions().getGeneralSystemOptions().getNrfPlmnList() == null)
+		{
+			// nrfPlmn in systemOptions is not configured.
+			ProblemDetails problemDetails = ProblemDetails.forInternalError();
+			problemDetails.setDetail("plmn of NRF is not Configured");
+			problemDetails.setCause("Mandatory Configuration is missing");
+			problemDetails.setInstance(nfInstanceUri);
+			nfPatchResponse.setProblemDetails(problemDetails);
+			logMsg.clear();
+			logMsg.put("logMsg", "NF partial update failed with problemDetails");
+			logMsg.put("problemDetails", problemDetails);
+			logger.error(logMsg.toString());
+			nfPatchResponse.setProblemDetails(problemDetails);
+			return nfPatchResponse;
+		}
+
+		try {
+			customNfInstance = nfDbSvc.findNfInstanceByNfInstanceId(nfInstanceId, RequestMethod.PATCH, serviceOperation);	
+			if(customNfInstance == null) {
+				nf = null;
+			} else {
+				nf = customNfInstance.getNfInstance();
+				remoteNrfInstanceId = customNfInstance.getRemoteNrfInstanceId();
+			}
+		} catch (Exception e) {
+			commonNrfMetrics.pegNrfDbMetricsFailuresTotal(RequestMethod.PATCH, FIND, serviceOperation, e, NF_INSTANCES);
+			ProblemDetails prob = ProblemDetails.forInternalError();
+			prob.setCause("Could not fetch NfInstance due to an unexpected error.");
+			prob.setInstance(nfInstanceUri);
+			logMsg.clear();
+			logMsg.put("logMsg", e.getMessage());
+			logMsg.put("stackTrace", (Object[]) e.getStackTrace());
+			logger.error(logMsg.toString());
+			throw new NrfException(prob);
+		}
+		if (nf == null) {
+			if(nfRegistrationAuthenticationStatus.equals(FeatureStatus.ENABLED)) {
+				logMsg.clear();
+				logMsg.put("logMsg", "NF Authentication failed for NfUpdate service operation");
+				logMsg.put("Reason", "NF profile not found for nfInstanceId in Db");
+				logger.error(logMsg.toString());
+				return validationHelper.prepareNfAuthenticationFailureResp("NF profile not found for nfInstanceId", "NfUpdate");
+			}
+			logMsg.clear();
+			logMsg.put("logMsg", "NF profile not found for nfInstanceId");
+			logMsg.put("nfInstanceId", nfInstanceId);
+			logger.error(logMsg.toString());
+			ProblemDetails prob = ProblemDetails.forNotFound();
+			prob.setCause("NF profile not found for nfInstanceId in request");
+			prob.setDetail("NF profile not found for nfInstanceId in request");
+			prob.setInstance(nfInstanceUri);
+			nfPatchResponse.setProblemDetails(prob);
+			return nfPatchResponse;
+		}
+		commonNrfMetrics.pegNrfDbMetricsSuccessTotal(RequestMethod.PATCH, FIND, serviceOperation, NF_INSTANCES);
+		if(!(nf.getRecordOwner().equals(nrfConfig.getGlobalConfig().getNrfInstanceId()))) {
+			logMsg.clear();
+			logMsg.put("logMsg", "Ownership of NF with instance ID: " + nf.getNfInstanceId() + " has been changed");
+			logger.info(logMsg.toString());
+		}
+		NFStatus nfStatus = nf.getNfStatus();
+		String doc=null;
+		try {
+			doc = nfUpgradeServiceImpl.findNfProfileWithVersion(version, nf);
+		} catch (IOException e1) {
+			ProblemDetails prob = ProblemDetails.forInternalError();
+			prob.setCause("Could not extract due to an unexpected error.");
+			prob.setInstance(nfInstanceUri);
+			logMsg.clear();
+			logMsg.put("logMsg", e1.getMessage());
+			logMsg.put("stackTrace", (Object[]) e1.getStackTrace());
+			logger.error(logMsg.toString());
+			throw new NrfException(prob);
+		}
+		if (doc == null) {
+			logMsg.clear();
+			logMsg.put("logMsg", "Could not extract json from NF profile");
+			logger.error(logMsg.toString());
+			nfPatchResponse.setProblemDetails(ProblemDetails.forInternalError());
+			return nfPatchResponse;
+		}
+		
+		if(nfRegistrationAuthenticationStatus.equals(FeatureStatus.ENABLED)) {
+			GenericResponse genericResponse = validationHelper.performNfAuthenticationBasedOnNfInstance(nf,fqdnPresentInRequest);
+			if(genericResponse.getResponse()!=null) {
+				logMsg.clear();
+				logMsg.put("logMsg", "NF Authentication failed for NfUpdate service operation");
+				logger.error(logMsg.toString());
+				return genericResponse;
+			}else {
+				logMsg.clear();
+				logMsg.put("logMsg","Nf Fqdn Authentication successful");
+				logger.info(logMsg.toString());
+			}
+		}
+		
+		JsonObject profileDoc = Json.createReader(new StringReader(doc)).readObject();
+		Iterator<PatchItem> iter = patchData.iterator();
+		ObjectMapper om = new ObjectMapper();
+		ProblemDetails prob = ProblemDetails.forConflict();
+		boolean isValid = true;
+		ChangeItem changeItem;
+		Boolean enableF3 = getNrfSystemOptions().getGeneralSystemOptions().isEnableF3();
+		Boolean enableF5 = getNrfSystemOptions().getGeneralSystemOptions().getEnableF5();
+		boolean applyF3Validation = enableF5 ? true : enableF3;
+		logMsg.clear();
+		logMsg.put("enableF3", enableF3);
+		logMsg.put("enableF5", enableF5);
+		logMsg.put("applyF3Validation", applyF3Validation);
+		logger.info(logMsg.toString());
+        
+		while (iter.hasNext()) {
+			PatchItem item = iter.next();
+			Object origValue = null;
+			Object retObj = null;
+			Boolean sourceAndTargetReplaceValueSame = false;
+			try {
+				if (!item.getOp().equals("add")) {
+					origValue = om.readValue(profileDoc.getValue(item.getPath()).toString(), Object.class);
+				}
+				switch (item.getOp()) {
+				case "add":
+					try {
+						retObj = PatchHelper.applyAddPatch(item, profileDoc, nfInstanceUri, 
+								applyF3Validation,
+								getNrfSystemOptions().getNfManagementSystemOptions().
+								getAcceptAdditionalAttributes(),
+								enableF5);
+					} catch (NrfException e) {
+						prob = e.getProbDetails();
+						prob.setInstance(nfInstanceUri);
+						nfPatchResponse.setProblemDetails(prob);
+						return nfPatchResponse;
+					}
+					if (retObj instanceof ProblemDetails) {
+						nfPatchResponse.setProblemDetails((ProblemDetails) retObj);
+						return nfPatchResponse;
+					} else {
+						if (item.getPath().equals("/nfStatus")) {
+							origValue = om.readValue(profileDoc.getValue(item.getPath()).toString(), Object.class);
+							if (!(origValue.toString().equals(item.getValue().toString()))) {
+								logMsg.clear();
+								logMsg.put("logMsg","NF Status Changed");
+								logMsg.put("nfInstanceId", nfInstanceId);
+								logMsg.put("Previous Status", origValue.toString());
+								logMsg.put("Current Status", item.getValue().toString());
+								logger.warn(logMsg.toString());
+							}
+						}
+						profileDoc = (JsonObject) retObj;						
+					}
+					break;
+				case "copy":
+					break;
+				case "move":
+					break;
+				case "remove":
+					retObj = PatchHelper.applyRemovePatch(item, profileDoc, nfInstanceUri, 
+							applyF3Validation,
+							getNrfSystemOptions().getNfManagementSystemOptions().
+							getAcceptAdditionalAttributes(),
+							enableF5);
+					if (retObj instanceof ProblemDetails) {
+						nfPatchResponse.setProblemDetails((ProblemDetails) retObj);
+						return nfPatchResponse;
+					} else {
+						profileDoc = (JsonObject) retObj;
+					}
+					break;
+				case "replace":
+					if( !item.getValue().toString().equals(origValue.toString())) {
+						retObj = PatchHelper.applyReplacePatch(item, profileDoc, nfInstanceUri, 
+								applyF3Validation,
+								getNrfSystemOptions().getNfManagementSystemOptions().
+								getAcceptAdditionalAttributes(),
+								enableF5);
+						if (retObj instanceof ProblemDetails) {
+							nfPatchResponse.setProblemDetails((ProblemDetails) retObj);
+							return nfPatchResponse;
+						} else {
+							profileDoc = (JsonObject) retObj;
+							if (item.getPath().equals("/nfStatus")) {
+								logMsg.clear();
+								logMsg.put("logMsg","NF Status Changed");
+								logMsg.put("nfInstanceId", nfInstanceId);
+								logMsg.put("Previous Status", origValue.toString());
+								logMsg.put("Current Status", item.getValue().toString());
+								logger.warn(logMsg.toString());
+							}
+						}
+					}else {
+						sourceAndTargetReplaceValueSame = true;
+					}
+					break;
+				case "test":
+					break;
+				default:
+					// This is unexpected
+					nfPatchResponse.setProblemDetails(ProblemDetails.forInternalError());
+					return nfPatchResponse;
+				}
+				if( !sourceAndTargetReplaceValueSame) {
+					changeItem = new ChangeItem(item, origValue);
+					profileChanges.add(changeItem);
+				}
+			} catch (Exception e) {
+				logMsg.clear();
+				logMsg.put("stackTrace",e.toString());
+				logger.error(logMsg.toString());
+				prob.setDetail(e.getMessage());
+				prob.setInstance(nfInstanceUri);
+				prob.addInvalidParam(new InvalidParam("patchItem", item.toString()));
+				isValid = false;
+			}
+		}
+		if (!isValid) {
+			logMsg.clear();
+			logMsg.put("ProblemDetails", prob);
+			logger.error(logMsg.toString());
+			if (prob.getInvalidParams().size() > 1) {
+				prob.setDetail("Multiple patchItem errors");
+				prob.setInstance(nfInstanceUri);
+			}
+			nfPatchResponse.setProblemDetails(prob);
+			return nfPatchResponse;
+		}
+		try {
+			profile = om.readValue(profileDoc.toString(), NfProfile.class);
+		} catch (IOException e) {
+			nfPatchResponse.setProblemDetails(ProblemDetails.forInternalError());
+			return nfPatchResponse;
+		}
+
+		// Apply NfScreening on updated Profile
+		if (getNrfSystemOptions().getNfScreeningSystemOptions().getNfScreeningFeatureStatus().equals(NfScreeningFeatureStatus.ENABLED)) {
+			try {
+				nfScreeningSvc.applyNfScreeningRuleForPatch(profile, patchData);
+			} catch (NrfException e) {
+				//logger.error("updateNfProfile() : NFScreening Failed with problemDetails : {}", e.getProbDetails());
+				logMsg.clear();
+				logMsg.put("logMsg", "updateNfProfile() : NFScreening Failed with problemDetails");
+				logMsg.put("problemDetails", e.getProbDetails());
+				logger.error(logMsg.toString());
+				nfPatchResponse.setProblemDetails(e.getProbDetails());
+				return nfPatchResponse;
+			} catch (Exception exception) {
+				logMsg.clear();
+				logMsg.put("logMsg", "updateNfProfile() : NFScreening Failed with exception");
+				logMsg.put("exception", exception);
+				logger.error(logMsg.toString());
+				nfPatchResponse.setProblemDetails(ProblemDetails.forInternalError());
+			}
+		}
+
+		// PLMN value from Incoming NF Profile
+		if (profile.getPlmnList() != null && !profile.getPlmnList().isEmpty()) {
+			// PLMN is present in incoming request message
+			List<Plmn> plmnsInNfSupportedByNrf = getNrfSystemOptions().getGeneralSystemOptions().getNrfPlmnList().stream()
+					.filter(profile.getPlmnList()::contains).collect(Collectors.toList());
+			if (plmnsInNfSupportedByNrf.isEmpty()) {
+				// PLMN doesn't matches with NRF's PLMNS
+				// Setting Error 501 - Not Implemented
+				ProblemDetails problemDetails = ProblemDetails.forNotImplemented();
+				problemDetails.setDetail("NRF operations for foreign Plmn are not implemented");
+				problemDetails.addInvalidParam(new InvalidParam("plmnList", "different from plmn of NRF"));
+				problemDetails.setCause("Invalid 'plmnList'");
+				problemDetails.setInstance(nfInstanceUri);
+				logMsg.clear();
+				logMsg.put("logMsg", "NF partial update failed with problemDetails");
+				logMsg.put("problemDetails", problemDetails);
+				logger.error(logMsg.toString());
+				nfPatchResponse.setProblemDetails(problemDetails);
+				return nfPatchResponse;
+			}
+			else {
+				logMsg.clear();
+				logMsg.put("plmnsInnfSupportedByNrf", plmnsInNfSupportedByNrf);
+				logger.info(logMsg.toString());
+				profile.setPlmnList(plmnsInNfSupportedByNrf);
+			}
+		}
+
+		//fqdn validation if scheme is https
+
+		if (getNrfSystemOptions().getGeneralSystemOptions().getEnableF5()) {
+			if (profile.getNfServices() != null) {
+				Iterator <NfService> itr = profile.getNfServices().iterator();
+				while (itr.hasNext()){
+					NfService recvdNfService = itr.next();
+					if (recvdNfService.getScheme().equals(UriScheme.HTTPS)) {
+						if ((profile.getFqdn() == null) && (recvdNfService.getFqdn() == null)) {
+							prob = ProblemDetails.forBadRequest();
+							prob.setDetail("FQDN should be provided in the NF Profile or NF Service Profile when URI Scheme is https");
+							prob.setCause("FQDN not provided");
+							prob.setInstance(nfInstanceUri);
+							nfPatchResponse.setProblemDetails(prob);
+							logMsg.clear();
+							logMsg.put("logMsg", "NF registration failed with problemDetails");
+							logMsg.put("problemDetails", prob);
+							logger.error(logMsg.toString());
+							return nfPatchResponse;
+						}						
+					}
+				}
+			}
+		}
+		
+		// validate unique nfServiceInstanceId
+		
+		if (profile.getNfServices() != null) {
+			HashSet<String> nfServiceInstanceIds = new HashSet<String>();
+			Iterator <NfService> itr = profile.getNfServices().iterator();
+			while (itr.hasNext()){
+				NfService recvdNfService = itr.next();
+				nfServiceInstanceIds.add(recvdNfService.getServiceInstanceId());
+			}
+			if (nfServiceInstanceIds.size() < profile.getNfServices().size()) {
+				prob = ProblemDetails.forBadRequest();
+				prob.setDetail("nfServiceInstanceIds in the nfProfile are not unique");
+				prob.setCause("nfServiceInstanceIds in the nfProfile are not unique");
+				prob.setInstance(nfInstanceUri);
+				nfPatchResponse.setProblemDetails(prob);
+				logMsg.clear();
+				logMsg.put("logMsg", "nfServiceInstanceIds in the nfProfile are not unique.");
+				logMsg.put("problemDetails", prob);
+				logMsg.put("nfInstanceId", profile.getNfInstanceId());
+				logger.error(logMsg.toString());
+				return nfPatchResponse;
+			}
+		}
+
+		HeartbeatInfo heartBeatInfo = fetchHeartBeatInfo(profile.getNfType());
+		logMsg.clear();
+		logMsg.put("logMsg", "Fetched HeartBeat values from SystemOptions");
+		logMsg.put("heartBeatInfo", heartBeatInfo.toString());
+		logger.info(logMsg.toString());
+		try {
+			profile = setDefaultValuesForProfileAttributes(profile,heartBeatInfo);
+
+			// Semantic validation is performed to ignore/drop additional attributes when 
+			// acceptAdditionalAttributes flag is set to false
+			profile.semanticValidation(nfInstanceUri, applyF3Validation, 
+					getNrfSystemOptions().getNfManagementSystemOptions().getAcceptAdditionalAttributes(),enableF5);
+			
+			logMsg.clear();
+			logMsg.put("logMsg", "Nf profile after semantic validation");
+			logMsg.put("profile:", profile);
+			logger.info(logMsg.toString());
+			
+			/* Don't allow AdditionalAttributes to get modified */
+			AdditionalAttributes oldAdditionalAttributes = profile.getAdditionalAttributes();
+			NfInstance nfInst = new NfInstance(profile, nrfConfig.getGlobalConfig().getNrfInstanceId());
+			
+			/* Don't allow AdditionalAttributes to get modified */
+			profile.setAdditionalAttributes(oldAdditionalAttributes);
+			nfInst.setNfProfileJsonDocList(nf.getNfProfileJsonDocList());
+
+			/* modify version specific entry from VersionedJsonDocList */
+			nf = nfUpgradeServiceImpl.modifyVersionSpecificNfInstanceData(version, nfInst, profile.toString());
+
+		} catch (JsonProcessingException e) {
+			prob = ProblemDetails.forUnprocessableRequest();
+			prob.setDetail("patch causes the resource to become invalid");
+			prob.setInstance(nfInstanceUri);
+			nfPatchResponse.setProblemDetails(prob);
+			return nfPatchResponse;
+		}
+
+		notificationData.setNfInstanceUri(nfInstanceUri);
+		notificationData.setNfProfile(profile);
+		notificationData.setProfileChanges(profileChanges);
+		
+		Date currentDate = new Date();
+		nf.setLastUpdateTimestamp(currentDate);
+		nf.setLastUpdateFromNFTimestamp(currentDate);
+		
+		try {
+			NfInstance nfSaved=null;
+			metricsDimension.setDbOperation("update");
+			try {
+				nfSaved=nfRepository.save(nf);
+			}catch(Exception e) {
+				commonNrfMetrics.pegNrfDbMetricsFailuresTotal(RequestMethod.PATCH, UPDATE, serviceOperation,e,NF_INSTANCES);
+			}
+			if (nfSaved != null) {
+				commonNrfMetrics.pegNrfDbMetricsSuccessTotal(RequestMethod.PATCH, UPDATE, serviceOperation,NF_INSTANCES);
+				logMsg.clear();
+				logMsg.put("logMsg", "NF profile saved with success");
+				logMsg.put("nf", nf);
+				logger.info(logMsg.toString());
+				if( !notificationData.getProfileChanges().isEmpty()) {
+					// if nfStatus is already suspended then notification is not generated
+					if (!(((nfStatus == NFStatus.SUSPENDED) && (nf.getNfStatus() == NFStatus.SUSPENDED))||((nfStatus == NFStatus.UNDISCOVERABLE) && (nf.getNfStatus() == NFStatus.UNDISCOVERABLE)))) {
+						notificationData.setEvent(NotificationEventType.NF_PROFILE_CHANGED);
+						logMsg.clear();
+						logMsg.put("logMsg", "Notification is sent with notificationData");
+						logMsg.put("notificationData", notificationData);
+						logger.info(logMsg.toString());
+						//remove additional attributes when sending to the operator
+						notificationData.getNfProfile().setAdditionalAttributes(null);
+						restClient.sendNotificationEvent(notificationData, nrfEngSystemOptions,ThreadContext.get("ocLogId"));
+					}
+				}
+				// if any failure occurs while updating NfStatusMonitor record no problem
+				// details is sent
+				// as the intention of the user is to update profile than a heartbeat record.
+				updateNfStatusRecordForPatchMsg(profile,currentDate,remoteNrfInstanceId);
+			} else {
+				logMsg.clear();
+				logMsg.put("logMsg", "Could not save NF profile");
+				logger.error(logMsg.toString());
+				prob = ProblemDetails.forInternalError();
+				prob.setInstance(nfInstanceUri);
+				prob.setDetail("Could not save NF profile");
+				prob.setCause("Could not save NF profile");
+				nfPatchResponse.setProblemDetails(prob);
+				return nfPatchResponse;
+			}
+		} catch (Exception e) {
+			prob = ProblemDetails.forInternalError();
+			prob.setCause("Could not update NfProfile due to an unexpected error.");
+			prob.setInstance(nfInstanceUri);
+			logMsg.clear();
+			logMsg.put("logMsg", e.getMessage());
+			logMsg.put("stackTrace", (Object[]) e.getStackTrace());
+			logger.error(logMsg.toString());
+			throw new NrfException(prob);
+		}
+		nfPatchResponse.setHttpStatus200(true);
+		profile.setAdditionalAttributes(null);
+		nfPatchResponse.setNfProfile(profile);
+		if(remoteNrfInstanceId == null || remoteNrfInstanceId.isBlank()) {
+			nrfEventManager.recordNrfEvent(profile, Events.NFPROFILE_UPDATE_PATCH_EVENT);
+		} else {
+			nrfMetrics.pegNfSwitchOver(serviceOperation, nfInstanceId, remoteNrfInstanceId);
+			nrfEventManager.recordNrfEvent(profile, Events.NFPROFILE_SITE_HANDOVER_PATCH_EVENT);
+		}
+		return nfPatchResponse;
+	}
+
+	@Override
+	@Transactional
+	public Object deleteNfProfile(String nfInstanceId, URI nfInstanceUri, HttpServletRequest request) {
+		// Set NrfSystemOptions and NrfEngSystemOptions for all the dependents beans of NfMgmtServiceImpl
+		nfScreeningSvc.setNrfSystemOptions(nrfSystemOptions);
+		nrfQuerySvc.setNrfSystemAndEngineeringOptions(nrfSystemOptions, nrfEngSystemOptions);
+		nfDbSvc.setNrfSystemAndEngineeringOptions(nrfSystemOptions, nrfEngSystemOptions);
+		
+		String serviceOperation="NfDeregister";
+		metricsDimension.setMethod(RequestMethod.DELETE);
+		metricsDimension.setServiceOperation(serviceOperation);
+		
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		NotificationData notificationData = new NotificationData();
+		notificationData.setNfInstanceUri(nfInstanceUri);
+		try {
+			Object response = nfDbSvc.findAndDeleteNfInstance(nfInstanceId,nfInstanceUri, request);
+			if(response instanceof GenericResponse) {
+				GenericResponse genericResponse = (GenericResponse) response;
+				if(genericResponse.getResponse()!=null) {
+				logMsg.clear();
+				logMsg.put("logMsg","Nf Fqdn Authentication failed for Deregistration");
+				logMsg.put("Generic Response", genericResponse);
+				logger.error(logMsg.toString());
+				return genericResponse;
+				}
+			}
+			if (response == null){
+				ProblemDetails prob = ProblemDetails.forNotFound();
+				prob.setCause("NF profile not found for nfInstanceId in request");
+				prob.setDetail("NF profile not found for nfInstanceId in request");
+				prob.setStatus(HttpStatus.NOT_FOUND.value());
+				logMsg.clear();
+				logMsg.put("logMsg", "nfInstanceId not found in the list of registered NF Instances");
+
+				logger.error(logMsg.toString());
+				return prob;
+			}
+			else if (response instanceof ProblemDetails) {
+				return (ProblemDetails)response;
+			}
+
+			CustomNfInstance customNfInstance = (CustomNfInstance)response;
+			NfInstance nfInstance = customNfInstance.getNfInstance();
+			String remoteNrfInstanceId = customNfInstance.getRemoteNrfInstanceId();
+			NfProfile profile = objectMapper.readValue(nfUpgradeServiceImpl.findNfProfileWithVersion(version, nfInstance), NfProfile.class);
+			notificationData.setEvent(NotificationEventType.NF_DEREGISTERED);
+			notificationData.setNfProfile((NfProfile) profile);
+			logMsg.clear();
+			logMsg.put("logMsg", "Notification is sent with notificationData");
+			logMsg.put("notificationData", notificationData);
+			logger.info(logMsg.toString());
+			restClient.sendNotificationEvent(notificationData, nrfEngSystemOptions,ThreadContext.get("ocLogId"));
+			logMsg.clear();
+			logMsg.put("logMsg", "NF deregistered successfully for nfInstanceId");
+			logMsg.put("nfInstanceId", nfInstanceId);
+			logger.warn(logMsg.toString());
+			if(remoteNrfInstanceId == null || remoteNrfInstanceId.isBlank()) {
+				nrfEventManager.recordNrfEvent(profile, Events.NFDEREGISTER_EVENT);
+			} else {
+				nrfMetrics.pegNfSwitchOver(serviceOperation, nfInstanceId, remoteNrfInstanceId);
+				nrfEventManager.recordNrfEvent(profile, Events.NFPROFILE_SITE_HANDOVER_DEREGISTER_EVENT);
+			}
+			return profile;
+		} catch (Exception e) {
+			logMsg.clear();
+			logMsg.put("logMsg", e.getMessage());
+			logMsg.put("stackTrace", (Object[]) e.getStackTrace());
+			logger.error(logMsg.toString());
+			ProblemDetails prob = ProblemDetails.forInternalError();
+			prob.setCause("An unexpected error occured");
+			return prob;
+		} 
+	}
+
+	@Override
+	public Object getAllNfIds(String nfType, int limit) {
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+
+		//logger.info("getAllNfIds() called");
+		logMsg.clear();
+		logMsg.put("logMsg", "getAllNfIds() called");
+		logger.info(logMsg.toString());
+
+		List<String> list = new ArrayList<String>();
+
+		List<String> nfList = null;
+		String serviceOperation ="NfListRetrieval";
+		metricsDimension.setServiceOperation(serviceOperation);
+		metricsDimension.setMethod(RequestMethod.GET);
+		Object retVal;
+		
+		try {
+			if (nfType != null) {
+				nfList = nfDbSvc.findDistinctNfInstanceIdByNfType(nfType);
+			} else {
+				nfList = nfDbSvc.findAllDistinctNfInstanceId();
+			}			
+		} catch (Exception e) {
+			commonNrfMetrics.pegNrfDbMetricsFailuresTotal(RequestMethod.GET, FIND, serviceOperation,e,NF_INSTANCES);
+			ProblemDetails prob = ProblemDetails.forInternalError();
+			prob.setCause("Could not fetch NfInstance(s) due to an unexpected error.");
+			logMsg.clear();
+			logMsg.put("logMsg", e.getMessage());
+			logMsg.put("stackTrace", (Object[]) e.getStackTrace());
+			logger.error(logMsg.toString());
+			throw new NrfException(prob);
+		}
+		if (limit == -1) {
+			limit = nfList.size() + 1;
+		}
+
+		if (nfList == null || nfList.isEmpty()) {
+			commonNrfMetrics.pegNrfDbMetricsNotFoundTotal(RequestMethod.GET, FIND, serviceOperation,NF_INSTANCES);
+			return list;
+		} else {
+			commonNrfMetrics.pegNrfDbMetricsSuccessTotal(RequestMethod.GET, FIND, serviceOperation,NF_INSTANCES);
+			for (String nf : nfList) {
+				list.add(nf);
+				limit--;
+				if (limit <= 0)
+					break;
+			}
+		}
+		logMsg.clear();
+		logMsg.put("logMsg", "returning list");
+		logMsg.put("list", list);
+		logger.info(logMsg.toString());
+		return list;
+	}
+
+	@Override
+	public Object getAllNfs(String nfType) {
+		List<NfInstance> nfList = null;
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		String serviceOperation="NfListRetrieval";
+		metricsDimension.setMethod(RequestMethod.GET);
+		metricsDimension.setServiceOperation(serviceOperation);
+		try {
+			if (nfType != null) {
+
+				nfList = nfRepository.findByNfTypeAndNfStatus(nfType, NFStatus.REGISTERED);
+			} else {
+
+				nfList = nfRepository.findByNfStatus(NFStatus.REGISTERED);
+			}
+		} catch (Exception e) {
+			commonNrfMetrics.pegNrfDbMetricsFailuresTotal(RequestMethod.GET, FIND, serviceOperation,e,NF_INSTANCES);
+			ProblemDetails prob = ProblemDetails.forInternalError();
+			prob.setCause("Could not fetch NfInstance(s) due to an unexpected error.");
+			logMsg.clear();
+			logMsg.put("logMsg", e.getMessage());
+			logMsg.put("stackTrace", (Object[]) e.getStackTrace());
+			logger.error(logMsg.toString());
+			return prob;
+		}
+
+		if (nfList == null || nfList.isEmpty()) {
+			commonNrfMetrics.pegNrfDbMetricsNotFoundTotal(RequestMethod.GET, FIND, serviceOperation,NF_INSTANCES);
+			ProblemDetails prob = ProblemDetails.forNotFound();
+			prob.setCause("No registered NF instance exists");
+			prob.setDetail("No registered NF instance exists");
+			return prob;
+		}
+		commonNrfMetrics.pegNrfDbMetricsSuccessTotal(RequestMethod.GET, FIND, serviceOperation,NF_INSTANCES);
+
+		logMsg.clear();
+		logMsg.put("logMsg", "returning nfList");
+		logMsg.put("nfList", nfList);
+		logger.info(logMsg.toString());
+		return nfList;
+	}
+
+	public NfStatusMonitor updateNfStatusRecordForPatchMsg(NfProfile profile, Date currentDate,String remoteNrfInstanceId) {
+		Date date = new Date();
+		NfHeartBeat heartBeatRec = null;
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		String serviceOperation="NfUpdate";
+		NfStatusMonitor nfStatusMonitor;
+		metricsDimension.setMethod(RequestMethod.PATCH);
+		metricsDimension.setServiceOperation(serviceOperation);
+		metricsDimension.setDbOperation("update");
+		try {
+			nfStatusMonitor = nfDbSvc.findNfStatusMonitorByNfInstanceId(profile.getNfInstanceId(),remoteNrfInstanceId);
+		} catch (Exception e) {
+			commonNrfMetrics.pegNrfDbMetricsFailuresTotal(RequestMethod.PATCH, FIND, serviceOperation,e,NF_STATUSMONITOR);
+			ProblemDetails prob = ProblemDetails.forInternalError();
+			prob.setCause("Could not fetch NfInstance due to an unexpected error.");
+			logMsg.clear();
+			logMsg.put("logMsg", e.getMessage());
+			logMsg.put("stackTrace", (Object[]) e.getStackTrace());
+			logger.error(logMsg.toString());
+			throw new NrfException(prob);
+		}
+		NfStatusMonitor nfStatusMonitorAfterPatch = null;
+
+		try {
+			if (nfStatusMonitor == null) {
+				commonNrfMetrics.pegNrfDbMetricsNotFoundTotal(RequestMethod.PATCH, FIND, serviceOperation,NF_STATUSMONITOR);
+				logMsg.clear();
+				logMsg.put("logMsg", "Did not find NF heartbeat record");
+				logger.error(logMsg.toString());
+
+				logMsg.clear();
+				logMsg.put("logMsg", "Creating NF heartbeat record for profile with instance id");
+				logMsg.put("nfInstanceId", profile.getNfInstanceId());
+				logger.info(logMsg.toString());
+				heartBeatRec = new NfHeartBeat(profile.getNfInstanceId(), profile.getNfStatus(), profile.getLoad(),
+						profile.getHeartBeatTimer());
+				
+				nfStatusMonitor = new NfStatusMonitor(heartBeatRec, nrfConfig.getGlobalConfig().getNrfInstanceId());
+				nfStatusMonitor.setLastUpdateFromNFTimestamp(currentDate);
+				metricsDimension.setDbOperation("update");
+				try {
+					nfStatusMonitorRepository.save(nfStatusMonitor);
+					commonNrfMetrics.pegNrfDbMetricsSuccessTotal(RequestMethod.PATCH, UPDATE, serviceOperation,NF_STATUSMONITOR);
+				}catch(Exception e){
+					commonNrfMetrics.pegNrfDbMetricsFailuresTotal(RequestMethod.PATCH, UPDATE, serviceOperation,e,NF_STATUSMONITOR);
+				}
+
+
+
+			} else {
+
+				commonNrfMetrics.pegNrfDbMetricsSuccessTotal(RequestMethod.PATCH, FIND, serviceOperation,NF_STATUSMONITOR);
+				NfStatusMonitorDoc nfStatusMonitorDoc = objectMapper.readValue(
+						nfUpgradeServiceImpl.findNfStatusMonitorDocWithVersion("v1", nfStatusMonitor),
+						NfStatusMonitorDoc.class);
+				heartBeatRec = new NfHeartBeat(nfStatusMonitor,nfStatusMonitorDoc);
+				if (profile.getNfStatus() != nfStatusMonitor.getNfStatus()) {
+					if (profile.getNfStatus() == NFStatus.REGISTERED) {
+						heartBeatRec.setSuspendedTimestamp(0L);
+					} else {
+						heartBeatRec.setSuspendedTimestamp(date);
+					}
+				}
+
+				// Date.getTime() return milliSec while heartBeatRec.getLastHbTimeStamp() returns microSec
+				long dateDiffSecs = (date.getTime() - heartBeatRec.getLastHbTimeStamp()/1000) / 1000;
+				int nMissedHb = (int) (dateDiffSecs / heartBeatRec.getHeartBeatTimer());
+				logMsg.clear();
+				logMsg.put("logMsg", "updateNfStatusRecordForPatchMsg()");
+				logMsg.put("numHbMissedBeforeAudit", nMissedHb);
+				logger.info(logMsg.toString());
+				heartBeatRec.setNumHbMissedBeforeAudit(nMissedHb);
+				heartBeatRec.setLastHbTimeStamp(date);
+				heartBeatRec.setNumHbMissed(0);
+				heartBeatRec.setLoad(profile.getLoad());
+				heartBeatRec.setHeartBeatTimer(profile.getHeartBeatTimer());
+				heartBeatRec.setLastNotifLoad(profile.getLoad());
+				heartBeatRec.setNfStatus(profile.getNfStatus());
+
+				nfStatusMonitorAfterPatch = new NfStatusMonitor(heartBeatRec,
+						nrfConfig.getGlobalConfig().getNrfInstanceId());
+				
+				/* Do not allow other version specific entries from VersionedJsonDocList, due to instantiation of new record */
+				nfStatusMonitorAfterPatch.setNfStatusMonitorJsonDocList(nfStatusMonitor.getNfStatusMonitorJsonDocList());
+				NfStatusMonitorDoc newNfStatusMonitorDoc = new NfStatusMonitorDoc(heartBeatRec,
+						nrfConfig.getGlobalConfig().getNrfInstanceId(),new Date());
+				
+				/* set the creation timeStamp of the record with the already existing record entry */
+				newNfStatusMonitorDoc.setCreationTimestamp(nfStatusMonitorDoc.getCreationTimestamp());
+				
+				/* modify version specific entry from VersionedJsonDocList */
+				nfStatusMonitorAfterPatch = nfUpgradeServiceImpl.modifyVersionSpecificNfStatusMonitorData(version,
+						newNfStatusMonitorDoc.toString(), nfStatusMonitorAfterPatch);
+				nfStatusMonitorAfterPatch.setLastUpdateFromNFTimestamp(currentDate);
+				
+				NfStatusMonitor nfStatusMonitorSaved=null;
+				
+				try {
+					nfStatusMonitorSaved=nfStatusMonitorRepository.save(nfStatusMonitorAfterPatch);
+				}catch(Exception e) {
+					commonNrfMetrics.pegNrfDbMetricsFailuresTotal(RequestMethod.PATCH, UPDATE, serviceOperation,e,NF_STATUSMONITOR);
+				}
+				if ( nfStatusMonitorSaved == null) {
+					logMsg.clear();
+					logMsg.put("logMsg", "Could not save heartbeat record");
+					logger.error(logMsg.toString());
+				} else {
+					commonNrfMetrics.pegNrfDbMetricsSuccessTotal(RequestMethod.PATCH, UPDATE, serviceOperation,NF_STATUSMONITOR);
+					logMsg.clear();
+					logMsg.put("logMsg", "heartbeat record saved with success");
+					logMsg.put("heartBeatRec", heartBeatRec);
+					logger.info(logMsg.toString());
+					return nfStatusMonitorAfterPatch;
+				}
+			}
+		} catch (Exception e) {
+			ProblemDetails prob = ProblemDetails.forInternalError();
+			prob.setCause("Could not update NfStatus due to an unexpected error.");
+			logMsg.clear();
+			logMsg.put("logMsg", e.getMessage());
+			logMsg.put("stackTrace", (Object[]) e.getStackTrace());
+			logger.error(logMsg.toString());
+			throw new NrfException(prob);
+		}
+		return nfStatusMonitorAfterPatch;
+	}
+
+	private NrfSystemOptions getNrfSystemOptions() {
+		return this.nrfSystemOptions;
+	}
+
+	@Override
+	public void setNrfSystemAndEngineeringOptions(NrfSystemOptions nrfSystemOptions,
+														NrfEngSystemOptions nrfEngSystemOptions) {
+		this.nrfSystemOptions = nrfSystemOptions;
+		this.nrfEngSystemOptions = nrfEngSystemOptions;
+	}
+	
+
+}

@@ -1,0 +1,5 @@
+GitRepositoriesView.GitDirectories=/home/vagrant/git/upgrade-common/.git\:/home/vagrant/git/ocnrf/.git\:/home/vagrant/git/nf-common-configuration/.git\:/home/vagrant/git/ocnrf-common/.git\:
+GitRepositoriesView.GitDirectories.relative=/home/vagrant/git/upgrade-common/.git\:/home/vagrant/git/ocnrf/.git\:/home/vagrant/git/nf-common-configuration/.git\:/home/vagrant/git/ocnrf-common/.git\:
+RepositoryGroups.uuids=
+core_autoIgnoreDerivedResources=false
+eclipse.preferences.version=1

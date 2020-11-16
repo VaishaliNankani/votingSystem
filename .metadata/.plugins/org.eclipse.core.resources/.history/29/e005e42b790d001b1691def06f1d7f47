@@ -1,0 +1,29 @@
+package com.oracle.cgbu.cne.nrf.dao;
+
+import java.util.List;
+
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.stereotype.Repository;
+
+@Repository
+public interface NrfSystemOptionsRepository extends JpaRepository<NrfSystemOptionsDao, String> {
+	
+	@Query(value="SELECT * FROM NrfSystemOptions "
+			+ "WHERE (recordOwner = ?1 )",
+			nativeQuery=true)
+	public List<NrfSystemOptionsDao> findbyRecordOwner(String nrfInstanceId);
+	
+	@Query(value="SELECT * FROM NrfSystemOptions "
+			+ "WHERE ((recordOwner = ?1 ) AND (configType = 'OCNRF_SYSTEM_OPTIONS')) ",
+			nativeQuery=true)
+	public NrfSystemOptionsDao getOcnrfSystemOptions(String nrfInstanceId);
+	
+	@Query(value = "SELECT * FROM NrfSystemOptions "
+			+ "WHERE ((recordOwner = ?1 ) AND (configType = 'OCNRF_ENG_SYSTEM_OPTIONS')) ",
+			nativeQuery=true)
+	public NrfSystemOptionsDao getOcnrfEngSystemOptions(String nrfInstanceId);
+
+
+	
+}

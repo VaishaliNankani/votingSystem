@@ -1,0 +1,37 @@
+// Copyright 2018 (C), Oracle and/or its affiliates. All rights reserved.
+
+package com.oracle.oci.votingservice.domain;
+
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonValue;
+
+public enum Gender {
+	REGISTERED ("REGISTERED"),
+	SUSPENDED ("SUSPENDED"),
+	UNDISCOVERABLE ("UNDISCOVERABLE"),
+	DEREGISTERED ("DEREGISTERED")
+	;
+	
+	private final String value;
+
+	Gender(String value) {
+		this.value = value;
+	}
+
+	@Override
+	@JsonValue
+	public String toString() {
+		return String.valueOf(value);
+	}
+
+
+	@JsonCreator
+	public static Gender fromValue(String value) {
+		for (Gender x : Gender.values()) {
+			if(String.valueOf(x.value).equals(value)) {
+				return x;
+			}
+		}
+		return null;
+	}
+}

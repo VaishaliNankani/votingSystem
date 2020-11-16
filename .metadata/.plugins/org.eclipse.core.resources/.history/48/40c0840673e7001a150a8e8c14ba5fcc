@@ -1,0 +1,249 @@
+// Copyright 2020 (C), Oracle and/or its affiliates. All rights reserved.
+package com.oracle.cgbu.cne.nrf.hooks.releases;
+
+import java.sql.SQLException;
+
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
+
+import java.util.Map;
+
+
+
+import java.sql.ResultSet;
+
+import java.sql.Statement;
+
+import com.oracle.cgbu.cne.nrf.domain.NrfSystemOptions;
+
+import com.oracle.cgbu.cne.nrf.domain.VersionedJsonDoc;
+import com.oracle.cgbu.cne.nrf.domain.VersionedJsonDocList;
+
+import com.oracle.cgbu.cne.nrf.hooks.HookException;
+
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.oracle.cgbu.cne.nrf.domain.NrfEngSystemOptions;
+import com.oracle.releasemanagement.Release;
+
+
+public class NrfRelease extends Release  {
+
+	private static final Logger logger = LogManager.getLogger(NrfRelease.class);
+	private static final   ObjectMapper mapper = new ObjectMapper();	
+	String nrfInstanceId;
+	public String getNrfInstanceId() {
+		return nrfInstanceId;
+	}
+
+	public void setNrfInstanceId(String nrfInstanceId) {
+		this.nrfInstanceId = nrfInstanceId;
+	}
+
+	String applicationDatabase;
+	
+	
+	public String getApplicationDatabase() {
+		return applicationDatabase;
+	}
+
+	public void setApplicationDatabase(String applicationDatabase) {
+		this.applicationDatabase = applicationDatabase;
+	}
+
+	public VersionedJsonDoc getVersionedJsonDocBasedOnVersion(String version,
+			VersionedJsonDocList versionedJsonDocList)
+	{
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		logMsg.clear();
+		logMsg.put("logMsg", "Entering getJsonBasedOnVersion function");
+		logMsg.put("version",version);
+		logMsg.put("VersionedJsonDocList", versionedJsonDocList);
+		logger.info(logMsg.toString());
+		boolean recordExists = false;		
+		VersionedJsonDoc response = null;
+		Iterator<VersionedJsonDoc> versionedListIterator = versionedJsonDocList.
+				getVersionedJsonDocList().iterator();
+		
+		while(versionedListIterator.hasNext()) {			
+			VersionedJsonDoc jsonDoc = (VersionedJsonDoc) versionedListIterator.next();
+		    if(jsonDoc.getVersion().equals(version)) {
+		    	recordExists = true;		    	
+				logger.info(logMsg.toString());		    	
+		    	logMsg.clear();
+				logMsg.put("logMsg", "RecordExists");
+				logMsg.put("VersionedJsonDoc",response);
+				return jsonDoc;
+		    }
+		}
+		logMsg.clear();
+		logMsg.put("logMsg", "Exit from getJsonBasedOnVersion function");
+		logMsg.put("version",version);
+		logMsg.put("RecordExists", recordExists);
+		logger.info(logMsg.toString());		
+		throw new HookException("Record doesnt exists for given version.");
+	}
+	
+	public void  updateDatabaseRecords( ArrayList <String> batchSqls,
+			Statement stmt) throws SQLException
+	{
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		for (String sqlStatement:batchSqls)
+		 {
+			 logMsg.clear();
+			 logMsg.put("logMsg","Executing sql statement to update entries"
+					 + " in Application database");
+			 logMsg.put("sqlStatement",sqlStatement);					
+			 logger.info(logMsg.toString());
+			 stmt.executeUpdate(sqlStatement);
+		 }
+	}
+	
+	ArrayList <String> updateConfigJson(ResultSet resultSet) 
+	{
+		String jsonStr = null,sqlStatement = null,doc=null;
+		
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		NrfSystemOptions  nrfSystemOptions= null;
+		NrfEngSystemOptions  nrfEngSystemOptions = null;
+		
+		try {
+			while (resultSet.next()) {
+
+				String configType = resultSet.getString("configType");
+				String configurationJsonDocList = resultSet.getString("configurationJsonDocList");	
+				String nrfSystemOptionsDocList = null;
+				String nrfEngSystemOptionsDocList = null;
+				logMsg.clear();
+				logMsg.put("logMsg","configType & configurationJsonDocList fetched");
+				logMsg.put("configType",configType);
+				logMsg.put("configurationJsonDocList",configurationJsonDocList);
+				logger.info(logMsg.toString());
+				if(configType.equals("OCNRF_SYSTEM_OPTIONS"))
+				{ 
+					doc  = getSystemOptionsDoc(configurationJsonDocList);
+					nrfSystemOptions= mapper.readValue(doc
+							, NrfSystemOptions.class);
+					nrfSystemOptionsDocList = configurationJsonDocList;
+				}
+				else if (configType.equals("OCNRF_ENG_SYSTEM_OPTIONS"))
+				{
+					doc  = getSystemOptionsDoc(configurationJsonDocList);
+					nrfEngSystemOptions= mapper.readValue(doc
+							, NrfEngSystemOptions.class);
+					nrfEngSystemOptionsDocList = configurationJsonDocList;
+					nrfEngSystemOptions = addEngSystemOptionsPreloadedParameters(nrfEngSystemOptions);
+					jsonStr = setSystemOptionsDoc(configurationJsonDocList,nrfEngSystemOptions);
+					jsonStr = jsonStr.replace("\\", "\\\\");
+					sqlStatement = "update `" + getApplicationDatabase() + "`.`NrfSystemOptions`"
+							+ " set configurationJsonDocList ='"+jsonStr+"'  where recordOwner='"+getNrfInstanceId()+"' "
+							+ "and configType='OCNRF_ENG_SYSTEM_OPTIONS';";	
+					batchSqls.add(sqlStatement);
+				}
+			}
+			
+			sqlStatement = prepareDbUpdateSqlStmtForNrfSystemOptions(nrfSystemOptions,nrfEngSystemOptions,nrfSystemOptionsDocList);
+			sqlStatement = prepareDbUpdateSqlStmtForNrfEngSystemOptions(nrfEngSystemOptions,nrfEngSystemOptionsDocList);
+			
+			
+		}catch(SQLException e)
+		{
+			logMsg.clear();
+			logMsg.put("logMsg","Not able to execute the SQL query. Exiting...");
+			logMsg.put("stacktrace",Arrays.toString(e.getStackTrace()));					
+			logger.error(logMsg.toString());	
+			throw new HookException("Encountered SQLException");
+		}
+		catch(JsonProcessingException e)
+		{
+			logMsg.clear();
+			logMsg.put("logMsg","Json mapping Exception !!. Exiting...");
+			logMsg.put("stacktrace",Arrays.toString(e.getStackTrace()));					
+			logger.error(logMsg.toString());	
+			throw new HookException("Encountered JsonProcessingException");
+		}
+		return batchSqls;
+	}
+	
+	
+	String prepareDbUpdateSqlStmtForNrfSystemOptions(NrfSystemOptions nrfSystemOptions,
+			NrfEngSystemOptions  nrfEngSystemOptions,String configurationJsonDocList)
+	{
+		String sqlStatement= null;
+		String jsonStr = null;		
+		
+			nrfSystemOptions = addSystemOptionsPreloadedParameters(nrfSystemOptions,nrfEngSystemOptions);
+			jsonStr = setSystemOptionsDoc(configurationJsonDocList,nrfSystemOptions);
+		
+		jsonStr = jsonStr.replace("\\", "\\\\");
+		sqlStatement = "update `" + getApplicationDatabase() + "`.`NrfSystemOptions`"
+				+ " set configurationJsonDocList ='"+jsonStr+"'  where recordOwner='"+getNrfInstanceId()+"'"
+				+ " and configType='OCNRF_SYSTEM_OPTIONS';";
+		
+		return sqlStatement;
+	}
+	NrfSystemOptions  addSystemOptionsPreloadedParameters(NrfSystemOptions  nrfSystemOptions,)
+	{		
+		return nrfSystemOptions;
+	}
+	NrfEngSystemOptions addEngSystemOptionsPreloadedParameters(NrfEngSystemOptions  nrfEngSystemOptions)
+	{
+		return nrfEngSystemOptions;
+	}
+	
+	String getSystemOptionsDoc(String configurationJsonDocList)
+	{
+		String doc = null;
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		try {
+
+			VersionedJsonDocList versionedJsonDocList  =  mapper.readValue(configurationJsonDocList,
+					VersionedJsonDocList.class);    				
+			VersionedJsonDoc versionedJsonDoc =  getVersionedJsonDocBasedOnVersion("v1",versionedJsonDocList);
+			doc = versionedJsonDoc.getDoc();
+
+		}catch(JsonProcessingException e)
+		{
+			logMsg.clear();
+			logMsg.put("logMsg","Json mapping Exception !!. Exiting...");
+			logMsg.put("stacktrace",Arrays.toString(e.getStackTrace()));					
+			logger.error(logMsg.toString());			
+			throw new HookException("Encountered JsonProcessingException");
+		}
+		return doc;
+	}
+	String setSystemOptionsDoc(String configurationJsonDocList,Object nrfSystemOptionsObj)
+	{	
+
+		String versionDocListString= null;
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		try {
+			
+			VersionedJsonDocList versionedJsonDocList  =  mapper.readValue(configurationJsonDocList,
+					VersionedJsonDocList.class);    	
+			getVersionedJsonDocBasedOnVersion("v1",versionedJsonDocList).
+			setDoc(mapper.writeValueAsString(nrfSystemOptionsObj));
+			//set the updated nrfSystemOptions
+			versionDocListString = mapper.writeValueAsString(versionedJsonDocList);
+			logMsg.clear();
+			logMsg.put("logMsg","setSystemOptionsDoc ()");
+			logMsg.put("versionDocListString",versionDocListString);					
+			logger.info(logMsg.toString());
+		}catch(JsonProcessingException e)
+		{
+			logMsg.clear();
+			logMsg.put("logMsg","Not able to execute the SQL query. Exiting...");
+			logMsg.put("stacktrace",Arrays.toString(e.getStackTrace()));					
+			logger.error(logMsg.toString());		
+			throw new HookException("Encountered JsonProcessingException");
+		}
+		return  versionDocListString;
+	}
+	
+	
+}

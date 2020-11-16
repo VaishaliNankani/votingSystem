@@ -1,0 +1,152 @@
+// Copyright 2018 (C), Oracle and/or its affiliates. All rights reserved.
+
+package com.oracle.cgbu.cne.nrf.service.helper;
+
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.Callable;
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.oracle.cgbu.cne.nrf.dao.NfInstance;
+import com.oracle.cgbu.cne.nrf.domain.NfProfile;
+import com.oracle.cgbu.cne.nrf.domain.ProblemDetails;
+import com.oracle.cgbu.cne.nrf.domain.VersionedJsonDoc;
+import com.oracle.cgbu.cne.nrf.domain.VersionedJsonDocList;
+
+public class FilterFqdnExecutor implements Callable<Object> {
+	private static Logger logger = LogManager.getLogger(FilterFqdnExecutor.class);
+
+	private static final ObjectMapper objectMapper = new ObjectMapper();
+	private static final String version = "v1";
+
+	private List<NfInstance> sublistOfNfInstances;
+
+	// Maximum Allowed Workers is set here
+	public FilterFqdnExecutor(List<NfInstance> subList) {
+		this.sublistOfNfInstances = subList;
+	}
+
+	@Override
+	public Object call() {
+		
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		logMsg.clear();
+		logMsg.put("logMsg", "FilterFqdn call()");
+		logger.debug(logMsg.toString());
+		List<String> registeredFqdnList = new ArrayList<String>();
+		NfProfile profile;
+		String fqdn;
+		try {
+			for (NfInstance nfInstance : sublistOfNfInstances) {
+				String doc = findNfProfileWithVersion(version, nfInstance);
+				profile = objectMapper.readValue(doc, NfProfile.class);
+				fqdn = profile.getFqdn();
+				if (fqdn != null) {
+					registeredFqdnList.add(fqdn);
+				}
+			}
+		} catch (Exception e) {
+			ProblemDetails prob = ProblemDetails.forInternalError();
+			prob.setCause("Could not fetch NfProfile due to an unexpected error.");
+			logMsg.clear();
+			logMsg.put("logMsg", e.getMessage());
+			logMsg.put("stackTrace", (Object[]) e.getStackTrace());
+			logger.error(logMsg.toString());
+			return (prob);
+		}
+		logMsg.clear();
+		logMsg.put("logMsg", "set of all registered fqdns");
+		logMsg.put("registeredFqdnList",registeredFqdnList);
+		logger.info(logMsg.toString());
+		return registeredFqdnList;
+	}
+	
+	public String findNfProfileWithVersion(String version,NfInstance nfDao) throws IOException {
+		/*
+		 * This function is used to fetch the specific doc according 
+		 *	to version from NfInstance class from
+		 *	attribute nfProfileJsonDocList
+		 */
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		logMsg.clear();
+		logMsg.put("logMsg", "Entering findNfProfileWithVersion function");
+		logMsg.put("version",version);
+		logMsg.put("NfInstance", nfDao);
+		logger.info(logMsg.toString());
+		String resp = null;
+		VersionedJsonDocList versionJsonDocList = null;
+		try {
+			versionJsonDocList = objectMapper.readValue(nfDao.getNfProfileJsonDocList(),VersionedJsonDocList.class);
+		}catch (IOException exception) {
+			logMsg.clear();
+			logMsg.put("logMsg", exception.getMessage());
+			logMsg.put("stackTrace", Arrays.toString(exception.getStackTrace()));
+			logMsg.put("versionJsonDocList",nfDao.getNfProfileJsonDocList());
+			logger.error(logMsg.toString());
+			throw exception;
+		}
+		
+		List<VersionedJsonDoc> versionedDocList = versionJsonDocList.getVersionedJsonDocList();
+		logMsg.clear();
+		logMsg.put("logMsg", "The value of versionJsonDocList is");
+		logMsg.put("versionJsonDocList",versionedDocList);
+		logMsg.put("List Size",versionedDocList.size());
+		logger.info(logMsg.toString());
+		
+		if(!versionedDocList.isEmpty()) {
+			return getDocBasedOnVersion(version,versionedDocList);		
+		}
+		return resp;
+	}
+	
+	public String getDocBasedOnVersion(String version,List<VersionedJsonDoc> inputVersionedDocList) throws IOException {
+		
+		/*This function extracts the doc field from 
+		 * VersionJsonDoc specific to a version for
+		 * NfInstance as well as NfStatusMonitor class
+		 */
+		
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		logMsg.clear();
+		logMsg.put("logMsg", "Entering getDocBasedOnVersion function");
+		logMsg.put("version",version);
+		logMsg.put("VersionedJsonDocList", inputVersionedDocList);
+		logger.info(logMsg.toString());
+		boolean recordExists = false;
+		
+		String responseDoc = null;
+		Iterator<VersionedJsonDoc> versionedDocListIterator = inputVersionedDocList.iterator();
+		
+		while(versionedDocListIterator.hasNext()) {
+			
+			VersionedJsonDoc jsonDoc = (VersionedJsonDoc) versionedDocListIterator.next();
+		    if(jsonDoc.getVersion().equals(version)) {
+		    	recordExists = true;
+		    	logMsg.clear();
+				logMsg.put("logMsg", "Record");
+				logMsg.put("RecordExists", recordExists);
+				logMsg.put("VersionedJsonDoc",jsonDoc.toString());
+				logger.info(logMsg.toString());
+		    	String doc = jsonDoc.getDoc();
+		    	responseDoc = doc;
+		    }
+		}
+		logMsg.clear();
+		logMsg.put("logMsg", "Exit from getDocBasedOnVersion function");
+		logMsg.put("version",version);
+		logMsg.put("Doc", responseDoc);
+		logMsg.put("RecordExists", recordExists);
+		logger.info(logMsg.toString());
+		return responseDoc;
+	}
+
+
+}

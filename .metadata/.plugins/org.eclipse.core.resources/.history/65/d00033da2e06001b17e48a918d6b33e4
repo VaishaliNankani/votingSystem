@@ -1,0 +1,112 @@
+package com.oracle.cgbu.cne.nrf.config;
+
+import java.io.IOException;
+import java.util.Map;
+import javax.annotation.PostConstruct;
+import javax.sql.DataSource;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.jdbc.DataSourceBuilder;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import io.kubernetes.client.openapi.*;
+import io.kubernetes.client.openapi.apis.*;
+import io.kubernetes.client.openapi.models.*;
+import io.kubernetes.client.util.Config;
+/*
+@Configuration
+public class NrfKubeClient {
+	
+	private static Logger logger = LogManager.getLogger(NrfKubeClient.class);
+	
+	private ApiClient client;
+	
+	//Initialize the Kubernetes client
+	@PostConstruct
+	public void initializeKubeClient(){
+
+		try {
+			client = Config.defaultClient();
+		    io.kubernetes.client.openapi.Configuration.setDefaultApiClient(client); 
+		} catch (IOException e2) {
+			logger.error("client initialization failed");
+		}
+
+	}
+	
+	@Autowired
+	NrfConfigurations nrfConfigurations;
+	
+	// Database name, username and password are fetched from the kubernetes secret
+	// Namespace and Secret name variables are helm based
+	// The Primary and Secondary database are helm based 
+	@Bean
+    public DataSource getDataSource() throws Exception {
+		
+		String username = null;
+		String password = null;
+		String dbname = null;
+		V1SecretList listSecret = new CoreV1Api().listNamespacedSecret(nrfConfigurations.getDbSecret().getNameSpace(),
+				null, null, null, null,	null, null, null, null, null);
+		int flag = 0;
+		for( V1Secret secret: listSecret.getItems())
+		{
+			if(secret.getMetadata().getName().equals(nrfConfigurations.getDbSecret().getSecretKeyName()))
+			{
+				flag = 1;
+				if(secret.getData().isEmpty()) {
+					logger.error("The database secret is empty");
+					throw new Exception("The database secret is empty");
+				}
+				Map <String,byte[]> map = secret.getData();				
+
+				if(map.containsKey("dbUsername") && map.containsKey("dbPassword") && map.containsKey("appDbName")) {
+					if(map.get("dbUsername") != null)
+					{
+						username = new String(map.get("dbUsername"));
+					}
+				
+					if(map.get("dbPassword") != null) {
+						password = new String(map.get("dbPassword"));
+					}
+				
+					if(map.get("appDbName") != null) {
+						dbname = new String(map.get("appDbName"));
+					}
+				}else {
+					logger.error("Invalid data present in the secret");
+					throw new Exception("Invalid data present in the secret");
+				}
+				
+			}		
+		}
+		if(flag == 0) {
+			logger.error("Couldnot find the database secret");
+			throw new Exception("Couldnot find the database secret");
+		}
+		// TO build the database url
+		StringBuilder mysql_url = new StringBuilder(); 
+		mysql_url.append("jdbc:mysql://");
+		mysql_url.append(nrfConfigurations.getPrimaryHost().getHost());
+		mysql_url.append(":");
+		mysql_url.append(nrfConfigurations.getPrimaryHost().getPort());
+		
+		if( nrfConfigurations.getSecondaryHost().getHost()!=null && !nrfConfigurations.getSecondaryHost().getHost().isEmpty()) {
+	    mysql_url.append(",");
+		mysql_url.append(nrfConfigurations.getSecondaryHost().getHost());
+		mysql_url.append(":");
+		mysql_url.append(nrfConfigurations.getSecondaryHost().getPort());
+		}
+		mysql_url.append("/");
+		mysql_url.append(dbname);
+		mysql_url.append("?failOverReadOnly=false&characterEncoding=utf-8&useSSL=false&allowPublicKeyRetrieval=true");
+		String url = mysql_url.toString();
+		DataSourceBuilder dataSourceBuilder = DataSourceBuilder.create();
+        dataSourceBuilder.url(url);
+        dataSourceBuilder.username(username);
+        dataSourceBuilder.password(password);
+        logger.info("Database URL: "+ url);
+        return dataSourceBuilder.build();
+    }
+}

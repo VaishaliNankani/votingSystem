@@ -1,0 +1,737 @@
+// Copyright 2018 (C), Oracle and/or its affiliates. All rights reserved.
+
+package com.oracle.cgbu.cne.nrf.audit;
+
+import java.io.IOException;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Date;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+import org.apache.logging.log4j.Level;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.apache.logging.log4j.ThreadContext;
+import org.apache.logging.log4j.core.config.Configurator;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.stereotype.Component;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.oracle.cgbu.cne.nrf.NrfException;
+import com.oracle.cgbu.cne.nrf.config.NrfConfigurations;
+import com.oracle.cgbu.cne.nrf.dao.NfInstance;
+import com.oracle.cgbu.cne.nrf.dao.NfInstancesRepository;
+import com.oracle.cgbu.cne.nrf.dao.NfStatusMonitor;
+import com.oracle.cgbu.cne.nrf.dao.NfStatusMonitorDoc;
+import com.oracle.cgbu.cne.nrf.dao.NfStatusMonitorRepository;
+import com.oracle.cgbu.cne.nrf.dao.NrfSystemOptionsDao;
+import com.oracle.cgbu.cne.nrf.dao.NrfSystemOptionsRepository;
+import com.oracle.cgbu.cne.nrf.domain.ChangeItem;
+import com.oracle.cgbu.cne.nrf.domain.ChangeType;
+import com.oracle.cgbu.cne.nrf.domain.EpochTime;
+import com.oracle.cgbu.cne.nrf.domain.ErrorResponses;
+import com.oracle.cgbu.cne.nrf.domain.Events;
+import com.oracle.cgbu.cne.nrf.domain.ForwardingOptions;
+import com.oracle.cgbu.cne.nrf.domain.GeneralOptions;
+import com.oracle.cgbu.cne.nrf.domain.GeoRedundancyOptions;
+import com.oracle.cgbu.cne.nrf.domain.HeartbeatInfo;
+import com.oracle.cgbu.cne.nrf.domain.LogLevelOptions;
+import com.oracle.cgbu.cne.nrf.domain.NFStatus;
+import com.oracle.cgbu.cne.nrf.domain.NfAccessTokenOptions;
+import com.oracle.cgbu.cne.nrf.domain.NfAuthenticationOptions;
+import com.oracle.cgbu.cne.nrf.domain.NfDiscoveryOptions;
+import com.oracle.cgbu.cne.nrf.domain.NfManagementOptions;
+import com.oracle.cgbu.cne.nrf.domain.NfProfile;
+import com.oracle.cgbu.cne.nrf.domain.NfScreeningOptions;
+import com.oracle.cgbu.cne.nrf.domain.NotificationData;
+import com.oracle.cgbu.cne.nrf.domain.NotificationEventType;
+import com.oracle.cgbu.cne.nrf.domain.NrfEngSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.NrfSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.ProblemDetails;
+import com.oracle.cgbu.cne.nrf.domain.SlfOptions;
+import com.oracle.cgbu.cne.nrf.metrics.CommonNrfMetrics;
+import com.oracle.cgbu.cne.nrf.metrics.MetricsDimension;
+import com.oracle.cgbu.cne.nrf.metrics.NrfMetrics;
+import com.oracle.cgbu.cne.nrf.service.NfUpgradeServiceImpl;
+import com.oracle.cgbu.cne.nrf.service.NrfEventManager;
+import com.oracle.cgbu.cne.nrf.service.RestClient;
+
+//import sun.jvm.hotspot.debugger.ThreadContext;
+
+@Component
+public class HeartbeatAuditor extends Thread {
+	private Logger logger = LogManager.getLogger(getClass());
+	
+	private static final  String VERSION = "v1";
+	
+	@Autowired
+	private CommonNrfMetrics commonNrfMetrics;
+	
+	@Autowired
+	private NrfEventManager nrfEventManager;
+	
+	public CommonNrfMetrics getCommonNrfMetrics() {
+		return commonNrfMetrics;
+	}
+
+	public void setCommonNrfMetrics(CommonNrfMetrics commonNrfMetrics) {
+		this.commonNrfMetrics = commonNrfMetrics;
+	}
+
+	@Autowired
+	private NrfConfigurations config;
+
+	@Autowired
+	private NfStatusMonitorRepository hbRepo;
+	@Autowired
+	private NfInstancesRepository nfRepo;
+	@Autowired
+	RestClient restClient;
+	
+	@Autowired
+	@Qualifier("defaultObjectMapper")
+	private ObjectMapper objectMapper;
+	
+	public ObjectMapper getObjectMapper() {
+		return objectMapper;
+	}
+
+	public void setObjectMapper(ObjectMapper objectMapper) {
+		this.objectMapper = objectMapper;
+	}
+
+	@Autowired
+	private NfUpgradeServiceImpl nfUpgradeServiceImpl;
+	
+	public NfUpgradeServiceImpl getNfUpgradeServiceImpl() {
+		return nfUpgradeServiceImpl;
+	}
+
+	public void setNfUpgradeServiceImpl(NfUpgradeServiceImpl nfUpgradeServiceImpl) {
+		this.nfUpgradeServiceImpl = nfUpgradeServiceImpl;
+	}
+
+	@Autowired
+	NrfMetrics nrfMetrics;
+	
+	@Autowired
+	private MetricsDimension metricsDimension;
+	
+	public MetricsDimension getMetricsDimension() {
+		return metricsDimension;
+	}
+
+	public void setMetricsDimension(MetricsDimension metricsDimension) {
+		this.metricsDimension = metricsDimension;
+	}
+
+	@Autowired
+	private NrfSystemOptionsRepository nrfSystemOptionsRepository;
+	
+	private NrfSystemOptions nrfSystemOptions;
+	
+	private NrfEngSystemOptions nrfEngSystemOptions;
+	
+	private int numOfProfiles = 0; 
+
+	private String serviceOperation="NrfAuditor";
+	private String FIND="find";
+	private String NF_STATUS_MONITOR="NfStatusMonitor";
+	private String NF_INSTANCES="NfInstances";
+	private String NRF_SYSTEMOPTIONS="NrfSystemOptions";
+	private String DELETE="delete";
+	private String UPDATE="update";
+	
+	public NrfMetrics getNrfMetrics() {
+		return nrfMetrics;
+	}
+
+	public void setNrfMetrics(NrfMetrics nrfMetrics) {
+		this.nrfMetrics = nrfMetrics;
+	}
+	
+
+	public NrfConfigurations getConfig() {
+		return config;
+	}
+
+	public void setConfig(NrfConfigurations config) {
+		this.config = config;
+	}
+	
+	@Override
+	public void run() {
+		
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		// Fetch the latest NrfSystemOptions
+		try {
+			setNrfSystemAndEngineeringOptions();
+		}
+		catch (Exception e) {
+			logMsg.clear();
+			logMsg.put("logMsg", "Failed to load System Options. Skipping the audit cycle.");
+			logger.error(logMsg.toString());
+			return;
+		}
+		
+		Duration hbMinimumValue = nrfEngSystemOptions.getNfManagementEngSystemOptions().getMinAllowedHbRange().getMinValue();
+		while (!AuditManager.stopAudit) {
+			if(!AuditManager.pauseAudit) {
+				auditCycle(hbMinimumValue);
+				try {
+					Thread.sleep(config.getAudit().getHbAuditInterval().toMillis());
+				} catch (InterruptedException e) {
+					logMsg.clear();
+					logMsg.put("logMsg", "An exception occured");
+					logMsg.put("stackTrace", e.toString());
+					logger.error(logMsg.toString());
+					break;
+				}
+			} else {
+				try {
+					logMsg.clear();
+					logMsg.put("logMsg", "Pausing heartbeat auditor as Nnrf_NfManagement service is down");
+					logger.warn(logMsg.toString());
+					Thread.sleep(1000);
+				} catch (InterruptedException e) {
+					logMsg.clear();
+					logMsg.put("logMsg", "An exception occured");
+					logMsg.put("stackTrace", e.toString());
+					logger.error(logMsg.toString());
+				}
+			}
+		}
+	}
+	
+	public void fillThreadContext(String ServiceOperation) {
+		String nrfTxId = "nrf-tx-" + (int)(Math.random()*Integer.MAX_VALUE);
+		ThreadContext.clearMap();
+		ThreadContext.put("nrfTxId", nrfTxId);
+		ThreadContext.put("subsystem",  ServiceOperation);
+		ThreadContext.put("hostname", System.getenv("HOSTNAME"));
+	}
+	
+		
+	public void auditCycle(Duration hbMinimumValue) {
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		fillThreadContext("HeartBeatAudit");
+		
+		// Fetch the latest NrfSystemOptions
+		try {
+			setNrfSystemAndEngineeringOptions();
+		}
+		catch (Exception e) {
+			logMsg.clear();
+			logMsg.put("logMsg", "Failed to load System Options. Skipping the audit cycle.");
+			logger.error(logMsg.toString());
+			return;
+		}
+		
+
+		//nAllowedMissedHb = getNrfSystemOptions().getNfManagementOptions().getNfHeartBeatMissAllowed();
+		//minAllowedMissedHb = nrfEngSystemOptions.getGeneralEngSystemOptions().getNfHeartbeatMissAllowedMinValue();
+		hbMinimumValue = nrfEngSystemOptions.getNfManagementEngSystemOptions().getMinAllowedHbRange().getMinValue();
+
+		logMsg.clear();
+		logMsg.put("The minimum allowed value for heartbeatTimer minimum value", hbMinimumValue);
+		logger.info(logMsg.toString());
+		NotificationData notificationData = new NotificationData();
+		List<ChangeItem> profileChanges = new ArrayList<ChangeItem>();
+		ChangeItem changeItem = new ChangeItem();
+		Date now = new Date();
+		Date timestamp = new Date(now.getTime() - hbMinimumValue.toMillis());
+		Integer heartBeatTimer = (int) hbMinimumValue.getSeconds();
+
+		logMsg.clear();
+		logMsg.put("logMsg", "Find NFs that missed at least one heartbeat by timestamp");
+		logMsg.put("timestamp", timestamp);
+		logger.info(logMsg.toString());
+		List<NfStatusMonitor> hbList = null;
+		try {
+			hbList = hbRepo.findMissedHbRecords(EpochTime.fetchEpochFromDate(timestamp), config.getGlobalConfig().getNrfInstanceId());
+			commonNrfMetrics.pegNrfDbMetricsSuccessTotal(null, FIND, serviceOperation, NF_STATUS_MONITOR);
+		} catch (Exception e) {
+			commonNrfMetrics.pegNrfDbMetricsFailuresTotal(null, FIND, serviceOperation, e, NF_STATUS_MONITOR);
+		}
+		numOfProfiles = hbList.size();
+		if (!hbList.isEmpty()) {
+			logMsg.clear();
+			logMsg.put("logMsg", "Number of NFs that have missed heartbeat(s)=" +hbList.size());
+			logger.warn(logMsg.toString());
+		} else {
+			logMsg.clear();
+			logMsg.put("logMsg", "No NFs have missed heartbeat(s)");
+			logger.info(logMsg.toString());
+		}
+		for (NfStatusMonitor hbRec : hbList) {
+			long dateDiffSecs = (now.getTime() - hbRec.getLastUpdateFromNFTimestamp()/1000) / 1000;
+			/* find version specific entry from VersionedJsonDocList */
+			String nfStatusDoc = nfUpgradeServiceImpl.findNfStatusMonitorDocWithVersion(VERSION, hbRec);
+			NfStatusMonitorDoc nfStatusMonitorDoc = null;
+			try {
+				nfStatusMonitorDoc = objectMapper.readValue(nfStatusDoc, NfStatusMonitorDoc.class);
+			} catch (Exception e2) {
+				ProblemDetails prob = ProblemDetails.forInternalError();
+				prob.setCause("Could not fetch NfStatusMonitorDoc due to an unexpected error.");
+				logMsg.clear();
+				logMsg.put("logMsg", "An exception occured");
+				logMsg.put("stackTrace", e2.toString());
+				logger.error(logMsg.toString());
+				throw new NrfException(prob);
+
+			} 
+			heartBeatTimer = nfStatusMonitorDoc.getHeartBeatTimer();
+			int nMissedHb = (int) (dateDiffSecs / heartBeatTimer);
+			logMsg.clear();
+			logMsg.put("NfInstanceId of heartbeat record", hbRec.getNfInstanceId());
+			logMsg.put("Number of heartbeats missed till current audit cycle",nfStatusMonitorDoc.getNumHbMissed());
+			logMsg.put("Number of missed heartbeats calculated in current audit cycle",nMissedHb);
+			logger.warn(logMsg.toString());
+			if (nfStatusMonitorDoc.getNumHbMissed() == nMissedHb) {
+				// Skip the records that are already up to date
+				continue;
+			}
+			NfInstance nfInstance = null;
+			try {
+				nfInstance = nfRepo.findLatestNfInstanceByNfInstanceId(hbRec.getNfInstanceId());
+				commonNrfMetrics.pegNrfDbMetricsSuccessTotal(null, FIND, serviceOperation, NF_INSTANCES);
+			} catch (Exception e) {
+				commonNrfMetrics.pegNrfDbMetricsFailuresTotal(null, FIND, serviceOperation, e, NF_INSTANCES);
+			}
+			if (nfInstance == null) {
+				commonNrfMetrics.pegNrfDbMetricsNotFoundTotal(null, FIND, serviceOperation, NF_INSTANCES);
+				try {
+					hbRepo.deleteByNfInstanceId(hbRec.getNfInstanceId());
+					commonNrfMetrics.pegNrfDbMetricsSuccessTotal(null, DELETE, serviceOperation, NF_STATUS_MONITOR);
+				} catch (Exception e) {
+					commonNrfMetrics.pegNrfDbMetricsFailuresTotal(null, DELETE, serviceOperation, e,
+							NF_STATUS_MONITOR);
+				}
+				continue;
+			}
+			int nfAllowedMissedHb = fetchHeartBeatInfo(nfInstance.getNfType()).getNfHeartbeatMissAllowed();
+			logMsg.clear();
+			logMsg.put("NfInstanceId of heartbeat record", hbRec.getNfInstanceId());
+			logMsg.put("Number of heartbeats that can be missed corresponding to nfType",nfAllowedMissedHb);
+			logger.warn(logMsg.toString());
+			NfStatusMonitor latestHbRec = null;
+			try {
+				// Checking if any other NRF owns a record for same NfInstanceId, and getting
+				// the latest record
+				latestHbRec = hbRepo.findLatestNfStatusMonitorByNfInstanceId(hbRec.getNfInstanceId());
+				logMsg.clear();
+				logMsg.put("logMsg", "Latest fetched NfStatusMonitor record");
+				logMsg.put("NfInstanceId", hbRec.getNfInstanceId());
+				logMsg.put("Record owner", latestHbRec.getRecordOwner());
+				logMsg.put("NfStatusMonitor record", latestHbRec);
+				logger.info(logMsg.toString());
+				commonNrfMetrics.pegNrfDbMetricsSuccessTotal(null, FIND, serviceOperation, NF_STATUS_MONITOR);
+			} catch (Exception e) {
+				commonNrfMetrics.pegNrfDbMetricsFailuresTotal(null, FIND, serviceOperation, e, NF_STATUS_MONITOR);
+			}
+			String nfFqdn= "UNKNOWN";
+			// If the latest hbRecord is same as current NRF hbRecord, this nfInstance is
+			// being handled by current NRF
+			if (hbRec.equals(latestHbRec)) {
+				if (nfInstance.getRecordOwner() == null || !nfInstance.getRecordOwner().equals(config.getGlobalConfig().getNrfInstanceId())) {
+					logMsg.clear();
+					logMsg.put("logMsg", "The latest heartbeat record's owner is different from owner of nfInstanceId's latest record");
+					logMsg.put("NfInstanceId", hbRec.getNfInstanceId());
+					logMsg.put("NfInstance - record owner", nfInstance.getRecordOwner());
+					logMsg.put("HeartBeat - record owner", hbRec.getRecordOwner());
+					logger.error(logMsg.toString());
+					continue;
+				}
+				String str = null;
+				NfProfile profile = null;
+				try {
+					/* find version specific entry from VersionedJsonDocList */
+					str = nfUpgradeServiceImpl.findNfProfileWithVersion(VERSION, nfInstance);
+					profile = objectMapper.readValue(str, NfProfile.class);
+					if(profile != null) {
+					   nfFqdn = profile.getFqdn();
+					}
+					   
+				} catch (IOException e) {
+					logMsg.clear();
+					logMsg.put("logMsg", e.getMessage());
+					logger.error(logMsg.toString());
+					// something wrong - corrupt profile?
+					continue;
+				}
+				logMsg.clear();
+				logMsg.put("logMsg", "HeartbeatAuditor.auditCycle()");
+				logMsg.put("Number of heartbeats missed before audit", nfStatusMonitorDoc.getNumHbMissedBeforeAudit());
+				logMsg.put("Number of heartbeats missed in previous cycle", nfStatusMonitorDoc.getNumHbMissed());
+				logMsg.put("Number of heartbeats missed in current cycle", nMissedHb);
+				logMsg.put("Number of missed heartbeats allowed", nfAllowedMissedHb);
+				logger.warn(logMsg.toString());
+				nrfMetrics.pegHeartBeatsMissed(profile.getNfInstanceId(), profile.getNfType(),
+						nMissedHb + nfStatusMonitorDoc.getNumHbMissedBeforeAudit() - nfStatusMonitorDoc.getNumHbMissed(),nfFqdn);
+				nfStatusMonitorDoc.setNumHbMissed(nMissedHb);
+				nfStatusMonitorDoc.setNumHbMissedBeforeAudit(0);
+
+				/* modify version specific entry from VersionedJsonDocList */
+				hbRec = nfUpgradeServiceImpl.modifyVersionSpecificNfStatusMonitorData(VERSION, nfStatusMonitorDoc.toString(),hbRec);
+				if (nMissedHb > nfAllowedMissedHb) {
+					logMsg.clear();
+					logMsg.put("logMsg", "Time to suspend the NF");
+					logMsg.put("nfInstanceId", hbRec.getNfInstanceId());
+					logger.warn(logMsg.toString());
+
+					changeItem.setOp(ChangeType.REPLACE);
+					changeItem.setPath("/nfStatus");
+					changeItem.setOrigValue(nfInstance.getNfStatus());
+					String origNfStatus = nfInstance.getNfStatus().toString();
+					nfInstance.setNfStatus(NFStatus.SUSPENDED);
+					changeItem.setNewValue(nfInstance.getNfStatus());
+					profileChanges.add(changeItem);
+
+					try {
+						profile.setNfStatus(NFStatus.SUSPENDED);
+						/* modify version specific entry from VersionedJsonDocList */
+						nfInstance = (NfInstance) nfUpgradeServiceImpl.modifyVersionSpecificNfInstanceData(VERSION, nfInstance,profile.toString());
+					} catch (Exception e) {
+						logMsg.clear();
+						logMsg.put("logMsg", e.getMessage());
+						logger.error(logMsg.toString());
+						// something wrong - corrupt profile?
+						// skip saving it
+						continue;
+					}
+					nfInstance.setLastUpdateTimestamp(new Date());
+					NfInstance saved_obj = null;
+					metricsDimension.setDbOperation("update");
+					try {
+						saved_obj = nfRepo.save(nfInstance);
+						commonNrfMetrics.pegNrfDbMetricsSuccessTotal(null, UPDATE, serviceOperation, NF_INSTANCES);
+					} catch (Exception e) {
+						commonNrfMetrics.pegNrfDbMetricsFailuresTotal(null, UPDATE, serviceOperation, e, NF_INSTANCES);
+					}
+					if (saved_obj != null) {
+						notificationData.setEvent(NotificationEventType.NF_PROFILE_CHANGED);
+						notificationData.setNfProfile(profile);
+						notificationData.setProfileChanges(profileChanges);
+						restClient.setNrfEngSystemOptions(this.nrfEngSystemOptions);
+						restClient.sendNotificationEvent(notificationData);
+						hbRec.setNfStatus(NFStatus.SUSPENDED);
+						hbRec.setSuspendedTimestamp(new Date());
+						logMsg.clear();
+						logMsg.put("logMsg", "NF is Suspended");
+						logMsg.put("Heartbeat record", hbRec);
+						logMsg.put("Profile", profile);
+						logger.warn(logMsg.toString());
+						logMsg.clear();
+						logMsg.put("logMsg","NF status changed, nfInstanceId=" +profile.getNfInstanceId()+ ", Previous status=" +origNfStatus+ ", Current status=" +profile.getNfStatus().toString());
+						logger.warn(logMsg.toString());
+					} else {
+						commonNrfMetrics.pegNrfDbMetricsNotFoundTotal(null, UPDATE, serviceOperation, NF_INSTANCES);
+						logMsg.clear();
+						logMsg.put("logMsg", "Failed to save the suspended NF profile");
+						logMsg.put("Profile", profile);
+						logger.error(logMsg.toString());
+						// couldn't save the profile
+						// skip updating the heartbeat record, will try in next iteration
+						continue;
+					}
+				}
+				hbRec.setLastUpdateTimestamp(new Date());
+				metricsDimension.setDbOperation("update");
+				
+				try {
+					hbRepo.save(hbRec);
+					commonNrfMetrics.pegNrfDbMetricsSuccessTotal(null, UPDATE, serviceOperation, NF_STATUS_MONITOR);
+					if(hbRec.getNfStatus().equals(NFStatus.SUSPENDED)) {
+						nrfMetrics.pegNfSuspended(hbRec,profile.getFqdn());
+						nrfEventManager.recordNfAuditEvent(hbRec, Events.NFPROFILE_AUDIT_SUSPENDED_EVENT, nfAllowedMissedHb);
+					} else {
+						nrfEventManager.recordNfAuditEvent(hbRec, Events.NFPROFILE_AUDIT_MISSED_HB_EVENT, nfAllowedMissedHb);
+					}
+				} catch (Exception e) {
+					commonNrfMetrics.pegNrfDbMetricsFailuresTotal(null, UPDATE, serviceOperation, e, NF_STATUS_MONITOR);
+				}
+			} else if (latestHbRec.getNfStatus().equals(NFStatus.DEREGISTERED)) {
+				// If status of latest fetched record is deregistered, this is a late audit,
+				// hence deleting the record
+				logMsg.clear();
+				logMsg.put("logMsg","Latest fetched HeartBeat Record");
+				logMsg.put("NfInstanceId", latestHbRec.getNfInstanceId());
+				logMsg.put("Record owner", latestHbRec.getRecordOwner());
+				logger.info(logMsg.toString());
+				logMsg.clear();
+				logMsg.put("logMsg",
+						"Deleting NfStatusMonitor record and NfInstance record as status of latest record is DEREGISTERED");
+				logMsg.put("NfInstanceId", hbRec.getNfInstanceId());
+				logMsg.put("Record owner", hbRec.getRecordOwner());
+				logger.warn(logMsg.toString());
+				try {
+					hbRepo.delete(hbRec);
+					logMsg.clear();
+					logMsg.put("logMsg", "Successfully deleted NfStatusMonitor record");
+					logMsg.put("NfInstanceId", hbRec.getNfInstanceId());
+					logMsg.put("Record owner", hbRec.getRecordOwner());
+					logger.info(logMsg.toString());
+					commonNrfMetrics.pegNrfDbMetricsSuccessTotal(null, DELETE, serviceOperation, NF_STATUS_MONITOR);
+				} catch (Exception e) {
+					commonNrfMetrics.pegNrfDbMetricsFailuresTotal(null, DELETE, serviceOperation, e, NF_STATUS_MONITOR);
+				}
+				try {
+					nfRepo.deleteByNfInstanceId(hbRec.getNfInstanceId(), hbRec.getRecordOwner());
+					logMsg.clear();
+					logMsg.put("logMsg", "Successfully deleted NfInstance record");
+					logMsg.put("NfInstanceId", hbRec.getNfInstanceId());
+					logMsg.put("Record owner", hbRec.getRecordOwner());
+					logger.info(logMsg.toString());
+					commonNrfMetrics.pegNrfDbMetricsSuccessTotal(null, DELETE, serviceOperation, NF_INSTANCES);
+					nrfMetrics.pegStaleNfDeleted(hbRec,nfFqdn);
+					nrfEventManager.recordNfAuditEvent(hbRec, Events.NFPROFILE_AUDIT_DELETE_EVENT, nfAllowedMissedHb);
+				} catch (Exception e) {
+					commonNrfMetrics.pegNrfDbMetricsFailuresTotal(null, DELETE, serviceOperation, e, NF_INSTANCES);
+				}
+			} else if (Instant.ofEpochMilli(hbRec.getLastUpdateTimestamp()/1000)
+					.isBefore(Instant.ofEpochMilli(latestHbRec.getLastUpdateTimestamp()/1000).plusSeconds(
+							getNrfSystemOptions().getGeoRedundancyOptions().getReplicationLatency().toSeconds()))) {
+				// This record is being allowed a grace period of remote record's
+				// lastUpdateTimeStamp + replicationlatency before we delete the record
+				logMsg.clear();
+				logMsg.put("logMsg",
+						"Deleting NfStatusMonitor record and NfInstance record as current record is a stale record");
+				logMsg.put("NfInstanceId", hbRec.getNfInstanceId());
+				logMsg.put("Record owner", hbRec.getRecordOwner());
+				logger.warn(logMsg.toString());
+				try {
+					hbRepo.delete(hbRec);
+					logMsg.clear();
+					logMsg.put("logMsg", "Successfully deleted NfStatusMonitor record");
+					logMsg.put("NfInstanceId", hbRec.getNfInstanceId());
+					logMsg.put("RecordOwner", hbRec.getRecordOwner());
+					logger.info(logMsg.toString());
+					commonNrfMetrics.pegNrfDbMetricsSuccessTotal(null, DELETE, serviceOperation, NF_STATUS_MONITOR);
+				} catch (Exception e) {
+					commonNrfMetrics.pegNrfDbMetricsFailuresTotal(null, DELETE, serviceOperation, e, NF_STATUS_MONITOR);
+				}
+				try {
+					nfRepo.deleteByNfInstanceId(hbRec.getNfInstanceId(), hbRec.getRecordOwner());
+					logMsg.clear();
+					logMsg.put("logMsg", "Successfully deleted NfInstance record");
+					logMsg.put("NfInstanceId", hbRec.getNfInstanceId());
+					logMsg.put("Record owner", hbRec.getRecordOwner());
+					logger.info(logMsg.toString());
+					commonNrfMetrics.pegNrfDbMetricsSuccessTotal(null, DELETE, serviceOperation, NF_INSTANCES);
+					nrfMetrics.pegStaleNfDeleted(hbRec,nfFqdn);
+					nrfEventManager.recordNfAuditEvent(hbRec, Events.NFPROFILE_AUDIT_DELETE_EVENT, nfAllowedMissedHb);
+				} catch (Exception e) {
+					commonNrfMetrics.pegNrfDbMetricsFailuresTotal(null, DELETE, serviceOperation, e, NF_INSTANCES);
+				}
+			}
+		}
+		numOfProfiles = 0;
+		List<String> NFTypeList = new ArrayList<>(
+				Arrays.asList("NRF", "UDM", "AMF", "SMF", "AUSF", "NEF", "PCF", "SMSF", "NSSF", "UDR", "LMF", "GMLC",
+						"5G_EIR", "SEPP", "UPF", "N3IWF", "AF", "UDSF", "BSF", "CHF", "NWDAF", "CUSTOM_*"));
+		int count = 0;
+		for (String nfType : NFTypeList) {
+			try {
+				count = nfRepo.countByNfTypeAndNfStatus(nfType, config.getGlobalConfig().getNrfInstanceId());
+				commonNrfMetrics.pegNrfDbMetricsSuccessTotal(null, FIND, serviceOperation, NF_INSTANCES);
+			} catch (Exception e) {
+				commonNrfMetrics.pegNrfDbMetricsFailuresTotal(null, FIND, serviceOperation, e, NF_INSTANCES);
+			}
+			nrfMetrics.getHashMap().get(nfType).getAndSet(count);
+		}
+
+	}
+
+
+	public int getNumOfProfiles() {
+		return this.numOfProfiles;
+	}
+	
+	private NrfSystemOptions getNrfSystemOptions() {
+		return this.nrfSystemOptions;
+	}
+	
+	private void setNrfSystemAndEngineeringOptions() {
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		logMsg.clear();
+		logMsg.put("logMsg", "setNrfSystemOptions() called");
+		logger.debug(logMsg.toString());
+		List<NrfSystemOptionsDao>  nrfSystemOptionsDaoList = null;
+		try {
+
+			nrfSystemOptionsDaoList = this.nrfSystemOptionsRepository.findbyRecordOwner(config.getGlobalConfig().getNrfInstanceId());
+			if(nrfSystemOptionsDaoList != null) {
+				prepareNrfSystemAndEngineeringOptions(nrfSystemOptionsDaoList);
+			}else {
+				ProblemDetails prob = ProblemDetails.forInternalError();
+				prob.setCause("Could not fetch NrfSystemOptions or NrfEngSystemOptions due to an unexpected error.");
+				logMsg.clear();
+				logMsg.put("logMsg", "setNrfSystemOptions setNrfEngSystemOptions failed. Unable to fetch NrfSystemOptions or NrfEngSystemOptions");
+				logger.error(logMsg.toString());
+				throw new NrfException(prob);
+			}
+			commonNrfMetrics.pegNrfDbMetricsSuccessTotal(null, FIND, serviceOperation, NRF_SYSTEMOPTIONS);
+			if(nrfSystemOptions.getLogLevelOptions()!=null) {
+			if(nrfSystemOptions.getLogLevelOptions().getNrfAuditorLogLevel()!=null) {
+				if(!(nrfSystemOptions.getLogLevelOptions().getNrfAuditorLogLevel().equals(LogManager.getLogger("com.oracle.cgbu.cne.nrf").getLevel().toString())))
+				{
+					Configurator.setLevel("com.oracle.cgbu.cne.nrf", Level.toLevel(nrfSystemOptions.getLogLevelOptions().getNrfAuditorLogLevel()));
+				}
+			}
+			}
+
+		}
+		catch(Exception e) {
+			commonNrfMetrics.pegNrfDbMetricsFailuresTotal(null,FIND , serviceOperation, e, NRF_SYSTEMOPTIONS);
+			ProblemDetails prob = ProblemDetails.forInternalError();
+			prob.setCause("Could not fetch NrfSystemOptions or NrfEngSystemOptions due to an unexpected error.");
+			logMsg.clear();
+			logMsg.put("logMsg", "setNrfSystemOptions() or NrfEngSystemOptions failed with the following error");
+			logMsg.put("Error", e.getMessage());
+			logger.error(logMsg.toString());			
+			throw new NrfException(prob);
+		}
+	}
+
+	private void prepareNrfSystemAndEngineeringOptions( List<NrfSystemOptionsDao>  nrfSystemOptionsDaoList)
+	{
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		logMsg.clear();
+		logMsg.put("logMsg", "prepareNrfSystemAndEngineeringOptions() called");
+		logger.debug(logMsg.toString());	
+		NrfSystemOptions nrfSystemOptions = new NrfSystemOptions();
+		for(NrfSystemOptionsDao nrfSystemOptionsDao : nrfSystemOptionsDaoList) {
+			switch(nrfSystemOptionsDao.getConfigType())
+			{
+			case "FORWARDING_OPTIONS":	{
+				ForwardingOptions forwardingOptions = nrfSystemOptionsDao.toDomain(VERSION, ForwardingOptions.class);
+				nrfSystemOptions.setForwardingOptions(forwardingOptions);
+			}
+			break;
+
+			case "GENERAL_OPTIONS":	{
+				GeneralOptions generalOptions = nrfSystemOptionsDao.toDomain(VERSION, GeneralOptions.class);
+				nrfSystemOptions.setGeneralOptions(generalOptions);;
+			}
+			break;
+
+			case "GEOREDUNDANCY_OPTIONS":	{
+				GeoRedundancyOptions geoRedundancyOptions = nrfSystemOptionsDao.toDomain(VERSION, GeoRedundancyOptions.class);
+				nrfSystemOptions.setGeoRedundancyOptions(geoRedundancyOptions);
+			}
+			break;
+
+			case "LOG_LEVEL_OPTIONS":	{
+				LogLevelOptions logLevelOptions = nrfSystemOptionsDao.toDomain(VERSION, LogLevelOptions.class);
+				nrfSystemOptions.setLogLevelOptions(logLevelOptions);
+			}
+			break;
+
+			case "NF_ACCESSTOKEN_OPTIONS":	{
+				NfAccessTokenOptions nfAccessTokenOptions = nrfSystemOptionsDao.toDomain(VERSION, NfAccessTokenOptions.class);
+				nrfSystemOptions.setNfAccessTokenOptions(nfAccessTokenOptions);
+			}
+			break;
+
+			case "NF_AUTHENTICATION_OPTIONS":	{
+				NfAuthenticationOptions nfAuthenticationOptions = nrfSystemOptionsDao.toDomain(VERSION, NfAuthenticationOptions.class);
+				nrfSystemOptions.setNfAuthenticationOptions(nfAuthenticationOptions);
+			}
+			break;
+
+			case "NF_DISCOVERY_OPTIONS":	{
+				NfDiscoveryOptions nfDiscoveryOptions = nrfSystemOptionsDao.toDomain(VERSION, NfDiscoveryOptions.class);
+				nrfSystemOptions.setNfDiscoveryOptions(nfDiscoveryOptions);
+			}
+			break;
+
+			case "NF_MANAGEMENT_OPTIONS":	{
+				NfManagementOptions nfManagementOptions = nrfSystemOptionsDao.toDomain(VERSION, NfManagementOptions.class);
+				nrfSystemOptions.setNfManagementOptions(nfManagementOptions);
+			}
+			break;
+
+			case "NF_SCREENING_OPTIONS":	{
+				NfScreeningOptions nfScreeningOptions = nrfSystemOptionsDao.toDomain(VERSION, NfScreeningOptions.class);
+				nrfSystemOptions.setNfScreeningOptions(nfScreeningOptions);
+			}
+			break;
+
+			case "OCNRF_ERROR_RESPONSES":	{
+				ErrorResponses errorResponses = nrfSystemOptionsDao.toDomain(VERSION, ErrorResponses.class);
+				nrfSystemOptions.setErrorResponses(errorResponses);
+			}
+			break;
+
+			case "SLF_OPTIONS":	{
+				SlfOptions slfOptions = nrfSystemOptionsDao.toDomain(VERSION, SlfOptions.class);
+				nrfSystemOptions.setSlfOptions(slfOptions);
+			}
+			break;
+
+			case "OCNRF_ENG_SYSTEM_OPTIONS": {
+				NrfEngSystemOptions convertedNrfEngSystemOptions = (NrfEngSystemOptions) nrfSystemOptionsDao.toDomain_NrfEngSystemOptions(VERSION);
+				nrfEngSystemOptions.setNfRegistrationEngSystemOptions(convertedNrfEngSystemOptions.getNfRegistrationEngSystemOptions());
+				nrfEngSystemOptions.setNfSubscriptionEngSystemOptions(convertedNrfEngSystemOptions.getNfSubscriptionEngSystemOptions());
+				nrfEngSystemOptions.setNfDiscoveryEngSystemOptions(convertedNrfEngSystemOptions.getNfDiscoveryEngSystemOptions());
+				nrfEngSystemOptions.setNfAccessTokenEngSystemOptions(convertedNrfEngSystemOptions.getNfAccessTokenEngSystemOptions());
+				nrfEngSystemOptions.setGeneralEngSystemOptions(convertedNrfEngSystemOptions.getGeneralEngSystemOptions());
+				nrfEngSystemOptions.setNrfAuditorEngSystemOptions(convertedNrfEngSystemOptions.getNrfAuditorEngSystemOptions());
+				nrfEngSystemOptions.setGeoRedundancyEngSystemOptions(convertedNrfEngSystemOptions.getGeoRedundancyEngSystemOptions());
+			}
+			break;
+			case "OCNRF_ENG_ERROR_RESPONSES":    {
+				NrfEngSystemOptions convertedNrfEngSystemOptions = (NrfEngSystemOptions) nrfSystemOptionsDao.toDomain_NrfEngSystemOptions(VERSION);
+				nrfEngSystemOptions.setErrorResponses(convertedNrfEngSystemOptions.getErrorResponses());
+			}
+			break;
+			}
+		}
+		logMsg.clear();
+		logMsg.put("logMsg", "Exit from prepareNrfSystemAndEngineeringOptions()");
+		logger.debug(logMsg.toString());
+	}
+	private HeartbeatInfo fetchHeartBeatInfo(String nfType) {
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		HeartbeatInfo allNfHeartbeatInfo = new HeartbeatInfo();
+		if(getNrfSystemOptions().getNfManagementOptions().getNfHeartbeatTimers() == null) {
+			allNfHeartbeatInfo.setNfType("ALL_NF_TYPE");
+			allNfHeartbeatInfo.setNfHeartbeatMissAllowed(getNrfSystemOptions().getNfManagementOptions().getNfHeartBeatMissAllowed());
+			allNfHeartbeatInfo.setDefaultHbTimer(getNrfSystemOptions().getNfManagementOptions().getNfHeartBeatTimer());
+			allNfHeartbeatInfo.setMaxHbTimer(nrfEngSystemOptions.getGeneralEngSystemOptions().getHeartBeatTimerMaxValue());
+			allNfHeartbeatInfo.setMinHbTimer(nrfEngSystemOptions.getGeneralEngSystemOptions().getHeartBeatTimerMinValue());
+			logMsg.put("logMsg", "NfHeartbeatTimers are not present in configuration, using default heartbeatTimer");
+			logMsg.put("HeartbeatInfo",allNfHeartbeatInfo);
+			logger.error(logMsg.toString());
+			return allNfHeartbeatInfo;
+		}
+		for(HeartbeatInfo hbInfo:getNrfSystemOptions().getNfManagementOptions().getNfHeartbeatTimers()) {
+			if(hbInfo.getNfType().equals(nfType)) {
+				//If heartbeatInfo for particular NfType is found, return that
+				return hbInfo;
+			} else if(hbInfo.getNfType().equals("ALL_NF_TYPE")) {
+				//Storing heartbeatInfo of ALL_NF_TYPE, so that it can be returned in case of heartbeatInfo for particular NfType is not found
+				allNfHeartbeatInfo = new HeartbeatInfo(hbInfo);
+			} else if(hbInfo.getNfType().equals("CUSTOM_NF_TYPE") && nfType.startsWith("CUSTOM_")) {
+				//Returning CUSTOM_NF_TYPE values
+				return hbInfo;
+			}
+		}
+		//If no match found, then return ALL_NF_TYPE values
+		return allNfHeartbeatInfo;
+	}
+
+	
+	public final NrfEngSystemOptions getNrfEngSystemOptions() {
+		return nrfEngSystemOptions;
+	}
+
+	public final void setNrfEngSystemOptions(NrfEngSystemOptions nrfEngSystemOptions) {
+		this.nrfEngSystemOptions = nrfEngSystemOptions;
+	}
+
+}

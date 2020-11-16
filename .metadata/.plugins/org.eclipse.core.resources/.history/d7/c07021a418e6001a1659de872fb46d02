@@ -1,0 +1,270 @@
+// Copyright 2020 (C), Oracle and/or its affiliates. All rights reserved.
+package com.oracle.cgbu.cne.nrf.hooks;
+
+import com.oracle.hookconfig.HookConfigUtils;
+import com.oracle.hookconfig.VersionModel;
+import com.oracle.utils.SqlUtils;
+import com.oracle.utils.VersionInfo;
+
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.sql.SQLException;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.Set;
+
+
+public class CommonUpgradeRollback
+{
+    private final Logger logger = LoggerFactory.getLogger(CommonUpgradeRollback.class);
+    private final SqlUtils sqlUtils;
+    private final VersionInfo versionInfo;
+    private final HookConfigUtils hookConfigUtils;
+    private static CommonUpgradeRollback m_instance = new CommonUpgradeRollback();
+    private final int chartVersion;
+    private CommonUpgradeRollback()
+    {
+        hookConfigUtils = new HookConfigUtils();
+        sqlUtils = new SqlUtils();
+        versionInfo = new VersionInfo();
+        chartVersion = versionInfo.getChartVersion().getIntValue();
+    }
+    public static CommonUpgradeRollback getInstance()
+    {
+        return m_instance;
+    }
+    
+    
+    // Getting called for upgrade/restore the configurations before
+    // release class will be executed
+    public void handlePreConfigData()
+    {
+        String hookType = System.getenv("HOOK_TYPE");
+        Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+        logMsg.clear();
+		logMsg.put("logMsg", "Inside Function handlePreConfigData()");
+		logMsg.put("hookType", hookType);
+		logger.info(logMsg.toString());
+        if(hookType == null)
+        {
+            logger.error("Not able to get the value of HOOK_TYPE environment variable. Exiting...");
+            throw new HookConfigException(Not able to get the value of HOOK_TYPE environment variable. Exiting...);
+        }
+        switch (hookType) {
+            case "pre-upgrade":
+                preUpgrade();
+                break;
+            case "pre-rollback":
+                preRollback();
+                break;
+        }
+    }
+    
+    
+    
+ // Getting called for cleanup the unnecessary configurations after
+    // release class will be exectured
+    public void handlePostConfigData()
+    {
+    	String hookType = System.getenv("HOOK_TYPE");
+    	Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+        logMsg.clear();
+		logMsg.put("logMsg", "Inside Function handlePostConfigData()");
+		logMsg.put("hookType", hookType);
+		logger.info(logMsg.toString());
+        if(hookType == null)
+        {
+            logger.error("Not able to get the value of HOOK_TYPE "
+            		+ "environment variable. Exiting...");
+            throw new NullPointerException();
+        }
+        switch (hookType) {
+            case "post-upgrade":
+                postUpgrade();
+                break;
+            case "post-rollback":
+                postRollback();
+                break;
+        }
+    }
+
+    private String getNetworkDatabase() {
+        String database = System.getenv("MYSQL_RELEASE_DATABASE");
+        if (database != null && !database.isEmpty()) {
+            return database;
+        } else {
+            this.logger.error("MYSQL_RELEASE_DATABASE environment variable is not configured.");
+            throw new NullPointerException();
+        }
+    }
+    private String getApplicationDatabase() {
+        String database = System.getenv("MYSQL_DATABASE");
+        if (database != null && !database.isEmpty()) {
+            return database;
+        } else {
+            this.logger.error("MYSQL_DATABASE environment variable is not configured.");
+            throw new NullPointerException();
+        }
+    }
+
+    private String getNrfInstanceId() {
+        String nrfInstanceId = System.getenv("NF_INSTANCE_ID");
+        if (nrfInstanceId != null && !nrfInstanceId.isEmpty()) {
+            return nrfInstanceId;
+        } else {
+            this.logger.error("NF_INSTANCE_ID environment variable is not configured.");
+            throw new NullPointerException();
+        }
+    }
+
+    /*
+     * Based ROLLBACK_LIMIT, we only support rollback till certain releases
+     *
+     * Utility to remove all configuration of the rollback versions which
+     * are no longer supported
+     */
+    private void deleteUnnecessaryBackupData()
+    {
+        String database = getNetworkDatabase();
+        String[] batchSqls = new String[2];
+        Set<VersionModel> rollbackVersionSet = hookConfigUtils.getHookConfigurations().getRollbackVersionSet();
+        Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+        if(rollbackVersionSet.size() > 0) {
+        	Set<Integer> rollbackSet =  new HashSet<Integer>();
+        	for(VersionModel versionModel :rollbackVersionSet )
+        	{
+        		rollbackSet.add(versionModel.getVersion());
+        	}
+        	String rollbackVersions = rollbackSet.toString()
+        			.replace('[', '(')
+        			.replace(']', ')');
+        	
+            logMsg.clear();
+    		logMsg.put("logMsg", "Inside Function deleteUnnecessaryBackupData()");
+    		logMsg.put("rollbackVersions", rollbackVersions);
+    		logger.info(logMsg.toString());
+        	batchSqls[0] = "DELETE from `" + database + "`.`NrfSystemOptions_backup` where releaseVersion" +
+        			" NOT IN " + rollbackVersions+" AND recordOwner='"+getNrfInstanceId()+"';";
+        	batchSqls[1] = "DELETE from `" + database + "`.`NfScreening_backup` where releaseVersion" +
+        			" NOT IN " + rollbackVersions+" AND recordOwner='"+getNrfInstanceId()+"';";
+        	try {
+        		sqlUtils.executeBatch(batchSqls);
+        	} catch (SQLException e) {
+        		logger.error("Error occurred while performing deletion of unnecessary " +
+        				"backup data in post-upgrade",e);
+        		logMsg.clear();
+    			logMsg.put("logMsg", "Error occurred while performing deletion of unnecessary "
+    					+ "backup data in post-upgrade");
+    			logMsg.put("networkDatabase", database);  
+    			logMsg.put("rollbackVersions", rollbackVersions);
+    			logMsg.put("Exception", Arrays.toString(e.getStackTrace()));
+    			logger.error(logMsg.toString());
+        	}
+        }
+    }
+
+    private void preUpgrade()
+    {
+    	 Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+    	 int currentVersion = hookConfigUtils.getHookConfigurations().getCurrentVersion().getVersion();
+    	 logMsg.clear();
+    	 logMsg.put("logMsg", "Inside Function preUpgrade()");
+    	 logMsg.put("currentVersion", currentVersion);
+    	 logMsg.put("chartVersion", chartVersion);
+    	 logger.info(logMsg.toString());
+        if(currentVersion == chartVersion)
+        {       
+         logMsg.clear();
+       	 logMsg.put("logMsg", "Inside Function preUpgrade() ,Not required to backup "
+       	 		+ "the configurations for same version upgrade");
+       	 logMsg.put("currentVersion", currentVersion);
+       	 logMsg.put("chartVersion", chartVersion);
+       	 logger.info(logMsg.toString());  
+            return;
+        }
+        String networkDatabase = getNetworkDatabase();
+        String applicationDatabase = getApplicationDatabase();
+        String[] batchSqls = new String[4];
+        batchSqls[0] = "DELETE from `" + networkDatabase + "`.`NrfSystemOptions_backup`" +
+                " where releaseVersion>=" + currentVersion +" AND recordOwner='"+getNrfInstanceId()+"';";
+        batchSqls[1] = "DELETE from `" + networkDatabase + "`.`NfScreening_backup`" +
+                " where releaseVersion>=" + currentVersion +" AND recordOwner='"+getNrfInstanceId()+"';";
+        batchSqls[2] = "INSERT INTO `" + networkDatabase + "`.`NrfSystemOptions_backup` " +
+                "(configType,recordOwner ,configurationJsonDocList,lastUpdateTimestamp,releaseVersion)" +
+                " SELECT configType, recordOwner, configurationJsonDocList,lastUpdateTimestamp," + currentVersion +
+                " FROM `" + applicationDatabase + "`.`NrfSystemOptions`"+  "where recordOwner='"+getNrfInstanceId()+"'";
+        batchSqls[3] = "INSERT INTO `" + networkDatabase + "`.`NfScreening_backup` " +
+                "(recordOwner ,nfScreeningRulesListType ,nfScreeningType,nfScreeningRulesListStatus,nfScreeningJsonDocList,lastUpdateTimestamp,releaseVersion)" +
+                " SELECT recordOwner, nfScreeningRulesListType, nfScreeningType, nfScreeningRulesListStatus, nfScreeningJsonDocList,lastUpdateTimestamp," + currentVersion +
+                " FROM `" + applicationDatabase + "`.`NfScreening`"+ "where recordOwner='"+getNrfInstanceId()+"'"; 
+      
+        try {
+        	sqlUtils.executeBatch(batchSqls);
+        } catch (SQLException e) {           
+        	logMsg.clear();
+        	logMsg.put("logMsg", "Error occurred while performing backup during pre-upgrade ");
+        	logMsg.put("SQL Statements Executed", batchSqls);
+        	logMsg.put("Exception", Arrays.toString(e.getStackTrace()));
+        	logger.error(logMsg.toString());  
+        }
+    }
+
+    private void  postUpgrade()
+    {
+        deleteUnnecessaryBackupData();
+    }
+
+    private void preRollback()
+    {
+    	Map<String, Object> logMsg = new LinkedHashMap<String, Object>();    	 
+    	int currentVersion = hookConfigUtils.getHookConfigurations().getCurrentVersion().getVersion();
+    	String networkDatabase = getNetworkDatabase();
+    	String applicationDatabase = getApplicationDatabase();
+    	logMsg.clear();
+    	logMsg.put("logMsg", "Inside Function preRollback()");
+    	logMsg.put("currentVersion", currentVersion);
+    	logMsg.put("chartVersion", chartVersion);
+    	logMsg.put("applicationDatabase", applicationDatabase);
+		logMsg.put("networkDatabase", networkDatabase);
+    	logger.info(logMsg.toString());  
+    	if(currentVersion == chartVersion)
+    	{         
+        	logMsg.put("logMsg", "Not required to restore the configurations for same version rollback");
+        	logMsg.put("currentVersion", currentVersion);
+        	logMsg.put("chartVersion", chartVersion);
+        	logger.info(logMsg.toString());  
+            return;
+        }
+       
+        String[] batchSqls = new String[4];
+        batchSqls[0] = "DELETE from `" + applicationDatabase + "`.`NrfSystemOptions`"+ " where recordOwner='"+getNrfInstanceId()+"';";
+        batchSqls[1] = "DELETE from `" + applicationDatabase + "`.`NfScreening`"+ " where recordOwner='"+getNrfInstanceId()+"';";
+        batchSqls[2] = "INSERT INTO `" + applicationDatabase + "`.`NrfSystemOptions` (configType,recordOwner ,configurationJsonDocList,lastUpdateTimestamp)" +
+                " SELECT configType, recordOwner, configurationJsonDocList,lastUpdateTimestamp FROM `" + networkDatabase + "`.`NrfSystemOptions_backup`" +
+                " where releaseVersion = " + chartVersion+" AND recordOwner='"+getNrfInstanceId()+"';";
+        batchSqls[3] = "INSERT INTO `" + applicationDatabase +"`.`NfScreening` (recordOwner ,nfScreeningRulesListType ,nfScreeningType,nfScreeningRulesListStatus,nfScreeningJsonDocList,lastUpdateTimestamp)" +
+                " SELECT recordOwner ,nfScreeningRulesListType ,nfScreeningType,nfScreeningRulesListStatus,nfScreeningJsonDocList,lastUpdateTimestamp FROM `" + networkDatabase +"`.`NfScreening_backup`" +
+                " where releaseVersion = " + chartVersion +" AND recordOwner='"+getNrfInstanceId()+"';";
+        try {
+            sqlUtils.executeBatch(batchSqls);
+        } catch (SQLException e) {        	
+            logMsg.clear();
+			logMsg.put("logMsg", "Error occurred while performing restore from backup tables during pre-rollback");
+			logMsg.put("applicationDatabase", applicationDatabase);
+			logMsg.put("networkDatabase", networkDatabase);
+			logMsg.put("SQL Statements Executed", batchSqls);
+			logMsg.put("Exception", Arrays.toString(e.getStackTrace()));
+			logger.error(logMsg.toString());
+        }
+    }
+
+    private void postRollback()
+    {
+        deleteUnnecessaryBackupData();
+    }
+}
+

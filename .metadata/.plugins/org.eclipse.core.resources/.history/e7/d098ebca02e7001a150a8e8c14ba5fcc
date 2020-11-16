@@ -1,0 +1,2272 @@
+// Copyright 2018 (C), Oracle and/or its affiliates. All rights reserved.
+
+package com.oracle.cgbu.cne.nrf.service;
+
+import java.security.PrivateKey;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.stereotype.Service;
+import org.springframework.web.bind.annotation.RequestMethod;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.oracle.cgbu.cne.nrf.NrfConfigException;
+import com.oracle.cgbu.cne.nrf.NrfException;
+import com.oracle.cgbu.cne.nrf.config.NrfConfigurations;
+import com.oracle.cgbu.cne.nrf.dao.NfInstance;
+import com.oracle.cgbu.cne.nrf.dao.NfInstancesRepository;
+import com.oracle.cgbu.cne.nrf.domain.AccessTokenClaims;
+import com.oracle.cgbu.cne.nrf.domain.AccessTokenErr;
+import com.oracle.cgbu.cne.nrf.domain.AccessTokenReq;
+import com.oracle.cgbu.cne.nrf.domain.AccessTokenRsp;
+import com.oracle.cgbu.cne.nrf.domain.AudienceType;
+import com.oracle.cgbu.cne.nrf.domain.AuthConfig;
+import com.oracle.cgbu.cne.nrf.domain.AuthorizeRequesterNf;
+import com.oracle.cgbu.cne.nrf.domain.ErrorCondition;
+import com.oracle.cgbu.cne.nrf.domain.ErrorInfo;
+import com.oracle.cgbu.cne.nrf.domain.FeatureStatus;
+import com.oracle.cgbu.cne.nrf.domain.ForwardingData;
+import com.oracle.cgbu.cne.nrf.domain.ForwardingSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.GenericResponse;
+
+import com.oracle.cgbu.cne.nrf.domain.LogicalOperatorForScope;
+
+import com.oracle.cgbu.cne.nrf.domain.NFStatus;
+import com.oracle.cgbu.cne.nrf.domain.NfProfile;
+import com.oracle.cgbu.cne.nrf.domain.NfResponseInfo;
+import com.oracle.cgbu.cne.nrf.domain.NfService;
+import com.oracle.cgbu.cne.nrf.domain.NrfEngSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.NrfSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.Plmn;
+import com.oracle.cgbu.cne.nrf.domain.ProblemDetails;
+import com.oracle.cgbu.cne.nrf.domain.ServiceName;
+import com.oracle.cgbu.cne.nrf.domain.SingleNssai;
+import com.oracle.cgbu.cne.nrf.forwarding.NrfForwardingService;
+import com.oracle.cgbu.cne.nrf.metrics.CommonNrfMetrics;
+import com.oracle.cgbu.cne.nrf.metrics.NrfMetrics;
+import com.oracle.cgbu.cne.nrf.service.helper.PrivateKeyManager;
+import com.oracle.cgbu.cne.nrf.service.helper.ReplicationStatus;
+import com.oracle.cgbu.cne.nrf.service.helper.ValidationHelper;
+import com.oracle.cgbu.cne.nrf.service.helper.NfInstanceSortComparator;
+
+import io.jsonwebtoken.Jwts;
+import io.jsonwebtoken.SignatureAlgorithm;
+
+@Service
+public class AccessTokenServiceImpl implements AccessTokenService {
+	
+	private static Logger logger = LogManager.getLogger(AccessTokenServiceImpl.class);
+	private static final  String VERSION = "v1";
+	
+	@Autowired
+	@Qualifier("defaultObjectMapper")
+	private ObjectMapper objectMapper;
+	
+	@Autowired
+	NfInstancesRepository nfRepository;
+	
+	@Autowired
+	NfUpgradeServiceImpl nfUpgradeServiceImpl;
+	
+	@Autowired
+	private ValidationHelper validationHelper;
+	
+	public NfUpgradeServiceImpl getNfUpgradeServiceImpl() {
+		return nfUpgradeServiceImpl;
+	}
+
+	public void setNfUpgradeServiceImpl(NfUpgradeServiceImpl nfUpgradeServiceImpl) {
+		this.nfUpgradeServiceImpl = nfUpgradeServiceImpl;
+	}
+
+	@Autowired
+	private NrfConfigurations nrfConfig;
+	
+	@Autowired
+	private NrfMetrics nrfMetrics;
+	
+	@Autowired
+	private CommonNrfMetrics commonNrfMetrics;
+	
+	@Autowired
+	private PrivateKeyManager privateKeyManager;
+	private NrfSystemOptions nrfSystemOptions;
+	private NrfEngSystemOptions nrfEngSystemOptions;
+	private Object toGenerateToken;
+	private static String NF_INSTANCES ="NfInstances";
+	private static String NRF_SYSTEMOPTIONS="NrfSystemOptions";
+	private static String FIND="find";
+	private String serviceOperation="NfAccessToken";
+	private static String version = "v1";
+	
+	@Autowired
+	private NrfForwardingService nrfForwardingSvc;
+	
+	public CommonNrfMetrics getCommonNrfMetrics() {
+		return commonNrfMetrics;
+	}
+
+	public void setCommonNrfMetrics(CommonNrfMetrics commonNrfMetrics) {
+		this.commonNrfMetrics = commonNrfMetrics;
+	}
+	
+	@Autowired
+	public void setNrfConfig(NrfConfigurations config) {
+		
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		if (config == null || config.getAccessTokenSvc() == null) {
+			
+			String errMsg = "Bad NRF configuration. Missing 'nrf.global-config' properties.";
+			
+			logMsg.clear();
+			logMsg.put("logMsg", errMsg);
+			logger.error(logMsg.toString());
+			
+			throw new NrfConfigException(errMsg);
+		}
+		
+		this.nrfConfig = config;
+		
+		if (nrfConfig.getGlobalConfig() == null) {
+			String errMsg = "Bad NRF configuration. Missing 'nrf.access-token-svc.nrfInstanceId' property.";
+			
+			logMsg.clear();
+			logMsg.put("logMsg", errMsg);
+			logger.error(logMsg.toString());
+			
+			throw new NrfConfigException(errMsg);
+		}
+
+		if (nrfConfig.getGlobalConfig().getNrfInstanceId() == null) {
+			String errMsg = "Bad NRF configuration. Missing 'nrf.access-token-svc.nrfInstanceId' property.";
+			
+			logMsg.clear();
+			logMsg.put("logMsg", errMsg);
+			logger.error(logMsg.toString());
+			
+			throw new NrfConfigException(errMsg);
+		}
+	}
+	
+	public PrivateKeyManager getPrivateKeyManager() {
+		return privateKeyManager;
+	}
+	public void setPrivateKeyManager(PrivateKeyManager privateKeyManager) {
+		this.privateKeyManager = privateKeyManager;
+	}
+   
+	
+	public FeatureStatus  accessTokenForwardingStatus()
+	{	
+		ForwardingSystemOptions forwardingSystemOptions = nrfSystemOptions.getForwardingSystemOptions();
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		FeatureStatus forwardingStatus = forwardingSystemOptions.getAccessTokenForwardingStatus();
+		logMsg.clear();
+		logMsg.put("Access Token forwardingStatus :", forwardingStatus);
+		logger.info(logMsg.toString());
+		return forwardingStatus;		
+	}
+	
+	@Override
+	public Object generateAccessToken(AccessTokenReq body, ForwardingData forwardingData) {
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		logMsg.clear();
+		logMsg.put("logMsg", "Entering generateAccessToken");
+		logMsg.put("AccessTokenReq",body);
+		logMsg.put("forwardingData",forwardingData);
+		logger.info(logMsg.toString());
+		nrfForwardingSvc.setNrfSystemAndEngineeringOptions(nrfSystemOptions, nrfEngSystemOptions);
+		boolean forwardingCandidate = false;
+
+		List<NfInstance> nfInstances = null;
+		if (nrfSystemOptions.getNfAuthenticationSystemOptions().getAccessTokenAuthenticationStatus().equals(FeatureStatus.ENABLED)) {
+			String ocXfccDnsHeaderValue = validationHelper.parseOcXfccDnsHeader();
+			if (ocXfccDnsHeaderValue==null) {
+				ProblemDetails problemDetails = ProblemDetails.forInternalError();
+				problemDetails.setCause("NF Authentication for access token request failed as OC-XFCC-DNS header not present");
+				logMsg.clear();
+				logMsg.put("logMsg","NF Authentication for access token request failed as OC-XFCC-DNS header not present");
+				logMsg.put("ocXfccDnsHeaderValue", ocXfccDnsHeaderValue);
+				logMsg.put("problemDetails", problemDetails);
+				logger.error(logMsg.toString());
+				return problemDetails;
+			}
+			logMsg.clear();
+			logMsg.put("logMsg", "Attempting to perform NF Authentication using FQDN");
+			logMsg.put("accessTokenAuthenticationStatus", FeatureStatus.ENABLED);
+			logger.info(logMsg.toString());	
+			nfInstances = this.fetchNfInstances(body);
+			NfInstance requesterNfInstance = null;
+			for(NfInstance nfInstance: nfInstances) {
+				if(nfInstance.getNfInstanceId().equals(body.getNfInstanceId())) {
+					requesterNfInstance = nfInstance;
+				}
+			}
+			GenericResponse genericResponse = validationHelper.performNfAuthenticationBasedOnNfInstance(requesterNfInstance);
+			if(genericResponse.getResponse() instanceof ProblemDetails) {
+				//Return ProblemDetails
+				logMsg.clear();
+				logMsg.put("logMsg", "NF Authentication failed for service operation NFAccessToken");
+				logMsg.put("ProblemDetails", genericResponse.getResponse());
+				logMsg.put("TargetNfType", body.getTargetNfType());
+				logMsg.put("RequesterNfType", body.getNfType());
+				logMsg.put("TargetNfInstanceId", body.getTargetNfInstanceId());
+				logMsg.put("ClientNfInstanceId", body.getNfInstanceId());
+				logger.error(logMsg.toString());
+				return genericResponse;
+			}
+			logMsg.clear();
+			logMsg.put("logMsg", "NF Authentication using FQDN was successful");
+			logger.info(logMsg.toString());		
+		}
+		
+
+		String authorizedScope = null;
+	
+		Object scopeResponse = validateScope(body);
+		if (scopeResponse instanceof AccessTokenErr) {
+			return scopeResponse;
+		}	
+
+		GenericResponse retVal = null;
+		String targetNfType = null;
+		if(scopeResponse ==null) {
+			targetNfType = "UNKNOWN";
+		}else{
+			targetNfType = (String)scopeResponse;
+		}
+		String issuer = nrfConfig.getAccessTokenSvc().getNrfInstanceId();
+		AccessTokenClaims accessTokenClaims = null;
+
+		String oauthLogicalOperator = nrfSystemOptions.getNfAccessTokenSystemOptions().
+				getLogicalOperatorForScope().toString();
+
+		logMsg.clear();
+		logMsg.put("OAuth Logical Operator For Scope", oauthLogicalOperator);
+		logger.info(logMsg.toString());
+
+		if (Arrays.asList(body.getScope().split(" ")).contains("nnrf-nfm") || Arrays.asList(body.getScope().split(" ")).contains("nnrf-disc")) {
+			logMsg.clear();
+			logMsg.put("logMsg", "Scope contains NRF's services");
+			logMsg.put("scope", body.getScope());
+			logger.info(logMsg.toString());
+			
+			retVal = generateAccessTokenNRFCheck(body);
+			Object response = retVal.getResponse();
+			forwardingCandidate = (retVal.isForwardingCandidate() & 
+					(accessTokenForwardingStatus().equals(FeatureStatus.ENABLED)) & forwardingData.isForwardingPossible());
+			if ((response instanceof AccessTokenErr) ) {
+				if(!forwardingCandidate)
+				{
+					logMsg.clear();
+					logMsg.put("logMsg", "Couldn't generate AccessTokenClaims");
+					logMsg.put("AccessTokenErr", (AccessTokenErr)response);
+					logger.error(logMsg.toString());
+					return response;
+				}
+			}else if(response instanceof ProblemDetails) {
+				logMsg.clear();
+				logMsg.put("logMsg", "Couldn't generate AccessTokenClaims");
+				logMsg.put("ProblemDetails", (ProblemDetails)response);
+				logger.error(logMsg.toString());
+				return retVal;
+			}
+			else
+			{
+				accessTokenClaims = (AccessTokenClaims) response;
+				logMsg.clear();
+				logMsg.put("logMsg", "AccessTokenClaims generated Successfully");
+				logMsg.put("accessTokenClaims", accessTokenClaims);
+				logger.info(logMsg.toString());
+			}
+		}
+		else if(body.getNfInstanceId().equals(nrfConfig.getGlobalConfig().getNrfInstanceId()) && body.getNfType().equals("NRF")){
+			accessTokenClaims = new AccessTokenClaims();
+			accessTokenClaims.setAud("UDR");
+			accessTokenClaims.setScope("nudr-dr");
+			logMsg.clear();
+			logMsg.put("logMsg", "AccessTokenClaims generated Successfully for UDR's nudr-dr service");
+			logMsg.put("accessTokenClaims", accessTokenClaims);
+			logger.info(logMsg.toString());
+		}
+		else {
+			AccessTokenErr accessTokenErr = new AccessTokenErr();
+			if(nfInstances == null) {
+				nfInstances = this.fetchNfInstances(body);
+			}
+			NfInstance requesterNfInstance = null,targetNfInstance = null;
+			for(NfInstance nfInstance: nfInstances) {
+				if(nfInstance.getNfInstanceId().equals(body.getNfInstanceId())) {
+					requesterNfInstance = nfInstance;
+				} else {
+					targetNfInstance = nfInstance;
+				}
+			}
+			
+			if(nrfSystemOptions.getNfAccessTokenSystemOptions().getAuthFeatureConfig().getAuthFeatureStatus().equals(FeatureStatus.ENABLED) 
+					|| nrfSystemOptions.getNfAccessTokenSystemOptions().getAuthorizeRequesterNf().equals(AuthorizeRequesterNf.ENABLED)) {
+				//If Auth feature status is enabled or AuthorizeRequesterNf is enabled, Requester NF should be REGISTERED
+				if(requesterNfInstance == null || !requesterNfInstance.getNfStatus().equals(NFStatus.REGISTERED)) {
+					logMsg.clear();
+					logMsg.put("logMsg", "Consumer NF with " + body.getNfInstanceId() +
+							" is not registered in NRF.");
+					logger.error(logMsg.toString());
+					
+					nrfMetrics.pegAccessTokenRejected(body, "ClientNotAuthorized", HttpStatus.BAD_REQUEST);
+
+					accessTokenErr.setError("unauthorized_client");
+					accessTokenErr.setError_description("oAuth2 client is not registered with OCNRF");
+					return accessTokenErr;
+				}else {
+					AccessTokenErr accErr = authorizeRequesterNf(body, requesterNfInstance);
+					if(accErr != null) {
+						return accErr;
+					}
+				}
+				
+			}
+
+			
+			if(targetNfInstance!=null) {
+				targetNfType = targetNfInstance.getNfType();
+			}
+			
+			Set<String> servicesRequested = new HashSet<String>();
+			Arrays.asList(body.getScope().split(" ")).stream().forEach(e -> servicesRequested.add(e));
+			if(nrfSystemOptions.getNfAccessTokenSystemOptions().getAuthFeatureConfig().getAuthFeatureStatus().equals(FeatureStatus.ENABLED)) {
+				authorizedScope = authorizeNf(servicesRequested, requesterNfInstance.getNfType(), targetNfType);
+				if(authorizedScope == null) {
+					//The authorization failed
+					ErrorInfo errorInfo = null;
+					for(ErrorInfo errInfo : nrfSystemOptions.getNfAccessTokenSystemOptions().getAuthFeatureConfig().getAuthErrorResponses()) {
+						if(errInfo.getErrorCondition().equals(ErrorCondition.RequesterNf_Unauthorized)) {
+							errorInfo = errInfo;
+
+						}
+					}
+					ProblemDetails problemDetails = new ProblemDetails(errorInfo.getErrorCode());
+					problemDetails.setCause(errorInfo.getErrorResponse());
+					problemDetails.setDetail(String.format("%s is not authorized to access %s services %s", requesterNfInstance.getNfType(),targetNfType,body.getScope()));
+					problemDetails.setTitle(errorInfo.getErrorResponse());
+					GenericResponse genericResponse = new GenericResponse();
+					genericResponse.setResponse(problemDetails);
+					if(errorInfo.getRedirectUrl()!=null && !errorInfo.getRedirectUrl().isEmpty()) {
+						genericResponse.addHeader(HttpHeaders.LOCATION,errorInfo.getRedirectUrl());
+					}
+					if(errorInfo.getRetryAfter()!=null) {
+						genericResponse.addHeader(HttpHeaders.RETRY_AFTER,String.valueOf(errorInfo.getRetryAfter().toSeconds()));
+					}
+					return genericResponse;
+				}
+			}
+			else {
+				//If authorization disabled, all services are authorized can be accessed
+				authorizedScope = body.getScope();
+			}
+			
+			Boolean isNfType = false;
+			//To determine if the request belongs to NfType or a particular NfInstance
+			if(body.getTargetNfInstanceId()!=null && !body.getTargetNfInstanceId().isEmpty()) {
+				isNfType = false;
+			} else if(body.getTargetNfType()!=null && !body.getTargetNfType().isEmpty()) {
+				isNfType = true;
+			} else if(nrfSystemOptions.getNfAccessTokenSystemOptions().getAudienceType().equals(AudienceType.NF_TYPE)) {
+				isNfType = true;
+			}
+			
+			if(isNfType) {
+				if(targetNfType.equals("UNKNOWN")) {
+					accessTokenErr.setError("invalid_request");
+					accessTokenErr.setError_description("Unable to deduce the targetNfType from AccessToken request");
+					return accessTokenErr;
+				}
+				//If request is of NfType, Accesstoken can be generated without further validations
+				accessTokenClaims = new AccessTokenClaims();
+				accessTokenClaims.setAud(targetNfType);
+				accessTokenClaims.setScope(authorizedScope);
+				if(Arrays.asList(accessTokenClaims.getScope().split(" ")).containsAll(Arrays.asList(body.getScope().split(" "))) == false){
+					accessTokenClaims.setScopeChanged(true);
+				}
+				if(body.getTargetSnssaiList() != null)
+				    accessTokenClaims.setProducerSnssaiList(body.getTargetSnssaiList());
+				if(body.getTargetNsiList() != null)
+				    accessTokenClaims.setProducerNsiList(body.getTargetNsiList());
+				if(body.getRequesterPlmn() != null)
+					accessTokenClaims.setConsumerPlmnId(body.getRequesterPlmn());
+				if(body.getTargetPlmn() != null)
+					accessTokenClaims.setProducerPlmnId(body.getTargetPlmn());
+				
+				logMsg.clear();
+				logMsg.put("logMsg", String.format("AccessTokenClaims generated Successfully for %s service %s",targetNfType,authorizedScope));
+				logMsg.put("accessTokenClaims", accessTokenClaims);
+				logger.info(logMsg.toString());
+			} else {
+				retVal = this.validateAccessTokenReq(body, targetNfType, requesterNfInstance, targetNfInstance);
+				Object returnedObj = retVal.getResponse();
+				forwardingCandidate = (retVal.isForwardingCandidate()
+						& (accessTokenForwardingStatus().equals(FeatureStatus.ENABLED))
+						& forwardingData.isForwardingPossible());
+
+				if (returnedObj instanceof AccessTokenErr) {
+					if (!forwardingCandidate) {
+						logMsg.clear();
+						logMsg.put("logMsg", "validation of AccessTokenReq failed");
+						logMsg.put("AccessTokenErr", (AccessTokenErr) returnedObj);
+						logger.error(logMsg.toString());
+						return returnedObj;
+					}
+				} else if (returnedObj instanceof ProblemDetails) {
+					logMsg.clear();
+					logMsg.put("logMsg", "validation of AccessTokenReq failed");
+					logMsg.put("problemDetails", (ProblemDetails) returnedObj);
+					logger.error(logMsg.toString());
+					return returnedObj;
+				} else {
+					nfInstances = null;
+					String requesterNfType = null;
+					if (returnedObj != null) {
+						nfInstances = new ArrayList<NfInstance>();
+						nfInstances.add((NfInstance) returnedObj);
+					}
+					if(requesterNfInstance != null) {
+						requesterNfType = requesterNfInstance.getNfType();
+					} else {
+						requesterNfType = body.getNfType();
+					}
+					if (oauthLogicalOperator.equals("OR")) {
+						retVal = determineScopeAndAudienceForOR(nfInstances, requesterNfType, targetNfType,
+								body,authorizedScope);
+						Object retObj = retVal.getResponse();
+						forwardingCandidate = (retVal.isForwardingCandidate()
+								& (accessTokenForwardingStatus().equals(FeatureStatus.ENABLED))
+								& forwardingData.isForwardingPossible());
+						if (retObj instanceof AccessTokenErr) {
+							if (!forwardingCandidate) {
+								logMsg.clear();
+								logMsg.put("logMsg", "Couldn't generate AccessTokenClaims");
+								logMsg.put("AccessTokenErr", (AccessTokenErr) retObj);
+								logger.error(logMsg.toString());
+								return retObj;
+							}
+						} else {
+							accessTokenClaims = (AccessTokenClaims) retObj;
+							logMsg.clear();
+							logMsg.put("logMsg", "AccessTokenClaims generated Successfully");
+							logMsg.put("accessTokenClaims", accessTokenClaims);
+							logger.info(logMsg.toString());
+						}
+					} else {
+						retVal = determineScopeAndAudienceForAND(nfInstances, requesterNfType, targetNfType,
+								body,authorizedScope);
+						Object retObj = retVal.getResponse();
+						forwardingCandidate = (retVal.isForwardingCandidate()
+								& (accessTokenForwardingStatus().equals(FeatureStatus.ENABLED))
+								& forwardingData.isForwardingPossible());
+						if (retObj instanceof AccessTokenErr) {
+							if (!forwardingCandidate) {
+								logMsg.clear();
+								logMsg.put("logMsg", "Couldn't generate AccessTokenClaims");
+								logMsg.put("AccessTokenErr", (AccessTokenErr) retObj);
+								logger.error(logMsg.toString());
+								return retObj;
+							}
+						} else {
+							accessTokenClaims = (AccessTokenClaims) retObj;
+							logMsg.clear();
+							logMsg.put("logMsg", "AccessTokenClaims generated Successfully");
+							logMsg.put("accessTokenClaims", accessTokenClaims);
+							logger.info(logMsg.toString());
+						}
+					}
+				}
+			}
+		}		
+		AccessTokenRsp response  = null;
+		if(forwardingCandidate == true)
+		{
+			logMsg.clear();
+			logMsg.put("logMsg", "Forwarding Access Token Request");
+			logger.info(logMsg.toString());
+			return  forwardRequest(body, forwardingData);
+		}
+		else
+		{
+			Integer expiryTime = (int) this.nrfSystemOptions.getNfAccessTokenSystemOptions().getOauthTokenExpiryTime().toSeconds();
+			String signingAlgorithm = this.nrfSystemOptions.getNfAccessTokenSystemOptions().getOauthTokenAlgorithm().toString();
+			PrivateKey privateKey = (signingAlgorithm.equals("ES256"))?privateKeyManager.getEcPrivateKey()
+					:privateKeyManager.getRsaPrivateKey();
+
+			// If we couldn't fetch the private key
+			if(privateKey == null) {
+
+				String errMsg = "Could not fetch private key for signing";
+				logMsg.clear();
+				logMsg.put("logMsg", errMsg);
+				logger.error(logMsg.toString());
+
+				ProblemDetails problemDetails = ProblemDetails.forInternalError();
+				problemDetails.setCause(errMsg);
+				throw new NrfException(problemDetails);
+			}
+
+			logMsg.clear();
+			logMsg.put("logMsg", "Generating token");
+			logMsg.put("iss", issuer);
+			logMsg.put("sub", body.getNfInstanceId());
+			if(accessTokenClaims != null) {
+				logMsg.put("aud", accessTokenClaims.getAud());
+				logMsg.put("scope", accessTokenClaims.getScope());
+			}else {
+				logMsg.put("accessTokenClaims", "is NULL");
+			}
+			logMsg.put("expiryTime", expiryTime);
+			logMsg.put("producerNsiList", accessTokenClaims.getProducerNsiList());
+			logMsg.put("producerSnssaiList", accessTokenClaims.getProducerSnssaiList());
+			logMsg.put("consumerPlmnId", accessTokenClaims.getConsumerPlmnId());
+			logMsg.put("producerPlmnId", accessTokenClaims.getProducerPlmnId());
+			logger.info(logMsg.toString());
+
+			// Generate Access Token
+			String accessToken = Jwts.builder()
+					.setHeaderParam("typ", "JWT")
+					.setIssuer(issuer)
+					.setSubject(body.getNfInstanceId())
+					.claim("aud", accessTokenClaims.getAud())
+					.claim("scope", accessTokenClaims.getScope())
+					.claim("producerNsiList", accessTokenClaims.getProducerNsiList())
+					.claim("producerSnssaiList", accessTokenClaims.getProducerSnssaiList())
+					.claim("consumerPlmnId", accessTokenClaims.getConsumerPlmnId())
+					.claim("producerPlmnId", accessTokenClaims.getProducerPlmnId())
+					.setExpiration(new Date(System.currentTimeMillis() + expiryTime * 1000))
+					// Sign with privateKey
+					.signWith(privateKey,
+							SignatureAlgorithm.forName(signingAlgorithm)).compact();
+
+			response = new AccessTokenRsp();
+			response.setAccess_token(accessToken);
+			response.setExpires_in(expiryTime);
+			if(accessTokenClaims.getScopeChanged()) {
+				logMsg.clear();
+				logMsg.put("logMsg", "Scope Changed");
+				logger.info(logMsg.toString());
+				response.setScope(accessTokenClaims.getScope());
+			}
+			response.setToken_type("Bearer");
+			logMsg.clear();
+			logMsg.put("logMsg", "Successfully generated token");
+			logMsg.put("token",accessToken);
+			logger.info(logMsg.toString());
+		}
+		return response;
+	}
+	
+
+	public Object forwardRequest(AccessTokenReq body, ForwardingData forwardingData)
+	{
+		Object retVal = null;
+		HashMap<String, Object> logMsg = new LinkedHashMap<String, Object>();		
+		logMsg.clear();
+		logMsg.put("logMsg", "Entering forwardRequest function");
+		logMsg.put("body", body);
+		logger.info(logMsg.toString());
+
+		NfResponseInfo responseInfo = nrfForwardingSvc.forwardAccessTokenRequest(body, forwardingData);
+		Object  frwdingResult = responseInfo.getResponse();	
+		boolean responseFromNrf = (boolean)responseInfo.getResponseFromNf();	
+		logMsg.clear();
+		logMsg.put("frwdingResult", frwdingResult);
+		logger.info(logMsg.toString());
+		if((frwdingResult instanceof ProblemDetails))
+		{
+			retVal = processFailureNrfResponse(frwdingResult,responseFromNrf,body);
+		}	
+		else
+		{
+			retVal = frwdingResult;
+			if(retVal instanceof AccessTokenErr)
+			{
+				nrfMetrics.pegAccessTokenForwardingResponses(body, 
+						HttpStatus.BAD_REQUEST.value(), "NotApplicable");
+			}
+			else
+			{
+				nrfMetrics.pegAccessTokenForwardingResponses(body, 
+						HttpStatus.OK.value(), "NotApplicable");
+			}
+		}
+		logMsg.clear();
+		logMsg.put("logMsg", "Exit from forwardRequest");
+		logMsg.put("retVal", retVal);
+		logger.info(logMsg.toString());
+		return retVal;
+	}
+
+	public Object processFailureNrfResponse(Object  frwdingResult,
+			boolean responseFromNrf,AccessTokenReq accessTokenReq) {
+		ErrorCondition errorCondition = null;
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		Object nrfResponse = null;
+		logMsg.clear();	
+		logMsg.put("logMsg", "Entering processFailureNrfResponse function ");
+		logMsg.put("frwdingResult",frwdingResult);	
+		logMsg.put("responseFromNrf",responseFromNrf);
+		logger.info(logMsg.toString());	
+		
+		ProblemDetails problemDetails = (ProblemDetails) frwdingResult;
+		if(responseFromNrf == false) {
+			if(problemDetails.getStatus() == HttpStatus.SERVICE_UNAVAILABLE.value()){
+				errorCondition = ErrorCondition.NRF_Not_Reachable;
+				List<ErrorInfo> errorInfoList = this.nrfSystemOptions
+						.getErrorResponses().getNrfForwardingErrorResponses();
+				nrfResponse = getFailureResponseByErrorCondition(errorCondition,errorInfoList);
+				if(nrfResponse instanceof ProblemDetails )
+				{
+					ProblemDetails prob = (ProblemDetails)nrfResponse;
+					nrfMetrics.pegAccessTokenForwardingResponses(accessTokenReq, 
+							prob.getStatus(), "NRFCommunicationFailure");
+				}
+				else
+				{
+					nrfMetrics.pegAccessTokenForwardingResponses(accessTokenReq, 
+							HttpStatus.OK.value(), "NRFCommunicationFailure");
+				}
+				
+				
+			}else {
+				errorCondition = ErrorCondition.Egress_Gateway_Error;
+				nrfResponse = searchByErrorConditionInNrfEngSystemOptions(errorCondition,
+						(ProblemDetails)frwdingResult);
+				if(nrfResponse instanceof ProblemDetails )
+				{
+					ProblemDetails prob = (ProblemDetails)nrfResponse;
+					nrfMetrics.pegAccessTokenForwardingResponses(accessTokenReq, 
+							prob.getStatus(), "InternalError");
+				}
+				else
+				{
+					nrfMetrics.pegAccessTokenForwardingResponses(accessTokenReq, 
+							HttpStatus.OK.value(), "NRFCommunicationFailure");
+				}
+			}			
+		}
+		else
+		{
+			nrfResponse = frwdingResult;
+			nrfMetrics.pegAccessTokenForwardingResponses(accessTokenReq, 
+					problemDetails.getStatus(), "ErrorFromNRF");
+		}
+	
+		logMsg.clear();	
+		logMsg.put("logMsg", "Exit from processFailureNrfResponse function ");
+		logMsg.put("processFailureNrfResponse",nrfResponse);	
+		logger.info(logMsg.toString());	
+		return nrfResponse;
+	}
+
+	public Object getFailureResponseByErrorCondition(ErrorCondition errCondition ) 
+	{
+		List<ErrorInfo> errorInfoList = this.nrfSystemOptions
+				.getErrorResponses().getNrfForwardingErrorResponses();		
+		ProblemDetails prob = null;		
+		Object retVal = null;
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		logMsg.clear();
+		logMsg.put("logMsg", "Entering getFailureResponseByErrorCondition function");
+		logMsg.put("errCondition", errCondition);
+		logMsg.put("errorInfoList", errorInfoList);
+		logger.info(logMsg.toString());
+		for(ErrorInfo errorInfo : errorInfoList)
+		{
+			if(errorInfo.getErrorCondition().equals(errCondition))
+			{
+				logMsg.clear();
+				logMsg.put("logMsg","errorInfo selected for errCondition : "+errCondition );
+				logMsg.put("errorInfo.detectionResultCode", errorInfo.getErrorDetectionResultCode());
+				logMsg.put("errorInfo.errorCode", errorInfo.getErrorCode());
+				logMsg.put("errorInfo.errorResponse", errorInfo.getErrorResponse());
+				logger.info(logMsg.toString());
+				if( HttpStatus.valueOf(errorInfo.getErrorCode()).is2xxSuccessful())
+				{
+					/*case where 2xx is configured as errorCode*/
+					retVal = new ArrayList<NfProfile>();
+				}
+				else
+				{
+					prob = new ProblemDetails();
+					prob.setStatus((int)errorInfo.getErrorCode());
+					prob.setDetail(errorInfo.getErrorResponse());
+				    prob.setTitle(errorInfo.getErrorResponse());
+					prob.setCause(errorInfo.getErrorResponse());
+					retVal = prob ;
+				}
+				break;
+			}
+		}
+		logMsg.clear();
+		logMsg.put("logMsg", "Exit from getFailureResponseByErrorCondition function");
+		logger.info(logMsg.toString());
+		return retVal;		
+	}
+	
+	public Object getFailureResponseByErrorCondition(ErrorCondition errCondition, List<ErrorInfo> errorInfoList) 
+	{		
+		ProblemDetails prob = null;		
+		Object retVal = null;
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		logMsg.clear();
+		logMsg.put("logMsg", "Entering getFailureResponseByErrorCondition function");
+		logMsg.put("errCondition", errCondition);
+		logMsg.put("errorInfoList", errorInfoList);
+		logger.info(logMsg.toString());
+		for(ErrorInfo errorInfo : errorInfoList)
+		{
+			if(errorInfo.getErrorCondition().equals(errCondition))
+			{
+				logMsg.clear();
+				logMsg.put("logMsg","errorInfo selected for errCondition : "+errCondition );
+				logMsg.put("errorInfo.detectionResultCode", errorInfo.getErrorDetectionResultCode());
+				logMsg.put("errorInfo.errorCode", errorInfo.getErrorCode());
+				logMsg.put("errorInfo.errorResponse", errorInfo.getErrorResponse());
+				logger.info(logMsg.toString());
+				if( HttpStatus.valueOf(errorInfo.getErrorCode()).is2xxSuccessful())
+				{
+					/*case where 2xx is configured as errorCode*/
+					retVal = new ArrayList<NfProfile>();
+				}
+				else
+				{
+					prob = new ProblemDetails();
+					prob.setStatus((int)errorInfo.getErrorCode());
+					prob.setDetail(errorInfo.getErrorResponse());
+				    prob.setTitle(errorInfo.getErrorResponse());
+					prob.setCause(errorInfo.getErrorResponse());
+					retVal = prob ;
+				}
+				break;
+			}
+		}
+		logMsg.clear();
+		logMsg.put("logMsg", "Exit from getFailureResponseByErrorCondition function");
+		logMsg.put("retVal", retVal);
+		logger.info(logMsg.toString());
+		return retVal;		
+	}
+	
+	public Object searchByErrorConditionInNrfEngSystemOptions(ErrorCondition errCondition,
+			ProblemDetails receivedProb) 
+	{
+		List<ErrorInfo> engErrorInfoList = this.nrfEngSystemOptions.
+				getErrorResponses().getGeneralErrorResponses();	
+		ProblemDetails prob = null;		
+		Object retVal = null;
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		logMsg.clear();
+		logMsg.put("logMsg", "Entering searchByErrorConditionInNrfEngSystemOptions function");
+		logMsg.put("errCondition", errCondition);
+		logMsg.put("receivedProb", receivedProb);
+		logMsg.put("engErrorInfoList", engErrorInfoList);
+		logger.info(logMsg.toString());
+		for(ErrorInfo errorInfo : engErrorInfoList)
+		{
+
+
+			if(errorInfo.getErrorCondition().equals(errCondition))
+			{
+				logMsg.clear();
+				logMsg.put("logMsg","errorInfo selected for errCondition : "+errCondition );
+				logMsg.put("errorInfo.detectionResultCode", errorInfo.getErrorDetectionResultCode());
+				logMsg.put("errorInfo.errorCode", errorInfo.getErrorCode());
+				logMsg.put("errorInfo.useErrorCodeReturned", errorInfo.getUseErrorCodeReturned());
+				logMsg.put("errorInfo.errorResponse", errorInfo.getErrorResponse());
+				logger.info(logMsg.toString());
+
+				if(errorInfo.getUseErrorCodeReturned() == false)
+				{
+					if( HttpStatus.valueOf(errorInfo.getErrorCode()).is2xxSuccessful())
+					{
+						/*case where 2xx is configured as errorCode*/
+						retVal = new ArrayList<NfProfile>();
+					}
+					else
+					{
+						prob = new ProblemDetails();
+						prob.setStatus((int)errorInfo.getErrorCode());
+						prob.setDetail(errorInfo.getErrorResponse());
+						prob.setTitle(errorInfo.getErrorResponse());
+						prob.setCause(errorInfo.getErrorResponse());
+						if(receivedProb.getCause()!=null) {
+							prob.setCause(errorInfo.getErrorResponse().concat("."+receivedProb.getCause()));
+						}
+						if(receivedProb.getTitle()!=null) {
+							prob.setTitle(errorInfo.getErrorResponse().concat("."+receivedProb.getTitle()));
+						}
+						if(receivedProb.getDetail()!=null) {
+							prob.setDetail(errorInfo.getErrorResponse().concat("."+receivedProb.getDetail()));
+						}
+						retVal = prob ;
+					}
+				}
+				else
+				{
+					retVal = receivedProb;
+				}
+				break;
+
+			}
+
+		}
+		logMsg.clear();
+		logMsg.put("logMsg", "Exit from searchByErrorConditionInNrfEngSystemOptions function");
+		logMsg.put("retVal",retVal);
+		logger.info(logMsg.toString());
+		return retVal;		
+	}
+
+	public void setNrfConfigurations(NrfConfigurations nrfConfigurations) {
+		this.nrfConfig = nrfConfigurations;
+	}
+	
+	public void setNrfMetrics(NrfMetrics nrfMetrics) {
+		this.nrfMetrics = nrfMetrics;
+	}
+
+	/*@Override
+	public boolean getNrfSystemOptionsForReady() {
+		boolean isReady = true;
+
+		try {
+			// Firing a dummy mysql request just to check the db connectivity
+			nrfSystemOptionsRepository.getOcnrfSystemOptions(this.nrfConfig.getGlobalConfig().getNrfInstanceId());
+		}
+		catch (Exception e) {
+			isReady = false;
+		}
+		return isReady;
+	}*/
+	
+	public List<NfInstance> fetchNfInstances(AccessTokenReq body){
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		logMsg.clear();
+		logMsg.put("logMsg", "fetchNfInstances() invoked");
+		logger.info(logMsg.toString());
+		List<NfInstance> nfInstanceList = null;
+		List<NfInstance> requesterAndTargetNfInstances = new ArrayList<NfInstance>();
+		try {
+			nfInstanceList = nfRepository.fetchRequesterAndTargetNfInstances(body.getTargetNfInstanceId(),
+					body.getNfInstanceId());
+		}
+		catch (Exception e) {
+			commonNrfMetrics.pegNrfDbMetricsFailuresTotal(RequestMethod.GET, FIND, serviceOperation,e,NF_INSTANCES);
+			logMsg.clear();
+			logMsg.put("logMsg", "Could not fetch requesterAndTargetNfInstances due to an unexpected error.");
+			logMsg.put("Message", e.getMessage());
+			logger.error(logMsg.toString());
+
+			ProblemDetails prob = ProblemDetails.forInternalError();
+			prob.setCause("Could not fetch requesterAndTargetNfInstances due to an unexpected error.");
+			throw new NrfException(prob);
+		}
+		commonNrfMetrics.pegNrfDbMetricsSuccessTotal(RequestMethod.GET, FIND, serviceOperation,NF_INSTANCES);
+		if(nfInstanceList != null && !nfInstanceList.isEmpty()) {
+			// Get latest record.
+			Collections.sort(nfInstanceList,new NfInstanceSortComparator());
+			requesterAndTargetNfInstances = new ArrayList<NfInstance>();
+			for(NfInstance nf: nfInstanceList) {
+				if(!requesterAndTargetNfInstances.stream().anyMatch(pf -> pf.getNfInstanceId().equals(nf.getNfInstanceId()))) {
+					requesterAndTargetNfInstances.add(nf);
+				}
+			}
+			// if replication inactive, return only own records.
+			if(!ReplicationStatus.getReplicationStatus() && (requesterAndTargetNfInstances != null && !requesterAndTargetNfInstances.isEmpty())) {
+				List<NfInstance> ownNfInstances =  requesterAndTargetNfInstances.parallelStream().filter(nf -> nf.getRecordOwner().equals(this.nrfConfig.getGlobalConfig().getNrfInstanceId())).collect(Collectors.toList());
+				requesterAndTargetNfInstances = ownNfInstances;
+				logMsg.clear();
+				logMsg.put("logMsg", "Replication is inactive, returning own records only");
+				logger.info(logMsg.toString());
+			}
+		}
+		return requesterAndTargetNfInstances;
+	}
+	
+	public String authorizeNf(Set<String> requestedScope, String requesterNfType, String targetNfType) {
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		Boolean configurationPresent = false;
+		List<String> servicesPresent = null;
+		for (AuthConfig authConfig : nrfSystemOptions.getNfAccessTokenSystemOptions().getAuthFeatureConfig()
+				.getAuthConfig()) {
+			if (authConfig.getRequesterNfType().equals(requesterNfType)
+					&& authConfig.getTargetNfType().equals(targetNfType)) {
+				configurationPresent = true;
+				// Services present in the configuration is grabbed
+				servicesPresent = authConfig.getServiceNames();
+				break;
+			}
+		}
+		if (!configurationPresent) {
+			// If configuration not present, reject
+			logMsg.clear();
+			logMsg.put("logMsg", "Target NfType is not configured in AuthConfig");
+			logMsg.put("targetNfType", targetNfType);
+			logMsg.put("requesterNfType", requesterNfType);
+			logMsg.put("scopeRequested", requestedScope);
+			logger.error(logMsg.toString());
+			return null;
+		}
+
+		Set<String> servicesConfigured = new HashSet<String>(servicesPresent);
+		Set<String> intersectSet = new HashSet<String>(requestedScope);
+		if (!servicesConfigured.contains("*")) {
+			intersectSet.retainAll(servicesConfigured);
+			if (nrfSystemOptions.getNfAccessTokenSystemOptions().getLogicalOperatorForScope()
+					.equals(LogicalOperatorForScope.AND)) {
+				if (!intersectSet.equals(requestedScope)) {
+					// If logicalOperatorForScope is AND, all services requested should be
+					// configured
+					logMsg.clear();
+					logMsg.put("logMsg", "All the services in requested scope are not configured in AuthConfig");
+					logMsg.put("logicalOperatorForScope", "AND");
+					logMsg.put("targetNfType", targetNfType);
+					logMsg.put("requesterNfType", requesterNfType);
+					logMsg.put("servicesRequested", requestedScope);
+					logMsg.put("servicesConfigured", servicesConfigured);
+					logger.error(logMsg.toString());
+					return null;
+				}
+			} else if (intersectSet.isEmpty()) {
+				// If logicalOperatorForScope is OR, at least one service requested should be
+				// configured
+				logMsg.clear();
+				logMsg.put("logMsg", "None of the services in requested scope are configured in AuthConfig");
+				logMsg.put("logicalOperatorForScope", "OR");
+				logMsg.put("targetNfType", targetNfType);
+				logMsg.put("requesterNfType", requesterNfType);
+				logMsg.put("servicesRequested", requestedScope);
+				logMsg.put("servicesConfigured", servicesConfigured);
+				logger.error(logMsg.toString());
+				return null;
+			}
+		}
+		logMsg.clear();
+		logMsg.put("logMsg", "RequesterNfType is authorized to access the TargetNfType with requested scope");
+		logMsg.put("logicalOperatorForScope",
+				nrfSystemOptions.getNfAccessTokenSystemOptions().getLogicalOperatorForScope());
+		logMsg.put("targetNfType", targetNfType);
+		logMsg.put("requesterNfType", requesterNfType);
+		logMsg.put("servicesRequested", requestedScope);
+		logMsg.put("servicesConfigured", servicesConfigured);
+		logger.info(logMsg.toString());
+		return String.join(" ", intersectSet);
+	}
+	
+	public AccessTokenErr authorizeRequesterNf(AccessTokenReq body, NfInstance registeredProfile) {
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		logMsg.clear();
+		logMsg.put("logMsg", "authorizeRequesterNf() invoked");
+		logger.info(logMsg.toString());
+		AccessTokenErr accessTokenErr = new AccessTokenErr();
+		// Requester NfInstance Validation
+		// validate NfType
+		if (body.getNfType() != null && !(body.getNfType().equals(registeredProfile.getNfType()))) {
+			logMsg.clear();
+			logMsg.put("logMsg", "NFtype in Oauthreq is different from nftype present in NF profile registered in NRF");
+			logger.error(logMsg.toString());
+
+			nrfMetrics.pegAccessTokenRejected(body, "ConsumerNFTypeMismatch", HttpStatus.BAD_REQUEST);
+
+			accessTokenErr = new AccessTokenErr();
+			accessTokenErr.setError("unauthorized_client");
+			accessTokenErr.setError_description("NfType in oAuth request is invalid for the registered profile");
+			return accessTokenErr;
+		}
+
+		// validate requesterPlmn
+		if (body.getRequesterPlmn() != null) {
+
+			NfProfile nfProfile = null;
+			try {
+				String doc = nfUpgradeServiceImpl.findNfProfileWithVersion(version, registeredProfile);
+				nfProfile = objectMapper.readValue(doc, NfProfile.class);
+			} catch (Exception e) {
+				logMsg.clear();
+				logMsg.put("logMsg", e.getMessage());
+				logger.error(logMsg.toString());
+
+				ProblemDetails prob = ProblemDetails.forInternalError();
+				prob.setCause("Could not process the fetched NfProfiles due to an unexpected error.");
+				throw new NrfException(prob);
+			}
+
+			List<Plmn> plmnListFromNfProfile = nfProfile.getPlmnList();
+			if (plmnListFromNfProfile == null) {
+				plmnListFromNfProfile = nrfSystemOptions.getGeneralSystemOptions().getNrfPlmnList();
+			}
+			Plmn requesterPlmn = body.getRequesterPlmn();
+			if (!(plmnListFromNfProfile.contains(requesterPlmn))) {
+				logMsg.clear();
+				logMsg.put("logMsg", "requesterPlmn received in the oAuth request is invalid");
+				logger.error(logMsg.toString());
+
+				accessTokenErr = new AccessTokenErr();
+				accessTokenErr.setError("invalid_request");
+				accessTokenErr.setError_description(
+						"requesterPlmn in the oAuth request is invalid for the registered profile");
+				return accessTokenErr;
+			}
+		}
+		return null;
+	}
+	
+	public GenericResponse validateAccessTokenReq(AccessTokenReq body,String targetNfType,NfInstance registeredProfile,NfInstance targetProfile) {
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		GenericResponse retVal = new GenericResponse();
+		logMsg.clear();
+		logMsg.put("logMsg", "validateAccessTokenReq() invoked");
+		logger.info(logMsg.toString());
+		AccessTokenErr accessTokenErr = new AccessTokenErr();
+
+		// Target NfInstance Validation
+		if(body.getTargetNfInstanceId() != null) {
+
+			// Check if the target NfInstance is present in DB or not
+			if(targetProfile == null || !targetProfile.getNfStatus().equals(NFStatus.REGISTERED)) {
+				logMsg.clear();
+				logMsg.put("logMsg", "No NfInstance found with the requested targetNfInstanceId");
+				logger.error(logMsg.toString());
+				
+				nrfMetrics.pegAccessTokenRejected(body, "ProducerWithRequestedNfInstanceIdNotFound", HttpStatus.BAD_REQUEST);
+				
+				accessTokenErr.setError("invalid_request");
+				accessTokenErr.setError_description("No NfInstance found with the requested targetNfInstanceId");
+				retVal.setResponse(accessTokenErr);
+				retVal.setForwardingCandidate(true);
+				return retVal;
+			
+			}
+
+			// Validation of targetNfType if present in the request
+			if(body.getTargetNfType() !=null && !(targetProfile.getNfType().equals(body.getTargetNfType()))) {
+				logMsg.clear();
+				logMsg.put("logMsg", "Target NfType does not match with registered profile");
+				logger.error(logMsg.toString());
+				
+				nrfMetrics.pegAccessTokenRejected(body, "ProducerNFTypeMismatch", HttpStatus.BAD_REQUEST);
+
+				accessTokenErr.setError("invalid_request");
+				accessTokenErr.setError_description("TargetNfType in the oAuth request is invalid for the registered profile");
+				retVal.setResponse(accessTokenErr);
+				retVal.setForwardingCandidate(false);
+				return retVal;
+			}
+
+			// Validation of targetPlmn if present in the request
+			if (body.getTargetPlmn() != null) {
+                 
+				NfProfile targetNfProfile = null;
+				try {
+					String doc = nfUpgradeServiceImpl.findNfProfileWithVersion(version, registeredProfile);
+					targetNfProfile = objectMapper.readValue(doc, NfProfile.class);
+				}
+				catch (Exception e) {
+					logMsg.clear();
+					logMsg.put("logMsg", e.getMessage());
+					logger.error(logMsg.toString());
+
+					ProblemDetails prob = ProblemDetails.forInternalError();
+					prob.setCause("Could not process the fetched NfProfiles due to an unexpected error.");
+					throw new NrfException(prob);
+				}
+
+				List<Plmn> plmnListFromTargetNfInstance = targetNfProfile.getPlmnList();
+
+				if(plmnListFromTargetNfInstance == null) {
+					plmnListFromTargetNfInstance = nrfSystemOptions.getGeneralSystemOptions().getNrfPlmnList();
+				}
+
+				Plmn targetPlmn = body.getTargetPlmn();
+
+				if(!(plmnListFromTargetNfInstance.contains(targetPlmn))) {
+					accessTokenErr.setError("invalid_request");
+					accessTokenErr.setError_description("TargetPlmn in the oAuth request is invalid for the registered profile");
+					retVal.setResponse(accessTokenErr);
+					retVal.setForwardingCandidate(false);
+					return retVal;
+				}
+			}
+		}
+
+		logMsg.clear();
+		logMsg.put("logMsg", "Exiting validateAccessTokenReq()");
+		logMsg.put("response",targetProfile);
+		logMsg.put("forwardingCandidate", "false");
+		logger.info(logMsg.toString());
+		retVal.setResponse(targetProfile);
+		retVal.setForwardingCandidate(false);
+		return retVal;
+		
+	}
+	
+
+	public GenericResponse generateAccessTokenNRFCheck(AccessTokenReq body) {
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		GenericResponse retVal = new GenericResponse();
+		String authorizedScope = null;
+		logMsg.clear();
+		logMsg.put("logMsg", "generateAccessTokenNRFCheck invoked");
+		logger.info(logMsg.toString());
+        String scope = body.getScope();
+		List<String> audience = new ArrayList<String>();
+		toGenerateToken = false;
+		if (body.getTargetNfType()!=null) {
+			if (body.getTargetNfType().equals("NRF")) {
+				logMsg.clear();
+				logMsg.put("logMsg", "Successfully validated TargetNfType");
+				logger.info(logMsg.toString());
+				toGenerateToken = true;
+			}
+			else {
+				AccessTokenErr accessTokenErr = new AccessTokenErr();
+				accessTokenErr.setError("invalid_request");
+				accessTokenErr.setError_description("NF services in scope doesn't belong to targetNFtype");
+				nrfMetrics.pegAccessTokenRejected(body, "ProducerNFTypeMismatch", HttpStatus.BAD_REQUEST);
+				retVal.setResponse(accessTokenErr);
+				retVal.setForwardingCandidate(false);
+				return retVal;
+			}
+		}
+		if (body.getTargetNfInstanceId()!=null) {
+			if (body.getTargetNfInstanceId().equals(nrfConfig.getGlobalConfig().getNrfInstanceId())) {
+				logMsg.clear();
+				logMsg.put("logMsg", "Successfully validated TargetNfInstanceId");
+				logger.info(logMsg.toString());
+				toGenerateToken = true;
+			}
+			else {
+				AccessTokenErr accessTokenErr = new AccessTokenErr();
+				accessTokenErr.setError("invalid_request");
+				accessTokenErr.setError_description("NF services in scope doesn't belongs to the NF registered with the targetNFInstanceId");
+				nrfMetrics.pegAccessTokenRejected(body, "ProducerWithRequestedNfInstanceIdNotFound", HttpStatus.BAD_REQUEST);
+				retVal.setResponse(accessTokenErr);
+				retVal.setForwardingCandidate(true);
+				return retVal;					
+			}
+		}
+		if (body.getTargetPlmn()!=null) {
+			List<Plmn> nrfPlmnList = nrfSystemOptions.getGeneralSystemOptions().getNrfPlmnList();
+			String targetPlmnFromBody = body.getTargetPlmn().toString();
+			targetPlmnFromBody = "[" + targetPlmnFromBody + "]";
+			if (targetPlmnFromBody.equals(nrfPlmnList.toString())) {
+				logMsg.clear();
+				logMsg.put("logMsg", "Successfully validated TargetPlmn");
+				logger.info(logMsg.toString());
+			}
+			else {
+				AccessTokenErr accessTokenErr = new AccessTokenErr();
+				accessTokenErr.setError("invalid_request");
+				accessTokenErr.setError_description("targetPlmn in the oAuth request is invalid for NRF");
+				retVal.setResponse(accessTokenErr);
+				retVal.setForwardingCandidate(true);
+				return retVal;	
+			}
+		}
+		NfInstance requesterNfInstance = null;
+		//If Auth Feature status is enabled, we need to verify if the requesting NF is registered.
+		if(nrfSystemOptions.getNfAccessTokenSystemOptions().getAuthFeatureConfig().getAuthFeatureStatus().equals(FeatureStatus.ENABLED)) {
+			List<NfInstance> nfInstances = this.fetchNfInstances(body);
+			for(NfInstance nfInstance:nfInstances) {
+				if(nfInstance.getNfInstanceId().equals(body.getNfInstanceId())) {
+					requesterNfInstance = nfInstance;	
+				}
+			}
+		
+		if(requesterNfInstance == null || !requesterNfInstance.getNfStatus().equals(NFStatus.REGISTERED)) {
+			AccessTokenErr accessTokenErr = new AccessTokenErr();
+			accessTokenErr.setError("unauthorized_client");
+			accessTokenErr.setError_description("oAuth2 client is not registered with OCNRF");
+			retVal.setResponse(accessTokenErr);
+			retVal.setForwardingCandidate(false);
+			return retVal;
+		}
+		Set<String> scopeSet = new HashSet<String>(Arrays.asList(body.getScope().split(" ")));
+		String targetNfType = "NRF";
+		authorizedScope = authorizeNf(scopeSet, requesterNfInstance.getNfType(), targetNfType);
+		if(authorizedScope == null) {
+			//The authorization failed
+			ErrorInfo errorInfo = null;
+			for(ErrorInfo errInfo : nrfSystemOptions.getNfAccessTokenSystemOptions().getAuthFeatureConfig().getAuthErrorResponses()) {
+				if(errInfo.getErrorCondition().equals(ErrorCondition.RequesterNf_Unauthorized)) {
+					errorInfo = errInfo;
+				}
+			}
+			if(errorInfo == null) {
+				for(ErrorInfo errInfo : nrfEngSystemOptions.getErrorResponses().getGeneralErrorResponses()) {
+					if(errInfo.getErrorCondition().equals(ErrorCondition.RequesterNf_Unauthorized)) {
+						errorInfo = errInfo;
+					}
+				}
+			}
+			ProblemDetails problemDetails = new ProblemDetails(errorInfo.getErrorCode());
+			problemDetails.setCause(errorInfo.getErrorResponse());
+			problemDetails.setDetail(String.format("%s is not authorized to access %s services %s", requesterNfInstance.getNfType(),targetNfType,body.getScope()));
+			problemDetails.setTitle(errorInfo.getErrorResponse());
+			retVal.setResponse(problemDetails);
+			if(errorInfo.getRedirectUrl()!=null && !errorInfo.getRedirectUrl().isEmpty()) {
+				retVal.addHeader(HttpHeaders.LOCATION,errorInfo.getRedirectUrl());
+			}
+			if(errorInfo.getRetryAfter()!=null) {
+				retVal.addHeader(HttpHeaders.RETRY_AFTER,String.valueOf(errorInfo.getRetryAfter().toSeconds()));
+			}
+			return retVal;
+		}
+		}
+		else {
+			authorizedScope = body.getScope();
+		}
+		
+		//  Scope is having any non NRF service
+		int numberOfServices = Arrays.asList(authorizedScope.split(" ")).size();
+		if (Arrays.asList(authorizedScope.split(" ")).contains("nnrf-nfm") && Arrays.asList(authorizedScope.split(" ")).contains("nnrf-disc")){
+			if(numberOfServices>2) {
+				//Remove custom services
+				scope = "nnrf-nfm nnrf-disc";
+			}
+		}
+		else if (numberOfServices > 1) {
+			//Remove custom service
+			scope = (authorizedScope.contains("nnrf-nfm")) ? "nnrf-nfm" : "nnrf-disc";
+		}
+		//Only 1 service specified
+		else {
+			scope = authorizedScope;
+		}
+		AccessTokenClaims accessTokenClaims = new AccessTokenClaims();
+		accessTokenClaims.setScope(scope);
+		//Generate audience data
+		if (body.getTargetNfInstanceId() != null ) {
+			audience.add(0, nrfConfig.getGlobalConfig().getNrfInstanceId());
+			accessTokenClaims.setAud(audience);
+		}
+		else {
+			if (this.nrfSystemOptions.getNfAccessTokenSystemOptions().getAudienceType().equals(AudienceType.NF_TYPE)) {
+				accessTokenClaims.setAud("NRF");
+			}
+			else {
+				audience.add(0, nrfConfig.getGlobalConfig().getNrfInstanceId());
+				accessTokenClaims.setAud(audience);
+			}			
+		}
+		toGenerateToken = true;
+		if(Arrays.asList(accessTokenClaims.getScope().split(" ")).containsAll(Arrays.asList(body.getScope().split(" "))) == false){
+			accessTokenClaims.setScopeChanged(true);
+		}
+		logMsg.clear();
+		logMsg.put("logMsg", "Exiting generateAccessTokenNRFCheck()");
+		logMsg.put("response",accessTokenClaims);
+		logMsg.put("forwardingCandidate", "false");
+		logger.info(logMsg.toString());
+		retVal.setResponse(accessTokenClaims);
+		retVal.setForwardingCandidate(false);
+		return retVal;	
+		}
+	
+	private GenericResponse  determineScopeAndAudienceForOR(List<NfInstance> nfInstances,String requesterNfType, String targetNfType,
+											AccessTokenReq accessTokenReq,String authorizedScope) {
+		
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		GenericResponse retVal = new GenericResponse();
+		logMsg.clear();
+		logMsg.put("logMsg", "determineScopeAndAudienceForOR invoked");
+		logMsg.put("nfInstances", nfInstances);
+		logMsg.put("targetNfType", targetNfType);
+		logMsg.put("accessTokenReq", accessTokenReq);
+		logger.info(logMsg.toString());
+		
+		Boolean isTargetNfInstanceIdPresentInReqBody = true;
+		Plmn targetPlmn = accessTokenReq.getTargetPlmn();
+		String scope = accessTokenReq.getScope();
+		
+		if(nfInstances == null) {
+			List<NfInstance> nfInstanceList = null;		
+			nfInstances = new ArrayList<NfInstance>();
+			isTargetNfInstanceIdPresentInReqBody = false;
+			try {
+				nfInstanceList = nfRepository.filterProfiles(targetNfType);
+			}
+			catch(Exception e) {
+				commonNrfMetrics.pegNrfDbMetricsFailuresTotal(RequestMethod.GET, FIND, serviceOperation,e,NF_INSTANCES);
+				
+				logMsg.clear();
+				logMsg.put("logMsg", e.getMessage());
+				logger.error(logMsg.toString());
+				
+				ProblemDetails prob = ProblemDetails.forInternalError();
+				prob.setCause("Could not fetch NfProfiles due to an unexpected error.");
+				throw new NrfException(prob);
+			}
+			if(nfInstanceList != null && !nfInstanceList.isEmpty()) {
+				logMsg.clear();
+				logMsg.put("logMsg", "NfProfiles retrieved from the database");
+				logMsg.put("Size",nfInstanceList.size());
+				logger.info(logMsg.toString());
+				// Get latest record for each nfInstanceId
+				Collections.sort(nfInstanceList,new NfInstanceSortComparator());
+				
+				for(NfInstance nf: nfInstanceList) {
+					if(!nfInstances.stream().anyMatch(pf -> pf.getNfInstanceId().equals(nf.getNfInstanceId()))) {
+						nfInstances.add(nf);
+					}
+				}
+				
+				// if replication inactive, return only own records.
+				if(!ReplicationStatus.getReplicationStatus() && (nfInstances != null && !nfInstances.isEmpty())) {
+					List<NfInstance> ownNfInstances =  nfInstances.parallelStream().filter(nf -> nf.getRecordOwner().equals(nrfConfig.getGlobalConfig().getNrfInstanceId())).collect(Collectors.toList());
+					nfInstances = ownNfInstances;
+					logMsg.clear();
+					logMsg.put("logMsg", "Replication is inactive, returning own records only");
+					logger.warn(logMsg.toString());
+				}	
+				
+				//Apply filters
+				if(nfInstances != null && !nfInstances.isEmpty()) {
+					NfProfile nfProfile = null;
+					List<NfInstance> filteredNfInstances = new ArrayList<NfInstance>(); 
+					try {
+				     	for(NfInstance nfInstance:nfInstances) {
+			     			String doc = nfUpgradeServiceImpl.findNfProfileWithVersion(version, nfInstance);
+			     			nfProfile = objectMapper.readValue(doc, NfProfile.class);
+							if (nfProfile.getNfStatus().equals(NFStatus.REGISTERED) && nfProfile.getNfServices()!=null) {
+								if (targetPlmn!=null) {
+									if(nfProfile.getPlmnList()!=null && !nfProfile.getPlmnList().isEmpty()
+					        				&& nfProfile.getPlmnList().contains(targetPlmn))
+										filteredNfInstances.add(nfInstance);
+					        		else {
+					        			if( (nfProfile.getPlmnList()==null || nfProfile.getPlmnList().isEmpty())
+					        					&& this.nrfSystemOptions.getGeneralSystemOptions().getNrfPlmnList().contains(targetPlmn))
+											filteredNfInstances.add(nfInstance);
+					        		}
+								}
+								else {
+									filteredNfInstances.add(nfInstance);
+					        	}
+							}
+				     	}
+				     	nfInstances = filteredNfInstances;
+				     	logMsg.clear();
+						logMsg.put("logMsg", "NfProfiles after applying filters");
+						logMsg.put("Size",nfInstances.size());
+						logger.info(logMsg.toString());
+			     	}catch (Exception e1) {
+						logMsg.clear();
+						logMsg.put("logMsg", e1.getMessage());
+						logger.error(logMsg.toString());
+						
+						ProblemDetails prob = ProblemDetails.forInternalError();
+						prob.setCause("Could not fetch NfProfiles due to an unexpected error.");
+						throw new NrfException(prob);	
+		     	    }
+		     	}		     	
+			}
+			if(nfInstanceList == null) {
+				logMsg.clear();
+				logMsg.put("logMsg", "Unable to fetch NfProfiles.");
+				logger.error(logMsg.toString());
+				
+				ProblemDetails prob = ProblemDetails.forInternalError();
+				prob.setCause("Could not fetch NfProfiles due to an unexpected error.");
+				throw new NrfException(prob);
+			}
+		}
+		commonNrfMetrics.pegNrfDbMetricsSuccessTotal(RequestMethod.GET, FIND, serviceOperation,NF_INSTANCES);;
+		// NSI List
+		if(accessTokenReq.getTargetNsiList() != null && !(nfInstances.isEmpty())) {	
+			NfProfile nfProfile = null;
+			List<NfInstance> filteredNfInstances = new ArrayList<NfInstance>();
+			for(NfInstance nfInstance:nfInstances) {
+			    try {
+			    	String doc = nfUpgradeServiceImpl.findNfProfileWithVersion(version, nfInstance);
+			        nfProfile = objectMapper.readValue(doc, NfProfile.class);
+					List<String> nsiList = nfProfile.getNsiList();
+					if(nsiList == null) {
+						filteredNfInstances.add(nfInstance);
+					}
+					else {
+						if(nsiList.containsAll(accessTokenReq.getTargetNsiList())) {
+							filteredNfInstances.add(nfInstance);
+						}
+					}
+			    }catch (Exception e1) {
+			    	logMsg.clear();
+					logMsg.put("logMsg", e1.getMessage());
+					logger.error(logMsg.toString());
+					
+					ProblemDetails prob = ProblemDetails.forInternalError();
+					prob.setCause("Could not fetch NfProfiles due to an unexpected error.");
+					throw new NrfException(prob);	
+				}
+			}
+			nfInstances = filteredNfInstances;	
+			if(nfInstances.isEmpty()) {
+            	logMsg.clear();
+    			logMsg.put("logMsg", "None of the profiles matched.");
+    			logger.error(logMsg.toString());
+    			
+            	AccessTokenErr accessTokenErr = new AccessTokenErr();
+    			accessTokenErr.setError("invalid_request");
+    			accessTokenErr.setError_description("No NFs found for the requested profile");
+    			retVal.setResponse(accessTokenErr);
+    			retVal.setForwardingCandidate(true);
+    			return retVal;
+            }
+	    }
+						
+		//Snssai list
+		if(accessTokenReq.getTargetSnssaiList() != null && !(nfInstances.isEmpty())) {			
+		    NfProfile nfProfile = null;
+			List<NfInstance> filteredNfInstances = new ArrayList<NfInstance>();
+			for(NfInstance nfInstance:nfInstances) {
+			    try {
+			    	String doc = nfUpgradeServiceImpl.findNfProfileWithVersion(version, nfInstance);
+					nfProfile = objectMapper.readValue(doc, NfProfile.class);
+					List<SingleNssai> snssaiList = nfProfile.getsNssais();
+					if(snssaiList == null) {
+						filteredNfInstances.add(nfInstance);
+					}
+					else {
+						if(snssaiList.containsAll(accessTokenReq.getTargetSnssaiList())) {
+							filteredNfInstances.add(nfInstance);
+						}
+					}
+				}catch (Exception e1) {
+					logMsg.clear();
+					logMsg.put("logMsg", e1.getMessage());
+					logger.error(logMsg.toString());
+					
+					ProblemDetails prob = ProblemDetails.forInternalError();
+					prob.setCause("Could not fetch NfProfiles due to an unexpected error.");
+					throw new NrfException(prob);	
+			    }
+		    }
+		    nfInstances = filteredNfInstances;		
+		    if(nfInstances.isEmpty()) {
+            	logMsg.clear();
+    			logMsg.put("logMsg", "None of the profiles matched.");
+    			logger.error(logMsg.toString());
+    			
+            	AccessTokenErr accessTokenErr = new AccessTokenErr();
+    			accessTokenErr.setError("invalid_request");
+    			accessTokenErr.setError_description("No NFs found for the requested profile");
+    			retVal.setResponse(accessTokenErr);
+    			retVal.setForwardingCandidate(true);
+    			return retVal;
+    			
+            }
+		}
+		
+		List<String> servicesRequested = new ArrayList<String>();
+		for(String service : authorizedScope.split(" ")) {
+			servicesRequested.add(service);
+		}
+		
+		//NfType Validation
+		if(nrfSystemOptions.getNfAccessTokenSystemOptions().getAuthFeatureConfig().getAuthFeatureStatus().equals(FeatureStatus.DISABLED) && requesterNfType!=null) {
+		    NfProfile nfProfile = null;
+			List<NfInstance> filteredNfInstances = new ArrayList<NfInstance>();
+			for(NfInstance nfInstance:nfInstances) {
+			    try {
+			    	String doc = nfUpgradeServiceImpl.findNfProfileWithVersion(version, nfInstance);
+					nfProfile = objectMapper.readValue(doc, NfProfile.class);
+					Boolean serviceAllowed = false;
+					if (nfProfile.getNfServices() != null && !nfProfile.getNfServices().isEmpty()) {
+						for (NfService nfService : nfProfile.getNfServices()) {
+							if (servicesRequested.contains(nfService.getServiceName())) {
+								if(nfService.getAllowedNfTypes()!=null && !nfService.getAllowedNfTypes().isEmpty()) {
+									//If AllowedNfTypes in NfService is not empty, then check if NfType is present
+									if (nfService.getAllowedNfTypes().contains(requesterNfType)) {
+										serviceAllowed = true;
+										break;
+									}
+								}
+								else if(nfProfile.getAllowedNfTypes()!=null && !nfProfile.getAllowedNfTypes().isEmpty()) {
+									//If AllowedNfTypes in NfService is empty, then check if NfType is present in Profile's AllowedNfTypes
+									if(nfProfile.getAllowedNfTypes().contains(requesterNfType)) {
+										serviceAllowed = true;
+										break;
+									}
+								}
+								else {
+									//If AllowedNfTypes in NfService and NfProfile is empty, then all NfTypes are allowed to access this Service
+									serviceAllowed = true;
+									break;
+								}
+							}
+						}
+					}
+					//We need to check whether if atleast one service per NfInstance has this NfType as AllowedNfType, hence we stop checking 
+					//pre-emptively once a service matching our criteria is found.
+					if(serviceAllowed) {
+						filteredNfInstances.add(nfInstance);
+					}
+				}catch (Exception e1) {
+					logMsg.clear();
+					logMsg.put("logMsg", e1.getMessage());
+					logger.error(logMsg.toString());
+					
+					ProblemDetails prob = ProblemDetails.forInternalError();
+					prob.setCause("Could not fetch NfProfiles due to an unexpected error.");
+					throw new NrfException(prob);	
+			    }
+		    }
+		    nfInstances = filteredNfInstances;		
+		    if(nfInstances.isEmpty()) {
+            	logMsg.clear();
+    			logMsg.put("logMsg", "None of the profiles matched.");
+    			logger.error(logMsg.toString());
+    			
+            	AccessTokenErr accessTokenErr = new AccessTokenErr();
+    			accessTokenErr.setError("invalid_request");
+    			accessTokenErr.setError_description("No NFs found for the requested profile");
+    			retVal.setResponse(accessTokenErr);
+    			retVal.setForwardingCandidate(true);
+    			return retVal;
+    			
+            }
+		}
+		
+		// Requester Plmn validation
+		if (accessTokenReq.getRequesterPlmn() != null) {
+			Plmn requesterPlmn = accessTokenReq.getRequesterPlmn();
+			NfProfile nfProfile = null;
+			List<NfInstance> filteredNfInstances = new ArrayList<NfInstance>();
+			for (NfInstance nfInstance : nfInstances) {
+				try {
+					Boolean plmnAllowed = false;
+					String doc = nfUpgradeServiceImpl.findNfProfileWithVersion(version, nfInstance);
+					nfProfile = objectMapper.readValue(doc, NfProfile.class);
+					for (NfService nfService : nfProfile.getNfServices()) {
+						if (servicesRequested.contains(nfService.getServiceName())) {
+							if (nfService.getAllowedPlmns() == null || nfService.getAllowedPlmns().isEmpty()) {
+								// This indicates we need to fetch plmn from profile
+								if (nfProfile.getAllowedPlmns()==null || nfProfile.getAllowedPlmns().isEmpty()) {
+									//If plmn list is empty in both Service and profile, then all plmns are allowed
+									plmnAllowed = true;
+									break;
+								} else if(nfProfile.getAllowedPlmns().contains(requesterPlmn)){
+									plmnAllowed = true;
+									break;
+								}
+							} else if (nfService.getAllowedPlmns().contains(requesterPlmn)) {
+								plmnAllowed = true;
+								break;
+							}
+						}
+					}
+					if (plmnAllowed) {
+						//We need atleast one service from each NfInstance to have this plmn in their services list
+						//Hence we are pre-emptively ending the check if we found the plmn in a service.
+						filteredNfInstances.add(nfInstance);
+					}
+				} catch (Exception e1) {
+					logMsg.clear();
+					logMsg.put("logMsg", e1.getMessage());
+					logger.error(logMsg.toString());
+
+					ProblemDetails prob = ProblemDetails.forInternalError();
+					prob.setCause("Could not fetch NfProfiles due to an unexpected error.");
+					throw new NrfException(prob);
+				}
+			}
+			nfInstances = filteredNfInstances;
+			if (nfInstances.isEmpty()) {
+				logMsg.clear();
+				logMsg.put("logMsg", "None of the profiles matched.");
+				logger.error(logMsg.toString());
+
+				AccessTokenErr accessTokenErr = new AccessTokenErr();
+				accessTokenErr.setError("invalid_request");
+				accessTokenErr.setError_description("No NFs found for the requested profile");
+				retVal.setResponse(accessTokenErr);
+				retVal.setForwardingCandidate(true);
+				return retVal;
+			}
+		}
+		
+		logMsg.clear();
+		logMsg.put("logMsg", "No. of candidate producer NFs: "+nfInstances.size());
+		logger.info(logMsg.toString());
+		
+		Set<NfInstance> requiredNfInstances = new HashSet<NfInstance>();
+		
+		logMsg.clear();
+		logMsg.put("servicesAuthorized",servicesRequested);
+		logger.info(logMsg.toString());
+		Set<String> servicesPresent = new HashSet<String>();
+		
+		for(NfInstance nfInstance : nfInstances) {
+			
+			NfProfile nfProfile = null;
+			try {
+				String doc = nfUpgradeServiceImpl.findNfProfileWithVersion(version, nfInstance);
+				nfProfile = objectMapper.readValue(doc, NfProfile.class);
+			}
+			catch (Exception e) {
+				logMsg.clear();
+				logMsg.put("logMsg", e.getMessage());
+				logger.error(logMsg.toString());
+				
+				ProblemDetails prob = ProblemDetails.forInternalError();
+				prob.setCause("Could not process the fetched NfProfiles due to an unexpected error.");
+				throw new NrfException(prob);
+			}
+			
+			Set<String> serviceNames = new HashSet<String>();
+			nfProfile.getNfServices().stream().forEach(e -> serviceNames.add(e.getServiceName()));
+			logMsg.clear();
+			logMsg.put("logMsg", "services present in the profile");
+			logMsg.put("instanceId", nfInstance.getNfInstanceId());
+			logMsg.put("services", serviceNames);
+			logger.info(logMsg.toString());
+			
+			Set<String> intersectSet = new HashSet<String>(servicesRequested);
+			intersectSet.retainAll(serviceNames);
+			
+			logMsg.clear();
+			logMsg.put("intersectSet",intersectSet);
+			logger.info(logMsg.toString());
+			if(!intersectSet.isEmpty()) {
+				logMsg.clear();
+				logMsg.put("logMsg", "Profile Matched. Adding to requiredNfInstances");
+				logger.info(logMsg.toString());
+				
+				requiredNfInstances.add(nfInstance);
+				intersectSet.stream().forEach(e -> servicesPresent.add(e));
+			}
+
+		}
+		
+		
+		if(requiredNfInstances.isEmpty()) {
+			logMsg.clear();
+			logMsg.put("logMsg", "None of the profiles matched.");
+			logger.error(logMsg.toString());
+			
+			nrfMetrics.pegAccessTokenRejected(accessTokenReq, "ProducerWithRequestedScopeNotFound", HttpStatus.BAD_REQUEST);
+			
+			AccessTokenErr accessTokenErr = new AccessTokenErr();
+			accessTokenErr.setError("invalid_scope");
+			accessTokenErr.setError_description("No NFs found for the requested scope");
+			retVal.setResponse(accessTokenErr);
+			retVal.setForwardingCandidate(true);
+			return retVal;
+		}
+		
+		logMsg.clear();
+		logMsg.put("requiredNfInstances", requiredNfInstances);
+		logMsg.put("servicesPresent", servicesPresent);
+		logger.info(logMsg.toString());
+		
+		AccessTokenClaims accessTokenClaims = new AccessTokenClaims();
+		// Set scope
+		accessTokenClaims.setScope(String.join(" ", servicesPresent));
+		Set<String> servicesRequestedSet = new HashSet<String>(Arrays.asList(accessTokenReq.getScope().split(" ")));
+		if(!servicesRequestedSet.equals(servicesPresent)) {
+			accessTokenClaims.setScopeChanged(true);
+		}
+		
+		// Set aud
+		if (isTargetNfInstanceIdPresentInReqBody) {
+			//NRF responds with InstanceIds in aud field since targetNfInstanceId is received
+			List<String> requiredNfInstanceIds = new ArrayList<String>();
+			requiredNfInstances.stream().forEach(e -> requiredNfInstanceIds.add(e.getNfInstanceId()));
+			accessTokenClaims.setAud(requiredNfInstanceIds);
+		}
+		else {
+			// AudData configuration will be used only when targetNfInstanceId not specified
+			if(this.nrfSystemOptions.getNfAccessTokenSystemOptions().getAudienceType().toString().equals("NF_TYPE")) {
+				accessTokenClaims.setAud(requiredNfInstances.iterator().next().getNfType());
+			}
+			else {
+				List<String> requiredNfInstanceIds = new ArrayList<String>();
+				requiredNfInstances.stream().forEach(e -> requiredNfInstanceIds.add(e.getNfInstanceId()));
+				accessTokenClaims.setAud(requiredNfInstanceIds);
+			}
+		}
+		// Set producerSnssaiList, producerNsiList, consumerPlmnId and producerPlmnId
+		if(accessTokenReq.getTargetSnssaiList() != null)
+		    accessTokenClaims.setProducerSnssaiList(accessTokenReq.getTargetSnssaiList());
+		if(accessTokenReq.getTargetNsiList() != null)
+		    accessTokenClaims.setProducerNsiList(accessTokenReq.getTargetNsiList());
+		if(accessTokenReq.getRequesterPlmn() != null)
+			accessTokenClaims.setConsumerPlmnId(accessTokenReq.getRequesterPlmn());
+		if(accessTokenReq.getTargetPlmn() != null)
+			accessTokenClaims.setProducerPlmnId(accessTokenReq.getTargetPlmn());
+		retVal.setResponse(accessTokenClaims);
+		retVal.setForwardingCandidate(false);
+		return retVal;
+	}
+	
+	private GenericResponse  determineScopeAndAudienceForAND(List<NfInstance> nfInstances, String requesterNfType, String targetNfType,
+													AccessTokenReq accessTokenReq,String authorizedScope) {
+
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		GenericResponse retVal = new GenericResponse();
+		logMsg.clear();
+		logMsg.put("logMsg", "determineScopeAndAudienceForAND invoked");
+		logMsg.put("nfInstances", nfInstances);
+		logMsg.put("targetNfType", targetNfType);
+		logMsg.put("accessTokenReq", accessTokenReq);
+		logger.info(logMsg.toString());
+		
+		Plmn targetPlmn = accessTokenReq.getTargetPlmn();
+		String scope = accessTokenReq.getScope();
+		
+		Boolean isTargetNfInstanceIdPresentInReqBody = true;
+		
+		if(nfInstances == null) {
+			nfInstances = new ArrayList<NfInstance>();
+			List<NfInstance> nfInstanceList = null;			
+			isTargetNfInstanceIdPresentInReqBody = false;
+			try {
+				nfInstanceList = nfRepository.filterProfiles(targetNfType);
+			}
+			catch(Exception e) {
+				commonNrfMetrics.pegNrfDbMetricsFailuresTotal(RequestMethod.GET, FIND, serviceOperation,e,NF_INSTANCES);
+				logMsg.clear();
+				logMsg.put("logMsg", e.getMessage());
+				logger.error(logMsg.toString());
+				
+				ProblemDetails prob = ProblemDetails.forInternalError();
+				prob.setCause("Could not fetch NfProfiles due to an unexpected error.");
+				throw new NrfException(prob);
+			}
+			if(nfInstanceList != null && !nfInstanceList.isEmpty()) {
+				logMsg.clear();
+				logMsg.put("logMsg", "NfInstances retrieved from the database");
+				logMsg.put("size", nfInstanceList.size());
+				logger.info(logMsg.toString());
+				// Get latest record for each nfInstanceId
+				Collections.sort(nfInstanceList,new NfInstanceSortComparator());
+				
+				for(NfInstance nf: nfInstanceList) {
+					if(!nfInstances.stream().anyMatch(pf -> pf.getNfInstanceId().equals(nf.getNfInstanceId()))) {
+						nfInstances.add(nf);
+					}
+				}
+				
+				// if replication inactive, return only own records.
+				if(!ReplicationStatus.getReplicationStatus() && (nfInstances != null && !nfInstances.isEmpty())) {
+					List<NfInstance> ownNfInstances =  nfInstances.parallelStream().filter(nf -> nf.getRecordOwner().equals(nrfConfig.getGlobalConfig().getNrfInstanceId())).collect(Collectors.toList());
+					nfInstances = ownNfInstances;
+					logMsg.clear();
+					logMsg.put("logMsg", "Replication is inactive, returning own records only");
+					logger.warn(logMsg.toString());
+				}	
+				
+				//Apply filters
+				if(nfInstances != null && !nfInstances.isEmpty()) {
+					NfProfile nfProfile = null;
+					List<NfInstance> filteredNfInstances = new ArrayList<NfInstance>(); 
+			     	try {
+				     	for(NfInstance nfInstance:nfInstances) {
+			     			String doc = nfUpgradeServiceImpl.findNfProfileWithVersion(version, nfInstance);
+							nfProfile = objectMapper.readValue(doc, NfProfile.class);
+							if (nfProfile.getNfStatus().equals(NFStatus.REGISTERED) && nfProfile.getNfServices()!=null) {
+								if (targetPlmn!=null) {
+					        		if(nfProfile.getPlmnList()!=null && !nfProfile.getPlmnList().isEmpty()
+					        				&& nfProfile.getPlmnList().contains(targetPlmn))
+					        			filteredNfInstances.add(nfInstance);
+					        		else {
+					        			if((nfProfile.getPlmnList()==null || nfProfile.getPlmnList().isEmpty())
+					        					&& this.nrfSystemOptions.getGeneralSystemOptions().getNrfPlmnList().contains(targetPlmn))
+					        				filteredNfInstances.add(nfInstance);
+					        		}
+					        	}
+								else {
+									filteredNfInstances.add(nfInstance);
+					        	}
+							} 
+				     	}
+				     	nfInstances = filteredNfInstances;
+				     	logMsg.clear();
+						logMsg.put("logMsg", "NfInstances after applying filters");
+						logMsg.put("size", nfInstances.size());
+						logger.info(logMsg.toString());
+			     	}catch (Exception e1) {
+						logMsg.clear();
+						logMsg.put("logMsg", e1.getMessage());
+						logger.error(logMsg.toString());
+						
+						ProblemDetails prob = ProblemDetails.forInternalError();
+						prob.setCause("Could not fetch NfProfiles due to an unexpected error.");
+						throw new NrfException(prob);	
+		     	    }
+		     	}
+			}
+			if(nfInstanceList == null) {
+				logMsg.clear();
+				logMsg.put("logMsg", "Unable to fetch NfProfiles.");
+				logger.error(logMsg.toString());
+				
+				ProblemDetails prob = ProblemDetails.forInternalError();
+				prob.setCause("Could not fetch NfProfiles due to an unexpected error.");
+				throw new NrfException(prob);
+			}
+		}
+		
+		logMsg.clear();
+		logMsg.put("logMsg", "No. of profiles succesfully fetched from DB: "+nfInstances.size());
+		logger.info(logMsg.toString());
+		
+		commonNrfMetrics.pegNrfDbMetricsSuccessTotal(RequestMethod.GET, FIND, serviceOperation,NF_INSTANCES);
+		// NSI List
+		if(accessTokenReq.getTargetNsiList() != null && !(nfInstances.isEmpty())) {
+	     	NfProfile nfProfile = null;
+	     	List<NfInstance> filteredNfInstances = new ArrayList<NfInstance>();
+	     	for(NfInstance nfInstance:nfInstances) {
+	     		try {
+	     			String doc = nfUpgradeServiceImpl.findNfProfileWithVersion(version, nfInstance);
+					nfProfile = objectMapper.readValue(doc, NfProfile.class);
+					List<String> nsiList = nfProfile.getNsiList();
+					if(nsiList == null) {
+						filteredNfInstances.add(nfInstance);
+					}
+					else {
+						if(nsiList.containsAll(accessTokenReq.getTargetNsiList())) {
+							filteredNfInstances.add(nfInstance);
+						}
+					}
+				} catch (Exception e1) {
+					logMsg.clear();
+					logMsg.put("logMsg", e1.getMessage());
+					logger.error(logMsg.toString());
+					
+					ProblemDetails prob = ProblemDetails.forInternalError();
+					prob.setCause("Could not fetch NfProfiles due to an unexpected error.");
+					throw new NrfException(prob);	
+	     	    }
+		    }
+     		nfInstances = filteredNfInstances;
+     		if(nfInstances.isEmpty()) {
+            	logMsg.clear();
+    			logMsg.put("logMsg", "None of the profiles matched.");
+    			logger.error(logMsg.toString());
+    			
+            	AccessTokenErr accessTokenErr = new AccessTokenErr();
+    			accessTokenErr.setError("invalid_request");
+    			accessTokenErr.setError_description("No NFs found for the requested profile");
+    			retVal.setResponse(accessTokenErr);
+    			retVal.setForwardingCandidate(true);
+    			return retVal;
+    			
+            }
+     	}
+		
+		//Snssai list
+        if(accessTokenReq.getTargetSnssaiList() != null && !(nfInstances.isEmpty())) {
+			
+	     	NfProfile nfProfile = null;
+	     	List<NfInstance> filteredNfInstances = new ArrayList<NfInstance>();
+	     	for(NfInstance nfInstance:nfInstances) {
+	     		try {
+	     			String doc = nfUpgradeServiceImpl.findNfProfileWithVersion(version, nfInstance);
+					nfProfile = objectMapper.readValue(doc, NfProfile.class);
+					List<SingleNssai> snssaiList = nfProfile.getsNssais();
+					if(snssaiList == null) {
+						filteredNfInstances.add(nfInstance);
+					}
+					else {
+						if(snssaiList.containsAll(accessTokenReq.getTargetSnssaiList())) {
+							filteredNfInstances.add(nfInstance);
+						}
+					}
+				} catch (Exception e1) {
+					logMsg.clear();
+					logMsg.put("logMsg", e1.getMessage());
+					logger.error(logMsg.toString());
+					
+					ProblemDetails prob = ProblemDetails.forInternalError();
+					prob.setCause("Could not fetch NfProfiles due to an unexpected error.");
+					throw new NrfException(prob);	
+	     	    }
+		    }
+     		nfInstances = filteredNfInstances;		
+     		if(nfInstances.isEmpty()) {
+            	logMsg.clear();
+    			logMsg.put("logMsg", "None of the profiles matched.");
+    			logger.error(logMsg.toString());
+    			
+            	AccessTokenErr accessTokenErr = new AccessTokenErr();
+    			accessTokenErr.setError("invalid_request");
+    			accessTokenErr.setError_description("No NFs found for the requested profile");
+    			retVal.setResponse(accessTokenErr);
+    			retVal.setForwardingCandidate(true);
+    			return retVal;
+            }
+     	}
+        
+		List<String> servicesRequested = new ArrayList<String>();
+		for(String service : authorizedScope.split(" ")) {
+			servicesRequested.add(service);
+		}
+		
+		//NfType Validation
+		if(nrfSystemOptions.getNfAccessTokenSystemOptions().getAuthFeatureConfig().getAuthFeatureStatus().equals(FeatureStatus.DISABLED) && requesterNfType!=null) {
+		    NfProfile nfProfile = null;
+			List<NfInstance> filteredNfInstances = new ArrayList<NfInstance>();
+			for(NfInstance nfInstance:nfInstances) {
+			    try {
+			    	String doc = nfUpgradeServiceImpl.findNfProfileWithVersion(version, nfInstance);
+					nfProfile = objectMapper.readValue(doc, NfProfile.class);
+					if (nfProfile.getNfServices() != null && !nfProfile.getNfServices().isEmpty()) {
+						List<String> servicesAllowedInProfile = new ArrayList<String>();
+						for (NfService nfService : nfProfile.getNfServices()) {
+							if (servicesRequested.contains(nfService.getServiceName())) {
+								if(nfService.getAllowedNfTypes()!=null && !nfService.getAllowedNfTypes().isEmpty()) {
+									if (nfService.getAllowedNfTypes().contains(requesterNfType)) {
+										servicesAllowedInProfile.add(nfService.getServiceName());
+									}
+								} else if(nfProfile.getAllowedNfTypes()!=null && !nfProfile.getAllowedNfTypes().isEmpty()) {
+									if(nfProfile.getAllowedNfTypes().contains(requesterNfType)) {
+										servicesAllowedInProfile.add(nfService.getServiceName());
+									}
+								} else {
+									servicesAllowedInProfile.add(nfService.getServiceName());
+								}
+							}
+						}
+						if(servicesAllowedInProfile.containsAll(servicesRequested)) {
+							filteredNfInstances.add(nfInstance);
+						}
+					}
+				}catch (Exception e1) {
+					logMsg.clear();
+					logMsg.put("logMsg", e1.getMessage());
+					logger.error(logMsg.toString());
+					
+					ProblemDetails prob = ProblemDetails.forInternalError();
+					prob.setCause("Could not fetch NfProfiles due to an unexpected error.");
+					throw new NrfException(prob);	
+			    }
+		    }
+		    nfInstances = filteredNfInstances;		
+		    if(nfInstances.isEmpty()) {
+            	logMsg.clear();
+    			logMsg.put("logMsg", "None of the profiles matched.");
+    			logger.error(logMsg.toString());
+    			
+            	AccessTokenErr accessTokenErr = new AccessTokenErr();
+    			accessTokenErr.setError("invalid_request");
+    			accessTokenErr.setError_description("No NFs found for the requested profile");
+    			retVal.setResponse(accessTokenErr);
+    			retVal.setForwardingCandidate(true);
+    			return retVal;
+    			
+            }
+		}
+
+		//Requester Plmn validation
+		if(accessTokenReq.getRequesterPlmn()!=null) {
+			Plmn requesterPlmn = accessTokenReq.getRequesterPlmn();
+	     	NfProfile nfProfile = null;
+	     	List<String> servicesAllowedInProfile = new ArrayList<String>();
+	     	List<NfInstance> filteredNfInstances = new ArrayList<NfInstance>();
+	     	for(NfInstance nfInstance:nfInstances) {
+	     		try {
+	     			String doc = nfUpgradeServiceImpl.findNfProfileWithVersion(version, nfInstance);
+					nfProfile = objectMapper.readValue(doc, NfProfile.class);
+					for(NfService nfService: nfProfile.getNfServices()) {
+						if(servicesRequested.contains(nfService.getServiceName())) {
+							if(nfService.getAllowedPlmns() == null || nfService.getAllowedPlmns().isEmpty()) {
+								//This indicates plmn should be checked in Profile's plmn list
+								if(nfProfile.getAllowedPlmns()== null || nfProfile.getAllowedPlmns().isEmpty()) {
+									//This indicates all plmns are allowed
+									servicesAllowedInProfile.add(nfService.getServiceName());
+								} else if(nfProfile.getAllowedPlmns().contains(requesterPlmn)) {
+									servicesAllowedInProfile.add(nfService.getServiceName());
+								}
+							}
+							else if(nfService.getAllowedPlmns().contains(requesterPlmn)) {
+								servicesAllowedInProfile.add(nfService.getServiceName());
+							} else if(nfProfile.getAllowedPlmns()!=null && nfProfile.getAllowedPlmns().contains(requesterPlmn)) {
+								servicesAllowedInProfile.add(nfService.getServiceName());
+							}
+						}
+					}
+					if(servicesAllowedInProfile.containsAll(servicesRequested)) {
+						filteredNfInstances.add(nfInstance);
+					}
+				} catch (Exception e1) {
+					logMsg.clear();
+					logMsg.put("logMsg", e1.getMessage());
+					logger.error(logMsg.toString());
+					
+					ProblemDetails prob = ProblemDetails.forInternalError();
+					prob.setCause("Could not fetch NfProfiles due to an unexpected error.");
+					throw new NrfException(prob);	
+	     	    }
+		    }
+     		nfInstances = filteredNfInstances;		
+     		if(nfInstances.isEmpty()) {
+            	logMsg.clear();
+    			logMsg.put("logMsg", "None of the profiles matched.");
+    			logger.error(logMsg.toString());
+    			
+            	AccessTokenErr accessTokenErr = new AccessTokenErr();
+    			accessTokenErr.setError("invalid_request");
+    			accessTokenErr.setError_description("No NFs found for the requested profile");
+    			retVal.setResponse(accessTokenErr);
+    			retVal.setForwardingCandidate(true);
+    			return retVal;
+            }
+		} 
+		
+		Set<NfInstance> requiredNfInstances = new HashSet<NfInstance>();
+
+		logMsg.clear();
+		logMsg.put("servicesAuthorized",servicesRequested);
+		logger.info(logMsg.toString());
+		for(NfInstance nfInstance : nfInstances) {
+			NfProfile nfProfile = null;
+			try {
+				String doc = nfUpgradeServiceImpl.findNfProfileWithVersion(version, nfInstance);
+				nfProfile = objectMapper.readValue(doc, NfProfile.class);
+			}
+			catch (Exception e) {
+				logMsg.clear();
+				logMsg.put("logMsg", e.getMessage());
+				logger.error(logMsg.toString());
+				
+				ProblemDetails prob = ProblemDetails.forInternalError();
+				prob.setCause("Could not process the fetched NfProfiles due to an unexpected error.");
+				throw new NrfException(prob);
+			}
+
+			Set<String> serviceNames = new HashSet<String>();
+			nfProfile.getNfServices().stream().forEach(e -> serviceNames.add(e.getServiceName()));
+			
+			logMsg.clear();
+			logMsg.put("logMsg", "services present in the profile");
+			logMsg.put("instanceId", nfInstance.getNfInstanceId());
+			logMsg.put("services", serviceNames);
+			logger.info(logMsg.toString());
+
+			Set<String> intersectSet = new HashSet<String>(servicesRequested);
+			intersectSet.retainAll(serviceNames);
+			
+			logMsg.clear();
+			logMsg.put("intersectSet", intersectSet);
+			logger.info(logMsg.toString());
+			Set<String> servicesRequestedSet = new HashSet<String>(servicesRequested);
+			if(intersectSet.equals(servicesRequestedSet)) {
+				logMsg.clear();
+				logMsg.put("logMsg", "Profile Matched. Adding to requiredNfInstances");
+				logger.info(logMsg.toString());
+				
+				requiredNfInstances.add(nfInstance);
+			}
+
+		}
+		
+		if(requiredNfInstances.isEmpty()) {
+			logMsg.clear();
+			logMsg.put("logMsg", "None of the profiles matched.");
+			logger.error(logMsg.toString());
+			
+			nrfMetrics.pegAccessTokenRejected(accessTokenReq, "ProducerWithRequestedScopeNotFound", HttpStatus.BAD_REQUEST);
+			
+			AccessTokenErr accessTokenErr = new AccessTokenErr();
+			accessTokenErr.setError("invalid_scope");
+			accessTokenErr.setError_description("No NFs found for the requested scope");
+			retVal.setResponse(accessTokenErr);
+			retVal.setForwardingCandidate(true);
+			return retVal;
+		}
+		
+		logMsg.clear();
+		logMsg.put("requiredNfInstances", requiredNfInstances);
+		logger.info(logMsg.toString());
+		
+		AccessTokenClaims accessTokenClaims = new AccessTokenClaims();
+		// Set scope
+		accessTokenClaims.setScope(String.join(" ", servicesRequested));
+		// Set aud
+		if (isTargetNfInstanceIdPresentInReqBody) {
+			//NRF responds with InstanceIds in aud field since targetNfInstanceId is received
+			List<String> requiredNfInstanceIds = new ArrayList<String>();
+			requiredNfInstances.stream().forEach(e -> requiredNfInstanceIds.add(e.getNfInstanceId()));				
+			logMsg.clear();
+			logMsg.put("aud", requiredNfInstanceIds);
+			logger.info(logMsg.toString());
+			accessTokenClaims.setAud(requiredNfInstanceIds);
+		}
+		else {
+			// AudData configuration will be used only when targetNfInstanceId not specified			
+			if(this.nrfSystemOptions.getNfAccessTokenSystemOptions().getAudienceType().toString().equals("NF_TYPE")) {
+				String aud = requiredNfInstances.iterator().next().getNfType();				
+				logMsg.clear();
+				logMsg.put("aud", aud);
+				logger.info(logMsg.toString());
+				accessTokenClaims.setAud(aud);
+			}
+			else {
+				List<String> requiredNfInstanceIds = new ArrayList<String>();
+				requiredNfInstances.stream().forEach(e -> requiredNfInstanceIds.add(e.getNfInstanceId()));				
+				logMsg.clear();
+				logMsg.put("aud", requiredNfInstanceIds);
+				logger.info(logMsg.toString());
+				accessTokenClaims.setAud(requiredNfInstanceIds);
+			}
+		}
+		// Set producerSnssaiList, producerNsiList, consumerPlmnId and producerPlmnId
+		if(accessTokenReq.getTargetSnssaiList() != null)
+		    accessTokenClaims.setProducerSnssaiList(accessTokenReq.getTargetSnssaiList());
+		if(accessTokenReq.getTargetNsiList() != null)
+		    accessTokenClaims.setProducerNsiList(accessTokenReq.getTargetNsiList());
+		if(accessTokenReq.getRequesterPlmn() != null)
+			accessTokenClaims.setConsumerPlmnId(accessTokenReq.getRequesterPlmn());
+		if(accessTokenReq.getTargetPlmn() != null)
+			accessTokenClaims.setProducerPlmnId(accessTokenReq.getTargetPlmn());
+		retVal.setResponse(accessTokenClaims);
+		retVal.setForwardingCandidate(false);
+		return retVal;		
+	}
+	//VALIDATE IEs
+	public Object validateScope(AccessTokenReq body)
+	{
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		AccessTokenErr accessTokenError = new AccessTokenErr();
+		List<String> threeGppSpecifiedServices = new ArrayList<String>();
+		List<String> nonThreeGppSpecifiedServices = new ArrayList<String>();
+		List<String> scope = Arrays.asList(body.getScope().split(" "));
+		HashSet<String> nfTypeCheck = new HashSet<String>();
+		String[] splitThreeGppServices = null;
+		String targetNfType = null;
+ 
+		ArrayList<String> serviceNameValue = new ArrayList<String>();
+		List<ServiceName> serviceNameEnum = Arrays.asList(ServiceName.values());
+		for(ServiceName serviceName : serviceNameEnum)
+		{
+			serviceNameValue.add(serviceName.value());
+		}
+
+		//Filter 3gpp Services from list of Scope
+		threeGppSpecifiedServices = scope.parallelStream().filter(service ->serviceNameValue.contains(service)).collect(Collectors.toList()); 
+		logMsg.clear();
+		logMsg.put("logMsg", "3gpp Specified services in scope : ");
+		logMsg.put("scope", Arrays.toString(threeGppSpecifiedServices.toArray()));
+		logger.info(logMsg.toString());
+
+
+		//Filter non 3gpp Services from list of Scope
+		nonThreeGppSpecifiedServices = scope.parallelStream().filter(service ->!serviceNameValue.contains(service)).collect(Collectors.toList()); 
+		logMsg.clear();
+		logMsg.put("logMsg", "Non 3gpp Specified services in scope : ");
+		logMsg.put("scope", Arrays.toString(nonThreeGppSpecifiedServices.toArray()));
+		logger.info(logMsg.toString());
+
+		for(String x : threeGppSpecifiedServices)              
+		{
+			splitThreeGppServices = x.split("-");
+			nfTypeCheck.add(splitThreeGppServices[0]);     
+		}
+            
+		// validate only 3gpp services
+		if(threeGppSpecifiedServices.size() != 0) {                                
+			
+			targetNfType = nfTypeCheck.toString();
+            targetNfType = targetNfType.substring(2, targetNfType.length()-1).toUpperCase();
+            
+            
+          //check if all services are from same nftype
+			if(!(nfTypeCheck.size()==1))                                                  //Services belongs to same nfType when nfTypeCheck size = 1 
+			{ 
+				accessTokenError.setError("invalid_scope");
+				accessTokenError.setError_description("NF services in scope doesn't belong to same NF type");
+				logMsg.clear();
+				logMsg.put("logMsg", "NF services in scope doesn't belong to same NF type");
+				logger.error(logMsg.toString());
+				
+				nrfMetrics.pegAccessTokenRejected(body, "InconsistentScope", HttpStatus.BAD_GATEWAY);
+				
+				return accessTokenError;
+
+			}
+
+			//check if services are matching with targetNfType if present
+			if((body.getTargetNfType() != null))                                    
+			{
+				String targetNfTypeWithN = "n" + body.getTargetNfType().toLowerCase();
+				if(!((threeGppSpecifiedServices.get(0)).startsWith(targetNfTypeWithN))) {
+					accessTokenError.setError("invalid_request");
+					accessTokenError.setError_description("NF services in scope doesn't belong to targetNftype");
+					logMsg.clear();
+					logMsg.put("logMsg", "NF services in scope doesn't belong to targetNftype");
+					logger.error(logMsg.toString());
+					return accessTokenError;
+
+
+				}
+				targetNfType = body.getTargetNfType();
+			}
+
+		}
+		if(nonThreeGppSpecifiedServices.size() == scope.size()) {             //Validate only if all services in scope are non 3gpp services 
+			{
+
+				if((body.getTargetNfType() != null) || (body.getTargetNfInstanceId() !=null ))  //Custom service with conditional parameters
+				{              
+					logMsg.clear();
+					logMsg.put("logMsg", "Scope could be a custom service");
+					logger.info(logMsg.toString());
+
+					if(body.getTargetNfType()!=null) {
+						targetNfType = body.getTargetNfType();
+					}
+
+				}
+				else {                                                     
+					accessTokenError.setError("invalid_request");
+					accessTokenError.setError_description("Either targetNfType or targetNfInstanceId needs to be present if token is requested for only custom service(s)");
+					logMsg.clear();
+					logMsg.put("logMsg", "Either targetNfType or targetNfInstanceId needs to be present if token is requested for only custom service(s)");
+					logger.error(logMsg.toString());
+					return accessTokenError;
+				}
+
+			} 
+		}
+		logMsg.clear();
+		logMsg.put("logMsg", "Scope Validated Successfully");
+		logger.info(logMsg.toString());
+
+		return targetNfType;
+	}
+		
+	
+	
+	@Override
+	public void setNrfSystemAndEngineeringOptions(NrfSystemOptions nrfSystemOptions,
+														NrfEngSystemOptions nrfEngSystemOptions) {
+		this.nrfSystemOptions = nrfSystemOptions;
+		this.nrfEngSystemOptions = nrfEngSystemOptions;
+	}
+
+	public void setObjectMapper(ObjectMapper objectMapper) {
+		this.objectMapper = objectMapper;
+	}
+}

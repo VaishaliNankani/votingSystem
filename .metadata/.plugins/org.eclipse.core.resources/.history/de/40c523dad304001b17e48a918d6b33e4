@@ -1,0 +1,140 @@
+package com.oracle.cgbu.cne.nrf;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.stereotype.Component;
+
+
+
+import io.micrometer.core.instrument.Metrics;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+
+
+public  class HookMetrics  {
+	
+	private static final Logger logger = LoggerFactory.getLogger(HookMetrics.class);	
+	public HookMetrics() {
+    	Metrics.addRegistry(new SimpleMeterRegistry());
+	}
+	public void executeReleaseActions()
+    {
+		 System.out.println("executeReleaseActions called");
+        String hookType = System.getenv("HOOK_TYPE");
+        if(hookType == null)
+        {
+            logger.error("Not able to get the value of HOOK_TYPE environment variable. Exiting...");
+            throw new NullPointerException();
+        }
+        System.out.println("hookTYpe"+hookType);
+        switch (hookType) {
+            case "pre-install":
+            	preInstall();
+                break;
+            case "post-install":
+            	postInstall();
+                break;
+            case "pre-upgrade":
+               preUpgrade();
+                break;
+            case "post-upgrade":
+                postUpgrade();
+                break;
+            case "pre-rollback":
+                preRollback();
+                break;
+            case "post-rollback":
+                postRollback();
+                break;
+            case "pre-delete":
+                preDelete();
+                break;
+            case "post-delete":
+                postDelete();
+                break;
+            default:
+                logger.error("Invalid HOOK_TYPE environment variable value. Exiting...");
+                throw new IllegalArgumentException();
+        }
+        
+    }
+	
+	static public void preInstall()
+	{
+		// do nothing		
+		System.out.println("preinstall");
+		Metrics.counter("ocnrf.preinstall.hooknew").increment();
+		try {
+			Thread.sleep(60000);
+		} catch (InterruptedException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+	}
+	/*
+	 * API to be overridden in the classes which needs
+	 * executions on post-upgrade
+	 */
+	static public void postInstall()
+	{
+		// do nothing
+		System.out.println("postinstall");
+		Metrics.counter("ocnrf.postinstall").increment();
+	}
+	
+	static public void preUpgrade()
+	{
+		System.out.println("preupgrade");
+		Metrics.counter("ocnrf.preupgrade").increment();
+	}
+	/*
+	 * API to be overridden in the classes which needs
+	 * executions on post-upgrade
+	 */
+	static public void postUpgrade()
+	{
+		System.out.println("postupgrade");
+		Metrics.counter("ocnrf.postupgrade").increment();
+	}
+
+	/*
+	 * API to be overridden in the classes which needs
+	 * executions on pre-rollback
+	 */
+	static public void preRollback()
+	{
+		System.out.println("prerollback");
+		Metrics.counter("ocnrf.prerollback").increment();
+	}
+
+	/*
+	 * API to be overridden in the classes which needs
+	 * executions on post-rollback
+	 */
+	static public void postRollback()
+	{
+		System.out.println("postrollback");
+		Metrics.counter("ocnrf.postrollback").increment();
+	}
+
+	/*
+	 * API to be overridden in the classes which needs
+	 * executions on pre-delete
+	 */
+	static public void preDelete()
+	{
+		System.out.println("predelete");
+		Metrics.counter("ocnrf.predelete").increment();
+	}
+
+	/*
+	 * API to be overridden in the classes which needs
+	 * executions on post-delete
+	 */
+	static public void postDelete()
+	{
+		System.out.println("postdelete");
+		Metrics.counter("ocnrf.postdelete").increment();
+	}
+}

@@ -1,0 +1,15 @@
+// Copyright 2020 (C), Oracle and/or its affiliates. All rights reserved.
+
+package com.oracle.cgbu.cne.nrf.domain;
+
+import java.util.Date;
+
+import org.springframework.validation.annotation.Validated;
+
+import com.oracle.cgbu.cne.nrf.dao.NfStatusMonitor;
+import com.oracle.cgbu.cne.nrf.dao.NfStatusMonitorDoc;
+
+@Validated
+public class NfAuditUtils extends SimpleAbstractDto {
+	
+}

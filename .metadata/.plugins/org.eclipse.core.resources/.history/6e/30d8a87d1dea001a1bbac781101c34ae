@@ -1,0 +1,258 @@
+// Copyright 2020 (C), Oracle and/or its affiliates. All rights reserved.
+
+package com.oracle.cgbu.cne.nrf.hooks.postinstall;
+import java.net.NoRouteToHostException;
+import java.net.SocketTimeoutException;
+import java.net.URI;
+import java.net.UnknownHostException;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.oracle.cgbu.cne.nrf.domain.GeneralSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.NfAccessTokenSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.NrfSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.OauthTokenAlgorithm;
+import com.oracle.cgbu.cne.nrf.domain.Plmn;
+import com.oracle.cgbu.cne.nrf.domain.ProblemDetails;
+import com.oracle.cgbu.cne.nrf.hooks.config.HookConfiguration;
+import com.oracle.cgbu.cne.nrf.hooks.postinstall.RestClientImpl;
+import org.springframework.beans.factory.annotation.Qualifier;
+import okhttp3.HttpUrl;
+import okhttp3.MediaType;
+import okhttp3.Request;
+import okhttp3.RequestBody;
+import okhttp3.Response;
+import okhttp3.ResponseBody;
+
+@Service
+public class PostInstallConfiguration {
+	private static final Logger logger = LogManager.getLogger(PostInstallConfiguration.class);
+	private static final MediaType TYPE_JSON = MediaType.parse("application/json; charset=utf-8");
+	private static final Integer HTTP_STATUS_OK = 200;
+	@Autowired
+	private RestClientImpl restClientImpl;
+	@Autowired
+	private HookConfiguration hookConfig;
+	@Autowired
+    @Qualifier("defaultObjectMapper")
+    private ObjectMapper objectMapper;
+
+
+	public void postInstallConfig()
+	{
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		Request request = null;
+		ObjectMapper om = new ObjectMapper();
+		ResponseBody responseBody = null;
+		int numFailures = 0;
+		boolean sendRequest = true;
+		String configApiRoot= getConfigurationServiceApiRoot();
+		String configurationServiceUrl = configApiRoot+
+				hookConfig.getConfigSvc().getResourceUri();
+		String url = null;
+		RequestBody reqBody = null;
+		int maxRetries = hookConfig.getConfigSvc().getMaxRetries();		
+		int waitTime=hookConfig.getConfigSvc().getWaitTime();
+		logMsg.clear();
+		logMsg.put("Configuration",hookConfig.getConfiguration());
+		logMsg.put("ConfigSvc",hookConfig.getConfigSvc());
+		logger.info(logMsg.toString());
+		//TCP connection to the configuration microservice is failing and the job is going into error state.
+		//Therefore added delay before connecting to the configuration microservice.
+		try {
+			Thread.sleep(waitTime);
+		} catch (InterruptedException e1) {
+			logMsg.clear();				
+			logMsg.put("logMsg","InterruptedException occurred during wait in post-install"+e1.getMessage());
+			logMsg.put("WaitTime",waitTime);
+			logger.warn(logMsg.toString());			
+		}
+		while ((numFailures <= maxRetries) && (sendRequest == true)) {
+			try {
+				
+				if(request == null) {
+					NrfSystemOptions nrfSystemOptions = getInitialConfig();
+					reqBody = RequestBody.create(TYPE_JSON, 
+							objectMapper.writeValueAsBytes(nrfSystemOptions));
+					logMsg.clear();
+					logMsg.put("logMsg", "preparing NrfSystemOptions Request ");
+					logMsg.put("configurationServiceUrl", configurationServiceUrl);
+					logMsg.put("configrationServicApiRoot", configApiRoot);
+					logMsg.put("maxRetries", maxRetries);
+					logMsg.put("NrfSystemOptions body", 
+							objectMapper.writeValueAsString(nrfSystemOptions));
+					logger.info(logMsg.toString());
+					URI uri = URI.create(configurationServiceUrl);
+					HttpUrl.Builder urlBuilder = HttpUrl.parse(uri.toString()).newBuilder();
+					url = urlBuilder.build().toString();
+					request = new Request.Builder().url(url).put(reqBody).build();							
+					logMsg.clear();
+					logMsg.put("logMsg", "Sending NrfSystemOptions Request for url");
+					logMsg.put("NrfSystemOptions Create url", url);
+					logMsg.put("NrfSystemOptions body", request);
+					logger.info(logMsg.toString());
+
+				}
+				else
+				{
+					/*Initially SocketTimeoutException  will be observed while sending request
+					 *  to configuration microservice ,so retrying for maximum 10 times with a 
+					 *  delay of  1 second between consecutive retries*/
+					Thread.sleep(1000);
+					logMsg.clear();
+					logMsg.put("logMsg", "Retrying NrfSystemOptions Request for url");
+					logMsg.put("configurationServiceUrl", configurationServiceUrl);
+					logMsg.put("numFailures", numFailures);				
+					logger.info(logMsg.toString());
+				}		
+				Response response = restClientImpl.sendRequest(request);				
+				logMsg.clear();
+				logMsg.put("logMsg", "Response from client");
+				logMsg.put("responseStatus", response.code());
+				if(response.code() == HTTP_STATUS_OK) {
+					responseBody = response.body();
+					String content = responseBody.string();
+					NrfSystemOptions result = om.readValue(content,NrfSystemOptions.class);
+					logMsg.put("response", result);
+					logMsg.put("numFailures", numFailures);
+					logger.info(logMsg.toString());
+				}else {
+					responseBody = response.body();						
+					String content = responseBody.string();
+					ProblemDetails probDetails = om.readValue(content,
+							ProblemDetails.class);			
+					logMsg.put("response", probDetails);					
+					logMsg.put("url", url);	
+					logMsg.put("numFailures", numFailures);
+					logger.error(logMsg.toString());
+				}
+				response.close();
+				sendRequest = false;
+			}catch(SocketTimeoutException e) {
+				restClientImpl.createClient();
+				logMsg.clear();
+				logMsg.put("logMsg", "SocketTimeoutException occurred");
+				logger.warn(logMsg.toString());				
+				logMsg.clear();
+				logMsg.put("logMsg", "failed to send Request to"
+						+ " configuration microservice");
+				logMsg.put("request",request);
+				logger.warn(logMsg.toString());
+				numFailures++;
+			}catch(UnknownHostException e) {	
+				restClientImpl.createClient();
+				logMsg.clear();
+				logMsg.put("logMsg", "UnknownHostException occurred");
+				logger.warn(logMsg.toString());				
+				logMsg.clear();
+				logMsg.put("logMsg", "failed to send request"
+						+ " to configuration microservice");
+				logMsg.put("request", request);
+				logger.warn(logMsg.toString());
+				numFailures++;
+			}catch(NoRouteToHostException e) {	
+				restClientImpl.createClient();
+				logMsg.clear();
+				logMsg.put("logMsg", "NoRouteToHostException occurred");
+				logger.warn(logMsg.toString());				
+				logMsg.clear();
+				logMsg.put("logMsg", "failed to send request to "
+						+ "configuration microservice");
+				logMsg.put("request", request);
+				logger.warn(logMsg.toString());
+				numFailures++;
+			}catch( Exception e) {			
+				logMsg.clear();				
+				logMsg.put("logMsg", "Exception occurred");
+				logger.warn(logMsg.toString());				
+				logMsg.clear();
+				logMsg.put("logMsg", "failed to send request to "
+						+ "configuration microservice"+e.getMessage());
+				logMsg.put("request", request);
+				logMsg.put("numFailures", numFailures);
+				logMsg.put("configurationServiceUrl", configurationServiceUrl);
+				logger.warn(logMsg.toString());
+				numFailures++;
+			}finally {
+				if(responseBody != null) {
+					responseBody.close();
+				}
+				
+			}
+		}
+		
+		if(numFailures > maxRetries)
+		{
+			logMsg.clear();
+			logMsg.put("logMsg", "Max retries Exhausted!!,failed to"
+					+ " send request to configuration microservice"
+					+configurationServiceUrl);
+			logMsg.put("request", request);
+			logMsg.put("maxRetries", maxRetries);
+			logMsg.put("numFailures", numFailures);
+			logger.error(logMsg.toString());
+			System.exit(1);
+		}
+		
+	}
+	
+	String getConfigurationServiceApiRoot()
+	{
+		String hostName = hookConfig.getConfigSvc().getHost();
+		int port = hookConfig.getConfigSvc().getPort();
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		if((hostName == null) || (port == 0))
+		{
+			logger.error("Not able to get the value of configuration service host/port"
+					+ " . Exiting...");
+			System.exit(1);
+		}
+		String apiRoot = "http://"+hostName+":"+port;
+		logMsg.clear();
+		logMsg.put("logMsg", "constructed configuration microservice apiroot ");
+		logMsg.put("hostName",hostName);
+		logMsg.put("port",port);
+		logMsg.put("apiRoot",apiRoot);
+		logger.info(logMsg.toString());
+		return apiRoot ;
+	}
+	
+	
+	NrfSystemOptions getInitialConfig()
+	{
+		String endpointHost = hookConfig.getConfiguration().getAppEndpoint();
+		int endpointPort = hookConfig.getConfiguration().getAppEndpointPort();
+		String tokenAlgorithm = hookConfig.getConfiguration().getTokenAlgorithm();	
+		List<Plmn> plmnList = hookConfig.getConfiguration().getPlmnList();
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		logMsg.clear();
+		logMsg.put("logMsg", "Parameters for InitialConfig ");		
+		logMsg.put("endpointHost",endpointHost);
+		logMsg.put("endpointPort",endpointPort);
+		logMsg.put("tokenAlgorithm",tokenAlgorithm);
+		logMsg.put("plmnlist",plmnList);
+		logger.info(logMsg.toString());
+		NrfSystemOptions nrfSystemOptions = new NrfSystemOptions();
+		GeneralSystemOptions generalSystemOptions = new GeneralSystemOptions();		
+		generalSystemOptions.setNrfPlmnList(plmnList);
+		generalSystemOptions.setOcnrfEndPointHost(endpointHost);
+		generalSystemOptions.setOcnrfEndPointPort(endpointPort);
+		NfAccessTokenSystemOptions nfAccessTokenSystemOptions = 
+				new NfAccessTokenSystemOptions();
+		nfAccessTokenSystemOptions.
+		setOauthTokenAlgorithm(OauthTokenAlgorithm.valueOf(tokenAlgorithm));
+		nrfSystemOptions.setGeneralSystemOptions(generalSystemOptions);
+		nrfSystemOptions.setNfAccessTokenSystemOptions(nfAccessTokenSystemOptions);
+		logMsg.clear();
+		logMsg.put("logMsg", "nrfSystemOptions prepared");		
+		logMsg.put("nrfSystemOptions",nrfSystemOptions);
+		logger.info(logMsg.toString());
+		return nrfSystemOptions;
+	}
+
+}

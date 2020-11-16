@@ -1,0 +1,365 @@
+// Copyright 2018 (C), Oracle and/or its affiliates. All rights reserved.
+package com.oracle.cgbu.cne.common.service;
+
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.concurrent.TimeUnit;
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.apache.logging.log4j.ThreadContext;
+import org.springframework.beans.factory.annotation.Autowired;
+
+import com.google.gson.reflect.TypeToken;
+import com.oracle.cgbu.cne.common.CommonUtils;
+import com.oracle.cgbu.cne.common.config.ConfigurationInfo;
+import com.oracle.cgbu.cne.common.config.ConfigurationInfo.Oauthconfig;
+import com.oracle.cgbu.cne.common.config.ConfigurationInfo.Sslconfig;
+import com.oracle.cgbu.cne.common.service.client.CertReloadClientImpl;
+
+import io.kubernetes.client.openapi.*;
+import io.kubernetes.client.openapi.apis.*;
+import io.kubernetes.client.openapi.models.*;
+import io.kubernetes.client.util.Config;
+import io.kubernetes.client.util.Watch;
+
+public class ConfigWatchProcess implements Runnable {
+
+	
+	private static Logger logger = LogManager.getLogger(ConfigWatchProcess.class);
+	String nameSpace;
+	//certReloadClient
+	private CertReloadClientImpl reloadClient;
+	private  ApiClient client;
+	private CoreV1Api api;
+	ArrayList<String> secretsList;
+	UpdateConfiguration  updateConfig;
+	Map<String, String> resourceVersionMap = null;
+	private ConfigurationInfo  configInfo = null;
+	String configType = null;
+	public ConfigurationInfo getConfigInfo() {
+		return configInfo;
+	}
+	public void setConfigInfo(ConfigurationInfo configInfo) {
+		this.configInfo = configInfo;
+	}
+
+	public ApiClient getClient() {
+		return client;
+	}
+	public String getConfigType() {
+		return configType;
+	}
+	public void setConfigType(String configType) {
+		this.configType = configType;
+	}
+	ConfigWatchProcess( UpdateConfiguration  updateConfig, String nameSpace, 
+			ArrayList<String> secretsList,ConfigurationInfo configInfo ,String configType ,CertReloadClientImpl reloadClient)
+	{
+		this.nameSpace =  nameSpace;
+		this.secretsList = secretsList ;	
+		this.updateConfig = updateConfig;
+		this.resourceVersionMap = new HashMap<>();
+		this.configInfo = configInfo;
+		this.configType = configType;
+		this.reloadClient = reloadClient;
+
+		try {
+			this.client = Config.defaultClient().setReadTimeout(0);
+
+			Configuration.setDefaultApiClient(this.client);
+		} catch (IOException e2) {
+			logger.error("client initialization failed");
+			logger.error("An Exception Occured.");
+			logger.error("StackTrace is: "+e2.toString());
+		}
+		this.api = new CoreV1Api(client);
+		this.setResourceVersionMap();
+
+	}
+	public Map<String, String> getResourceVersionMap() {
+		return resourceVersionMap;
+	}
+	//mapping of secret and ResourceVersion
+	public final void setResourceVersionMap() {
+		for (String  secretResource : getSecretsList()) {
+			getResourceVersionMap().put(secretResource, String.valueOf(0));
+		}
+	}
+
+	public ArrayList<String> getSecretsList() {
+		return secretsList;
+	}
+	
+	public void fillThreadContext(String ServiceOperation) {
+		String nrfTxId = "nrf-tx-" + (int)(Math.random()*Integer.MAX_VALUE);
+		ThreadContext.clearMap();
+		ThreadContext.put("nrfTxId", nrfTxId);
+		ThreadContext.put("subsystem",  ServiceOperation);
+		ThreadContext.put("hostname", System.getenv("HOSTNAME"));
+	}
+
+	@Override
+	public void run() {
+		fillThreadContext("UpdateService");
+		logger.info("Starting ConfigWatchProcess ");	 
+
+		while (true) {
+			// Starting watch on system options
+			try(Watch<V1Secret> watch = watchForNamespace(this.nameSpace)) {
+				try {
+					for (Watch.Response<V1Secret> item : watch) {
+						if(getSecretsList().contains(item.object.getMetadata().getName()))
+						{
+							logger.trace("Item type received is: " + item.type);
+							switch (item.type) {
+							case "ADDED":
+								handleEventAdded(item.object);
+								break;
+							case "MODIFIED":
+								handleEventModified(item.object);
+								break;
+							case "DELETED":
+								handleEventDeleted(item.object);
+								break;
+							default:
+								continue;
+							}
+							break;
+						}
+					}
+				} catch(Exception  e)
+				{
+
+					logger.error("Exception occurred during handling item.type event. Reason: " + e.getMessage());
+				}
+			}
+			catch (Exception excep) {
+				logger.error("Exception occurred while monitoring K8 Resource  "
+						+ excep.getMessage());
+			}
+		}
+
+	}
+
+	private void handleEventAdded(V1Secret secret) {
+		logger.info("handleEventAdded called");
+		handleEventAddModify(secret);	
+		logger.info("Exit from handleEventAdded");
+	}
+
+	private void handleEventModified(V1Secret secret) {
+		logger.info("handleEventModified called");
+		handleEventAddModify(secret);
+		logger.info("Exit from handleEventModified");
+	}
+
+	private void handleEventAddModify(V1Secret secret) {
+		logger.info("Entering handleEventAddModify");
+		String oldResourceVersion = getResourceVersionMap().get(secret.getMetadata().getName());
+		String receivedResourceVersion = secret.getMetadata().getResourceVersion();
+		logger.info("last resource version of this secret resource:"
+				+oldResourceVersion);
+		logger.info("resource version received:"+receivedResourceVersion);
+		if(!oldResourceVersion.equals(receivedResourceVersion))
+		{
+			//Init container already created latest store files
+			//initial value of ResourceVersion set to 0
+			//condition to prevent recreation store files at update-container startup
+			if(!oldResourceVersion.equals(String.valueOf(0)) && checkAllConfigFilesPresent())
+			{
+				//handler function  according to the configtype
+				
+				logger.info("Change in secret configuration");
+				if(getConfigType().equals("SSL"))
+				{	
+					logger.info("SSL reconfiguration required");
+
+					CommonUtils.configureSsl( getConfigInfo().getSslConfig());
+					if(reloadClient != null) {
+						logger.info("Invoking Gateway Cert reload");
+						reloadClient.certReloadRequest();
+					}
+					
+				}
+				else if (getConfigType().equals("OAUTH"))
+				{
+					logger.info("OAuth reconfiguration required");
+					CommonUtils.configureOauth( getConfigInfo().getOauthConfig());	
+				}	
+			}
+			
+			logger.info("updating resource version to the latest received value");
+			//update resource version
+			getResourceVersionMap().put(secret.getMetadata().getName(),receivedResourceVersion);
+		}
+		logger.info("Exit from handleEventAddModify");
+	}
+	private void handleEventDeleted(V1Secret secret) {
+		logger.info("handleEventDeleted called");		
+		String oldResourceVersion = getResourceVersionMap().get(secret.getMetadata().getName());
+		String receivedResourceVersion = secret.getMetadata().getResourceVersion();
+		logger.info("last resource version of this secret resource:"
+				+oldResourceVersion);
+		logger.info("resource version received:"+receivedResourceVersion);
+		logger.info("Exit from handleEventDeleted");
+	}
+
+
+	public boolean checkAllConfigFilesPresent()
+	{
+		boolean configPresent = false;
+		if(getConfigType().equals("SSL"))
+		{	
+			logger.info("Check the presence of SSL Configuration files");
+			configPresent =checkAllSslConfigFilesPresent();
+		}
+		else if (getConfigType().equals("OAUTH"))
+		{		
+			logger.info("Check the presence of OAUTH Configuration files");
+			configPresent = checkAllOauthConfigFilesPresent();
+		}
+		return configPresent;
+	}
+
+	private boolean  checkAllOauthConfigFilesPresent() {
+		boolean oauthConfigFilesPresent = true;
+		Oauthconfig oauthConfig = getConfigInfo().getOauthConfig();
+		ArrayList<String> fileNameList = new ArrayList<>();
+		//private key
+		fileNameList.clear();
+		logger.info("checking presence of oauth configuration for algorithm"+oauthConfig.getInitialAlgorithm());
+		if(oauthConfig.getInitialAlgorithm().equals("RSA256"))
+		{
+			fileNameList.add(oauthConfig.getRsaPrivateKeyFileName());
+		}
+		else
+		{
+			fileNameList.add(oauthConfig.getEcdsaPrivateKeyFileName());
+		}
+		oauthConfigFilesPresent = oauthConfigFilesPresent & 
+				checkConfigFilesPresent(oauthConfig.getPrivateKeySecretNameSpace() ,
+						oauthConfig.getPrivateKeySecretName() ,fileNameList);
+
+	
+
+		//keystore password
+		fileNameList.clear();
+		fileNameList.add(oauthConfig.getKeyStorePasswordFileName());
+		oauthConfigFilesPresent = oauthConfigFilesPresent & 
+				checkConfigFilesPresent(oauthConfig.getKeyStorePasswordSecretNameSpace() ,
+						oauthConfig.getKeyStorePasswordSecretName(),fileNameList);
+
+		logger.info("Oauth configuration present:"+oauthConfigFilesPresent);
+		return oauthConfigFilesPresent;
+	}
+
+
+	private boolean checkAllSslConfigFilesPresent() {
+		boolean sslConfigFilesPresent = true;
+		Sslconfig sslConfig = getConfigInfo().getSslConfig();
+		ArrayList<String> fileNameList = new ArrayList<>();
+		//cabundle
+		logger.info("checking presence of oauth configuration for algorithm"+sslConfig.getInitialAlgorithm());
+		fileNameList.add(sslConfig.getCaBundleFileName());
+		sslConfigFilesPresent = sslConfigFilesPresent & checkConfigFilesPresent(sslConfig.getCaBundleSecretNameSpace() ,
+				sslConfig.getCaBundleSecretName() , fileNameList);
+		//truststore
+
+		fileNameList.clear();
+		fileNameList.add(sslConfig.getTrustStorePasswordFileName());
+		sslConfigFilesPresent = sslConfigFilesPresent & checkConfigFilesPresent(sslConfig.getTrustStorePasswordSecretNameSpace() ,
+				sslConfig.getTrustStorePasswordSecretName() , fileNameList);
+		//keystore
+		fileNameList.clear();
+		fileNameList.add(sslConfig.getKeyStorePasswordFileName());
+		sslConfigFilesPresent = sslConfigFilesPresent & checkConfigFilesPresent(sslConfig.getKeyStorePasswordSecretNameSpace() ,
+				sslConfig.getKeyStorePasswordSecretName(),fileNameList);
+		//private key
+		fileNameList.clear();
+		//depending on the configured algorithm check that corresponding file is present or not
+		if(sslConfig.getInitialAlgorithm().equals("RSA256"))
+		{
+			fileNameList.add(sslConfig.getRsaPrivateKeyFileName());
+		}
+		else
+		{
+			fileNameList.add(sslConfig.getEcdsaPrivateKeyFileName());
+		}
+		sslConfigFilesPresent = sslConfigFilesPresent & checkConfigFilesPresent(sslConfig.getPrivateKeySecretNameSpace() ,
+				sslConfig.getPrivateKeySecretName() ,fileNameList);
+		//public key
+
+		fileNameList.clear();
+		if(sslConfig.getInitialAlgorithm().equals("RSA256"))
+		{
+			fileNameList.add(sslConfig.getRsaCertificateFileName());
+		}
+		else
+		{
+			fileNameList.add(sslConfig.getEcdsaCertificateFileName());
+		}
+		sslConfigFilesPresent = sslConfigFilesPresent & checkConfigFilesPresent(sslConfig.getCertificateSecretNameSpace() ,
+				sslConfig.getCertificateSecretName(),fileNameList);
+		logger.info("SSL configuration present:"+sslConfigFilesPresent);
+		return sslConfigFilesPresent;
+	}
+
+
+
+	private boolean checkConfigFilesPresent(String nameSpace,String secretName,ArrayList<String> fileNameList) {
+
+		try {
+			V1SecretList listSecret = new CoreV1Api().listNamespacedSecret(nameSpace,
+					null, null, null, null,	null, null, null, null, null);
+			for( V1Secret secret: listSecret.getItems())
+			{
+				if(secret.getMetadata().getName().equals(secretName))
+				{
+					Map <String,byte[]> map = secret.getData();	
+					for(String fileName : fileNameList)
+					{
+						if(map.get(fileName) == null)
+						{
+							return false;
+						}
+
+					}
+				}
+			}
+
+		} catch (ApiException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+			logger.error("could not fetch ssl config information."+e.getMessage());
+		}		
+		return true;
+	}
+
+	public Watch<V1Secret> watchForNamespace(String nameSpace)  {
+		Watch<V1Secret> watch = null;
+		//this.getClient().getHttpClient().setReadTimeout(0, TimeUnit.SECONDS);
+		try {
+			watch  = Watch
+					.createWatch(
+							getClient(), getApi().listNamespacedSecretCall(nameSpace, null,
+									null, null, null, null, null, null, null, Boolean.TRUE, null),
+							new TypeToken<Watch.Response<V1Secret>>() {
+							}.getType());
+			logger.info("Watch created for secrets in namespace: "+nameSpace);
+		} catch (ApiException e) {
+
+			logger.debug("Failed to create watch for secrets in namespace:"
+					+nameSpace+" Reason: " + e.getMessage());
+
+		}
+		return watch;
+	}
+	public CoreV1Api getApi() {
+		return api;
+	}
+}
+
+

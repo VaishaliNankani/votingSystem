@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Configuration status="INFO">
+   <Appenders>
+      <Console name="console" target="SYSTEM_OUT">
+         <JsonLayout compact="true" eventEol="true" stacktraceAsString="true">
+            <KeyValuePair key="messageTimeStamp" value="$${date:YY-MM-dd HH:mm:ss.SSSZ}" />
+            <KeyValuePair key="configuredLevel" value="$${env:LOG_LEVEL}" />
+            <KeyValuePair key="application" value="$${env:APP_NAME}" />
+            <KeyValuePair key="eng_version" value="$${env:ENGINEERING_VERSION}" />
+            <KeyValuePair key="mktg_version" value="$${env:MARKETING_VERSION}" />
+            <KeyValuePair key="microservice" value="$${env:MICROSERVICE_NAME}" />
+            <KeyValuePair key="namespace" value="$${env:K8S_NAMESPACE}" />
+            <KeyValuePair key="node" value="$${env:K8S_NODE}" />
+            <KeyValuePair key="pod" value="$${ctx:hostname}" />
+
+            <KeyValuePair key="subsystem" value="$${ctx:subsystem}" />
+            <KeyValuePair key="instanceType" value="prod" />
+            <KeyValuePair key="processId" value="$${sys:PID}" />
+            <KeyValuePair key="nrfTxId" value="$${ctx:nrfTxId}" />
+         </JsonLayout>
+      </Console>
+   </Appenders>
+   <Loggers>
+      <Root level="info" additivity="false">
+         <AppenderRef ref="console" />
+      </Root>
+   </Loggers>
+</Configuration>

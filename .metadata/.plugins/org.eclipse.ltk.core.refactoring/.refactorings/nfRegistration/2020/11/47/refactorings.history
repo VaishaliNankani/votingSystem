@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<session version="1.0">
+<refactoring comment="Copy element &apos;log4j2.xml&apos; to &apos;ociVotingService/src/main/resources&apos;&#x0A;- Original project: &apos;nfRegistration&apos;&#x0A;- Destination element: &apos;ociVotingService/src/main/resources&apos;&#x0A;- Original element: &apos;log4j2.xml&apos;" description="Copy file" destination="=ociVotingService/src\/main\/resources=/gradle_scope=/main=/=/gradle_used_by_scope=/main,test=/" element1="src/main/resources/log4j2.xml" files="1" flags="589830" folders="0" id="org.eclipse.jdt.ui.copy" policy="org.eclipse.jdt.ui.copyResources" stamp="1605465102509" units="0" version="1.0"/>
+</session>

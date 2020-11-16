@@ -1,0 +1,347 @@
+package com.oracle.cgbu.cne.nrf.test;
+
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+import java.util.ArrayList;
+import java.util.Calendar;
+import java.util.List;
+import java.util.UUID;
+
+import org.apache.logging.log4j.Level;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.core.Appender;
+import org.apache.logging.log4j.core.LogEvent;
+import org.apache.logging.log4j.core.Logger;
+import org.junit.After;
+import org.junit.Assert;
+import org.junit.Before;
+import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.mockito.ArgumentCaptor;
+import org.mockito.Captor;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.Mockito;
+import org.springframework.dao.QueryTimeoutException;
+import org.springframework.http.HttpStatus;
+import org.springframework.test.context.TestPropertySource;
+import org.springframework.test.context.junit4.SpringRunner;
+
+import com.oracle.cgbu.cne.nrf.audit.SubscriptionRemoteAuditor;
+import com.oracle.cgbu.cne.nrf.config.NrfConfigurations;
+import com.oracle.cgbu.cne.nrf.config.NrfConfigurations.GlobalConfig;
+import com.oracle.cgbu.cne.nrf.dao.NfSubscription;
+import com.oracle.cgbu.cne.nrf.dao.NfSubscriptionRepository;
+import com.oracle.cgbu.cne.nrf.dao.NrfSystemOptionsDao;
+import com.oracle.cgbu.cne.nrf.domain.Events;
+import com.oracle.cgbu.cne.nrf.dao.NrfSystemOptionsRepository;
+import com.oracle.cgbu.cne.nrf.domain.ProblemDetails;
+import com.oracle.cgbu.cne.nrf.domain.SubscriptionData;
+import com.oracle.cgbu.cne.nrf.domain.SubscriptionStatus;
+import com.oracle.cgbu.cne.nrf.domain.VersionedJsonDoc;
+import com.oracle.cgbu.cne.nrf.domain.VersionedJsonDocList;
+import com.oracle.cgbu.cne.nrf.metrics.CommonNrfMetrics;
+import com.oracle.cgbu.cne.nrf.metrics.NrfMetrics;
+import com.oracle.cgbu.cne.nrf.service.NrfEventManager;
+
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.Metrics;
+
+@RunWith(SpringRunner.class)
+@TestPropertySource("classpath:application-test.properties")
+public class SubscriptionRemoteAuditorTest {
+	
+	@Mock
+	private NfSubscriptionRepository subRepo;
+	
+	@Mock
+	private NrfSystemOptionsRepository nrfSystemOptionsRepository;
+
+	@Mock
+	NrfMetrics nrfMetrics;
+	
+	@InjectMocks
+	SubscriptionRemoteAuditor obj;
+	
+	private NrfConfigurations config =new NrfConfigurations();
+	
+	private String serviceOperation="NrfAuditor";
+	private String FIND="find";
+	private String NF_SUBSCRIPTION="NfSubscription";
+	private String CREATE="create";
+	private String REQUEST_METHOD="NotApplicable";
+	
+	int count_dbmetrics_find_nfsubscription_200_OK;
+	int count_dbmetrics_create_nfsubscription_200_OK;
+	
+	@Mock
+	private Appender mockAppender;
+	
+	@Mock
+	private NrfMetrics NrfMetrics;
+	@Mock
+	private NrfEventManager nrfEventManager;
+
+	@Captor
+	private ArgumentCaptor<LogEvent> captorLoggingEvent;
+
+	private Logger logger;
+	
+	@Before
+	public void setUp() throws Exception {
+		obj.setCommonNrfMetrics(new CommonNrfMetrics());
+		this.config.setGlobalConfig(new GlobalConfig());
+		config.getGlobalConfig().setNrfInstanceId("6faf1bbc-6e4a-4454-a507-a14ef8e1bc5c");
+		obj.setConfig(config);
+		this.obj.setNrfMetrics(new NrfMetrics());
+		Metrics.globalRegistry.config().commonTags("NrfLevel","default-ocnrf");
+		NrfSystemOptionsDao systemOptionsDao = TestDataGenerator.generateNrfSystemOptionsDao();
+		NrfSystemOptionsDao systemOptionsDaoError = TestDataGenerator.generateNrfSystemOptionsDao_errorResponses();
+		NrfSystemOptionsDao systemOptionsDaoEngError = TestDataGenerator.generateNrfSystemOptionsDao_engErrorResponses();
+		NrfSystemOptionsDao engSystemOptionsDao = TestDataGenerator.generateNrfEngSystemOptionsDao();
+		ArrayList<NrfSystemOptionsDao> systemOptionsList = new ArrayList<NrfSystemOptionsDao>() { 
+            { 
+                add(systemOptionsDao); 
+                add(engSystemOptionsDao); 
+                add(systemOptionsDaoError);
+                add(systemOptionsDaoEngError);
+                
+            } 
+        }; 
+		when(nrfSystemOptionsRepository.findbyRecordOwner((any())).thenReturn(systemOptionsList);
+			TestDataGenerator.generateNrfSystemOptionsDao());
+		when(mockAppender.getName()).thenReturn("MockAppender");
+		when(mockAppender.isStarted()).thenReturn(true);
+		when(mockAppender.isStopped()).thenReturn(false);
+		logger = (Logger)LogManager.getRootLogger();
+		logger.addAppender(mockAppender);
+		logger.setLevel(Level.INFO);
+	}
+
+	@After
+	public void tearDown() throws Exception {
+		logger.removeAppender(mockAppender);
+		Metrics.globalRegistry.getMeters().forEach((meter) -> Metrics.globalRegistry.remove(meter));
+	}
+	
+	@Test
+	public void test_auditCycle_dbRecordCreatedSuccessfully() {
+		
+		// success case
+		try {
+			this.count_dbmetrics_find_nfsubscription_200_OK = (int)Metrics.globalRegistry.get("ocnrf.dbmetrics").tag("method",REQUEST_METHOD).
+					tag("dbOperation",FIND).tag("serviceOperation",serviceOperation).tag("HttpStatusCode",String.valueOf((HttpStatus.OK).value())).tag("tableName", NF_SUBSCRIPTION).counter().count();
+		} catch (Exception e) {
+			this.count_dbmetrics_find_nfsubscription_200_OK=0;		
+		}
+		
+		try {
+			this.count_dbmetrics_create_nfsubscription_200_OK = (int)Metrics.globalRegistry.get("ocnrf.dbmetrics").
+					tag("dbOperation",CREATE).tag("serviceOperation",serviceOperation).tag("HttpStatusCode",String.valueOf((HttpStatus.CREATED).value())).tag("tableName", NF_SUBSCRIPTION).counter().count();
+		} catch (Exception e) {
+			this.count_dbmetrics_create_nfsubscription_200_OK=0;		
+		}
+		
+		SubscriptionData subscriptionData = TestDataGenerator.generateSubscriptionDataWithNfInstanceId();
+		Calendar c = Calendar.getInstance();
+		c.add(Calendar.DATE, -90);
+		subscriptionData.setValidityTime(c.getTime());
+		NfSubscription nfSubscription = new NfSubscription(subscriptionData, "6faf1bbc-6e4a-4454-a507-a14ef8e1bc5d");
+		List<NfSubscription> subscriptionsWithOtherNrfInstanceId = new ArrayList<>();
+		subscriptionsWithOtherNrfInstanceId.add(nfSubscription);
+		
+		Counter search = Metrics.globalRegistry.find("ocnrf.nfSubscriptions.switch.over").tag("SubscriptionId",nfSubscription.getSubscriptionId()).tag("ServiceOperation","NrfAuditor").tag("RemoteNrfInstanceId", "6faf1bbc-6e4a-4454-a507-a14ef8e1bc5d").tag("OperationType", "NotApplicable").counter();
+		double response = (search != null) ? search.count() : 0;
+		
+		List<String> subscriptionIdWithOwnNrfInstanceId = new ArrayList<>();
+		subscriptionIdWithOwnNrfInstanceId.add(UUID.randomUUID().toString());
+		
+		NfSubscription modifiedNfSubscription = new NfSubscription(subscriptionData,config.getGlobalConfig().getNrfInstanceId());
+		modifiedNfSubscription.setSubscriptionStatus(SubscriptionStatus.SUSPENDED);
+		
+		when(subRepo.fetchSubscriptionsHavingOtherRecordOwner(any(),Mockito.anyLong())).thenReturn(subscriptionsWithOtherNrfInstanceId);
+		when(subRepo.fetchSubscriptionIdsHavingOwnRecordOwner(any())).thenReturn(subscriptionIdWithOwnNrfInstanceId);
+		when(subRepo.saveAndFlush(any(NfSubscription.class))).thenReturn(modifiedNfSubscription);
+		obj.auditCycle();
+		
+		Assert.assertEquals(config.getGlobalConfig().getNrfInstanceId(), modifiedNfSubscription.getRecordOwner());
+		Assert.assertEquals(SubscriptionStatus.SUSPENDED, modifiedNfSubscription.getSubscriptionStatus());
+		
+		Assert.assertEquals(response+1, Metrics.globalRegistry.find("ocnrf.nfSubscriptions.switch.over").tag("SubscriptionId", nfSubscription.getSubscriptionId()).tag("ServiceOperation","NrfAuditor").tag("RemoteNrfInstanceId", "6faf1bbc-6e4a-4454-a507-a14ef8e1bc5d").tag("OperationType", "NotApplicable").counter().count(),1);
+		
+		Assert.assertEquals(Metrics.globalRegistry.get("ocnrf.dbmetrics")
+      			.tag("dbOperation",FIND).tag("serviceOperation",serviceOperation).tag("HttpStatusCode",String.valueOf((HttpStatus.OK).value())).tag("tableName",NF_SUBSCRIPTION ).counter().count(), this.count_dbmetrics_find_nfsubscription_200_OK+2,0);
+
+		Assert.assertEquals(Metrics.globalRegistry.get("ocnrf.dbmetrics")
+      			.tag("dbOperation",CREATE).tag("serviceOperation",serviceOperation).tag("HttpStatusCode",String.valueOf((HttpStatus.CREATED).value())).tag("tableName",NF_SUBSCRIPTION ).counter().count(), this.count_dbmetrics_create_nfsubscription_200_OK+1,0);
+
+	}
+	
+	@Test
+	public void test_auditCycle_subscriptionIdWithOwnNrfInstanceIdReturnEmpty() {
+
+		// subscriptionIdWithOwnNrfInstanceId return empty
+		
+		try {
+			this.count_dbmetrics_find_nfsubscription_200_OK = (int)Metrics.globalRegistry.get("ocnrf.dbmetrics").tag("method",REQUEST_METHOD).
+					tag("dbOperation",FIND).tag("serviceOperation",serviceOperation).tag("HttpStatusCode",String.valueOf((HttpStatus.OK).value())).tag("tableName", NF_SUBSCRIPTION).counter().count();
+		} catch (Exception e) {
+			this.count_dbmetrics_find_nfsubscription_200_OK=0;		
+		}
+		
+		try {
+			this.count_dbmetrics_create_nfsubscription_200_OK = (int)Metrics.globalRegistry.get("ocnrf.dbmetrics").
+					tag("dbOperation",CREATE).tag("serviceOperation",serviceOperation).tag("HttpStatusCode",String.valueOf((HttpStatus.CREATED).value())).tag("tableName", NF_SUBSCRIPTION).counter().count();
+		} catch (Exception e) {
+			this.count_dbmetrics_create_nfsubscription_200_OK=0;		
+		}
+
+		SubscriptionData subscriptionData = TestDataGenerator.generateSubscriptionDataWithNfInstanceId();
+		Calendar c = Calendar.getInstance();
+		c.add(Calendar.DATE, -90);
+		subscriptionData.setValidityTime(c.getTime());
+		NfSubscription nfSubscription = new NfSubscription(subscriptionData, UUID.randomUUID().toString());
+		List<NfSubscription> subscriptionsWithOtherNrfInstanceId = new ArrayList<>();
+		subscriptionsWithOtherNrfInstanceId.add(nfSubscription);
+		
+		List<String> subscriptionIdWithOwnNrfInstanceId = new ArrayList<>();
+		
+		NfSubscription modifiedNfSubscription = new NfSubscription(subscriptionData,config.getGlobalConfig().getNrfInstanceId());
+		modifiedNfSubscription.setSubscriptionStatus(SubscriptionStatus.SUSPENDED);
+		
+		when(subRepo.fetchSubscriptionsHavingOtherRecordOwner(any(),Mockito.anyLong())).thenReturn(subscriptionsWithOtherNrfInstanceId);
+		when(subRepo.fetchSubscriptionIdsHavingOwnRecordOwner(any())).thenReturn(subscriptionIdWithOwnNrfInstanceId);
+		when(subRepo.saveAndFlush(any(NfSubscription.class))).thenReturn(modifiedNfSubscription);
+		obj.auditCycle();
+		
+
+		Assert.assertEquals(config.getGlobalConfig().getNrfInstanceId(), modifiedNfSubscription.getRecordOwner());
+		ArgumentCaptor<NfSubscription> argument1 = ArgumentCaptor.forClass(NfSubscription.class);
+        ArgumentCaptor<Events> argument2 = ArgumentCaptor.forClass(Events.class);
+        Mockito.verify(nrfEventManager, Mockito.times(1)).recordSubscriptionAuditEvent(argument1.capture(),argument2.capture());
+        Assert.assertEquals(Events.AUDIT_REMOTE_SUBSCRIPTION_EXPIRED_EVENT, argument2.getAllValues().get(0));
+		
+		Assert.assertEquals(config.getGlobalConfig().getNrfInstanceId(), modifiedNfSubscription.getRecordOwner());
+		Assert.assertEquals(SubscriptionStatus.SUSPENDED, modifiedNfSubscription.getSubscriptionStatus());
+		
+		Assert.assertEquals(Metrics.globalRegistry.get("ocnrf.dbmetrics").tag("method",REQUEST_METHOD)
+      			.tag("dbOperation",FIND).tag("serviceOperation",serviceOperation).tag("HttpStatusCode",String.valueOf((HttpStatus.OK).value())).tag("tableName",NF_SUBSCRIPTION ).counter().count(), this.count_dbmetrics_find_nfsubscription_200_OK+2,0);
+
+		
+		Assert.assertEquals(Metrics.globalRegistry.get("ocnrf.dbmetrics")
+      			.tag("dbOperation",CREATE).tag("serviceOperation",serviceOperation).tag("HttpStatusCode",String.valueOf((HttpStatus.CREATED).value())).tag("tableName",NF_SUBSCRIPTION ).counter().count(), this.count_dbmetrics_create_nfsubscription_200_OK+1,0);
+		
+		// when DbSave return null
+		when(subRepo.saveAndFlush(any(NfSubscription.class))).thenReturn(null);
+		obj.auditCycle();
+		verify(mockAppender,atLeastOnce()).append((LogEvent)captorLoggingEvent.capture());
+		List<LogEvent> loggingEvent = captorLoggingEvent.getAllValues();
+		List<String> logs = new ArrayList<String>();
+		ProblemDetails prob = ProblemDetails.forInternalError();
+		prob.setCause("Could not create new record for the remote record");
+		prob.setDetail("Db value returned null");
+		for(LogEvent logEvt:loggingEvent) {
+			logs.add(logEvt.getMessage().getFormattedMessage());
+		}
+		
+		Assert.assertTrue(logs.toString().contains("New record creation for remote record failed with problemDetails"));
+		Assert.assertTrue(logs.toString().contains(prob.toString()));
+				
+		// when Subscription casting throws exception
+		subscriptionsWithOtherNrfInstanceId.clear();
+		nfSubscription = new NfSubscription(subscriptionData, UUID.randomUUID().toString());
+		List<VersionedJsonDoc> list = new ArrayList<>();
+		VersionedJsonDoc versionJsonDoc = new VersionedJsonDoc();
+		versionJsonDoc.setVersion("v1");
+		versionJsonDoc.setDoc("aaa");
+		list.add(versionJsonDoc);
+		VersionedJsonDocList versionJsonDocList = new VersionedJsonDocList();
+		versionJsonDocList.setVersionedJsonDocList(list);
+		nfSubscription.setSubscriptionJsonDocList(versionJsonDocList.toString());
+		subscriptionsWithOtherNrfInstanceId.add(nfSubscription);
+		when(subRepo.fetchSubscriptionsHavingOtherRecordOwner(any(),Mockito.anyLong())).thenReturn(subscriptionsWithOtherNrfInstanceId);
+		obj.auditCycle();
+		verify(mockAppender,atLeastOnce()).append((LogEvent)captorLoggingEvent.capture());
+		loggingEvent = captorLoggingEvent.getAllValues();
+		logs = new ArrayList<String>();
+		for(LogEvent logEvt:loggingEvent) {
+			logs.add(logEvt.getMessage().getFormattedMessage());
+		}
+		
+		prob = ProblemDetails.forInternalError();
+		prob.setCause("Could not cast nfSubscription.Doc to SubscriptionData");
+		Assert.assertTrue(logs.toString().contains("nfSubscription.Doc typeCasting failed with problemDetails"));
+		Assert.assertTrue(logs.toString().contains(prob.toString()));
+	
+	}
+	
+	@Test
+	public void test_auditCycle_dbRecordReturnException() {
+				
+		SubscriptionData subscriptionData = TestDataGenerator.generateSubscriptionDataWithNfInstanceId();
+		Calendar c = Calendar.getInstance();
+		c.add(Calendar.DATE, -90);
+		subscriptionData.setValidityTime(c.getTime());
+		NfSubscription nfSubscription = new NfSubscription(subscriptionData, UUID.randomUUID().toString());
+		List<NfSubscription> subscriptionsWithOtherNrfInstanceId = new ArrayList<>();
+		subscriptionsWithOtherNrfInstanceId.add(nfSubscription);
+		
+		List<String> subscriptionIdWithOwnNrfInstanceId = new ArrayList<>();
+		subscriptionIdWithOwnNrfInstanceId.add(UUID.randomUUID().toString());
+		
+		NfSubscription modifiedNfSubscription = new NfSubscription(subscriptionData,config.getGlobalConfig().getNrfInstanceId());
+		modifiedNfSubscription.setSubscriptionStatus(SubscriptionStatus.SUSPENDED);
+		
+		Exception exception =new Exception();		
+		
+		when(subRepo.fetchSubscriptionsHavingOtherRecordOwner(any(),Mockito.anyLong())).thenThrow(new QueryTimeoutException("Query Timed out"));
+		when(subRepo.fetchSubscriptionIdsHavingOwnRecordOwner(any())).thenThrow(new QueryTimeoutException("Query Timed out"));
+		obj.auditCycle();
+		
+		verify(mockAppender,atLeastOnce()).append((LogEvent)captorLoggingEvent.capture());
+		List<LogEvent> loggingEvent = captorLoggingEvent.getAllValues();
+		List<String> logs = new ArrayList<String>();
+		for(LogEvent logEvt:loggingEvent) {
+			logs.add(logEvt.getMessage().getFormattedMessage());
+		}
+		Assert.assertTrue(logs.toString().contains("Exception in fetching subscriptionsHavingOtherNrfInstanceId : Query Timed out"));
+		
+		}
+	
+	@Test
+	public void test_auditCycle_fetchSubscriptionIdsHavingOwnNrfInstanceId_dbRecordReturnException() {
+				
+		SubscriptionData subscriptionData = TestDataGenerator.generateSubscriptionDataWithNfInstanceId();
+		Calendar c = Calendar.getInstance();
+		c.add(Calendar.DATE, -90);
+		subscriptionData.setValidityTime(c.getTime());
+		NfSubscription nfSubscription = new NfSubscription(subscriptionData, UUID.randomUUID().toString());
+		List<NfSubscription> subscriptionsWithOtherNrfInstanceId = new ArrayList<>();
+		subscriptionsWithOtherNrfInstanceId.add(nfSubscription);
+		
+		List<String> subscriptionIdWithOwnNrfInstanceId = new ArrayList<>();
+		subscriptionIdWithOwnNrfInstanceId.add(UUID.randomUUID().toString());
+		
+		NfSubscription modifiedNfSubscription = new NfSubscription(subscriptionData,config.getGlobalConfig().getNrfInstanceId());
+		modifiedNfSubscription.setSubscriptionStatus(SubscriptionStatus.SUSPENDED);
+		
+		
+		when(subRepo.fetchSubscriptionsHavingOtherRecordOwner(any(),Mockito.anyLong())).thenReturn(subscriptionsWithOtherNrfInstanceId);
+		when(subRepo.fetchSubscriptionIdsHavingOwnRecordOwner(any())).thenThrow(new QueryTimeoutException("Query Timed out"));
+		obj.auditCycle();
+		verify(mockAppender,atLeastOnce()).append((LogEvent)captorLoggingEvent.capture());
+		List<LogEvent> loggingEvent = captorLoggingEvent.getAllValues();
+		List<String> logs = new ArrayList<String>();
+		for(LogEvent logEvt:loggingEvent) {
+			logs.add(logEvt.getMessage().getFormattedMessage());
+		}
+		Assert.assertTrue(logs.toString().contains("Exception in fetching subscriptionIdsWithOwnNrfInstanceId : Query Timed out"));
+
+		
+	}
+
+	
+}

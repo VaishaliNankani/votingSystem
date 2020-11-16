@@ -1,0 +1,58 @@
+package com.oracle.oci.votingservice.domain;
+
+import javax.validation.constraints.NotNull;
+
+import com.fasterxml.jackson.annotation.JsonInclude;
+@JsonInclude(JsonInclude.Include.NON_NULL)
+public class CandidateData {
+	
+	@NotNull
+	private long candidateId;	
+	@NotNull
+	private String  candidateName = null;
+	@NotNull
+	private String  party = null;
+	@NotNull
+	private String constituency  = null;	
+	@NotNull(message = "gender should be present with a valid value")
+	private Gender gender  = null;
+	private long numVotes;
+	
+	public long getCandidateId() {
+		return candidateId;
+	}
+	public void setCandidateId(long candidateId) {
+		this.candidateId = candidateId;
+	}
+	public String getCandidateName() {
+		return candidateName;
+	}
+	public void setCandidateName(String candidateName) {
+		this.candidateName = candidateName;
+	}
+	public String getParty() {
+		return party;
+	}
+	public void setParty(String party) {
+		this.party = party;
+	}
+	public String getConstituency() {
+		return constituency;
+	}
+	public void setConstituency(String constituency) {
+		this.constituency = constituency;
+	}
+	public Gender getGender() {
+		return gender;
+	}
+	public void setGender(Gender gender) {
+		this.gender = gender;
+	}
+	public long getNumVotes() {
+		return numVotes;
+	}
+	public void setNumVotes(long numVotes) {
+		this.numVotes = numVotes;
+	}
+	
+}

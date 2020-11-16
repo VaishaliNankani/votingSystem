@@ -1,0 +1,15 @@
+// Copyright 2018 (C), Oracle and/or its affiliates. All rights reserved.
+
+package com.oracle.cgbu.cne.nrf;
+
+public class NrfConfigException extends RuntimeException {
+	public NrfConfigException() {
+		super();
+	}
+
+	public NrfConfigException(String message) {
+		super(message);
+	}
+
+	private static final long serialVersionUID = 1L;	
+}

@@ -1,0 +1,66 @@
+// Copyright 2018 (C), Oracle and/or its affiliates. All rights reserved.
+
+apply plugin: "application"
+mainClassName = "com.oracle.cgbu.cne.nrf.UpgradeOcnrfApplication"
+
+bootJar {
+    baseName = 'upgrade-ocnrf'
+}
+
+dependencies {
+        /*compile project(':common')
+     	//Below line can be commented to run the microservice locally, gradle refresh the project once commented
+        compile fileTree(dir: "${project.projectDir}/../common/build/libs", include: '*.jar')
+        implementation fileTree(dir: "${project.projectDir}/../common/build/libs", include: '*.jar')*/
+        compile group: 'io.prometheus', name: 'simpleclient_pushgateway', version: '0.8.0' 
+        compile group: 'io.prometheus', name: 'simpleclient_common', version: '0.8.0'       
+ }
+group = 'nrf'
+
+apply plugin: 'com.palantir.docker'
+
+test {
+	jvmArgs '--illegal-access=deny'
+ 	if(project.hasProperty('passWithWarning') && passWithWarning.equals('true')) {
+	 	jvmArgs '--illegal-access=permit'
+	 }
+ 	 failFast = true
+    onOutput { descriptor, event ->
+        if (event.message.contains('java.lang.reflect.InaccessibleObjectException')) {
+            throw new GradleException("\n\tERROR: Please fix illegal reflective access warnings.\n")
+        }
+    }
+}
+def getImageName = { ->
+    def projectName = project.name.toLowerCase()
+    def projectVersion = project.version.toString().toLowerCase()
+    def rootProjectName = rootProject.name
+    return "${rootProjectName}-${projectName}:${projectVersion.replaceAll("\\+", "_")}"
+}
+
+docker {
+    dependsOn build
+    name "${getImageName()}"
+    files "${bootJar.archivePath}"
+    buildArgs(['JAR_FILE': "${bootJar.archiveName}"])    
+    new File("${projectDir}/${project.name}_tag.txt").text = "$name"
+}
+configurations.all {
+        //exclude group: "org.springframework.boot", module:"spring-boot-starter-web" 
+            
+        exclude group: "com.github.seancfoley"
+        exclude group: "io.springfox"
+        exclude group: "io.jsonwebtoken"
+        exclude group: "org.apache.httpcomponents"
+        exclude group: "javax.activation"
+        exclude group: "commons-beanutils"
+        exclude group: "com.google.guava"
+        exclude group: "commons-io"
+        exclude group: "io.kubernetes"
+        exclude group: "ch.vorburger.mariaDB4j"
+        exclude group: "com.h2database"
+        exclude group: "org.eclipse.jetty"
+            }
+clean.doLast {
+   file("${project.name}_tag.txt").delete()
+}

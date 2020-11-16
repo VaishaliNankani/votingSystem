@@ -1,0 +1,100 @@
+// Copyright 2020 (C), Oracle and/or its affiliates. All rights reserved.
+
+package com.oracle.oci.votingservice.domain;
+
+import java.net.URI;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+import javax.validation.Valid;
+import javax.validation.constraints.NotNull;
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.springframework.validation.annotation.Validated;
+import com.fasterxml.jackson.annotation.JsonInclude;
+
+
+
+@JsonInclude(JsonInclude.Include.NON_NULL)
+@Validated
+public class RegistrationData extends AbstractDto {
+	private static Logger logger = LogManager.getLogger(RegistrationData.class);	
+	public RegistrationData(long voterId, String voterName, String address, 
+			long phoneNumber, boolean voteCasted) {
+		super();
+		this.voterId = voterId;
+		this.voterName = voterName;
+		this.address = address;
+		this.phoneNumber = phoneNumber;
+		this.voteCasted = voteCasted;
+	}
+	@NotNull
+	private long voterId;	
+	@NotNull
+	private String  voterName = null;
+	@NotNull
+	private String address  = null;
+	@NotNull
+	private long phoneNumber  ;
+	
+	@NotNull(message = "gender should be present with a valid value")
+	private Gender gender;	
+	//wont be received as input
+	private boolean voteCasted ;
+	
+	@NotNull
+	private int age;	
+	
+	public int getAge() {
+		return age;
+	}
+	public void setAge(int age) {
+		this.age = age;
+	}
+	
+	public Gender getGender() {
+		return gender;
+	}
+	public void setGender(Gender gender) {
+		this.gender = gender;
+	}	
+	
+	public String getVoterName() {
+		return voterName;
+	}
+	public void setVoterName(String voterName) {
+		this.voterName = voterName;
+	}
+	public String getAddress() {
+		return address;
+	}
+	public void setAddress(String address) {
+		this.address = address;
+	}
+	public long getPhoneNumber() {
+		return phoneNumber;
+	}
+	public void setPhoneNumber(long phoneNumber) {
+		this.phoneNumber = phoneNumber;
+	}
+	public boolean getVoteCasted() {
+		return voteCasted;
+	}
+	public void setVoteCasted(boolean voteCasted) {
+		this.voteCasted = voteCasted;
+	}
+	public long getVoterId() {
+		return voterId;
+	}
+	public void setVoterId(long voterId) {
+		this.voterId = voterId;
+	}
+
+}

@@ -1,0 +1,1257 @@
+// Copyright 2018 (C), Oracle and/or its affiliates. All rights reserved.
+
+package com.oracle.cgbu.cne.nrf.rest;
+
+import java.net.URI;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.ListIterator;
+import java.util.Map;
+
+import javax.servlet.http.HttpServletRequest;
+import javax.validation.Valid;
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.apache.logging.log4j.ThreadContext;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.validation.BindingResult;
+import org.springframework.validation.FieldError;
+import org.springframework.validation.ObjectError;
+import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RequestMethod;
+import org.springframework.web.bind.annotation.RestController;
+
+import com.fasterxml.jackson.annotation.JsonInclude.Include;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.oracle.cgbu.cne.nrf.NrfConfigException;
+import com.oracle.cgbu.cne.nrf.NrfException;
+import com.oracle.cgbu.cne.nrf.annotations.NFTypeValidator;
+import com.oracle.cgbu.cne.nrf.config.NrfConfigurations;
+import com.oracle.cgbu.cne.nrf.config.NrfSystemOptionsManager;
+import com.oracle.cgbu.cne.nrf.domain.ErrorCondition;
+import com.oracle.cgbu.cne.nrf.domain.ErrorInfo;
+import com.oracle.cgbu.cne.nrf.domain.FeatureStatus;
+import com.oracle.cgbu.cne.nrf.domain.ForwardingData;
+import com.oracle.cgbu.cne.nrf.domain.GenericResponse;
+import com.oracle.cgbu.cne.nrf.domain.InvalidParam;
+import com.oracle.cgbu.cne.nrf.domain.NfConfig;
+import com.oracle.cgbu.cne.nrf.domain.NfProfile;
+import com.oracle.cgbu.cne.nrf.domain.NotificationData;
+import com.oracle.cgbu.cne.nrf.domain.NrfEngSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.NrfSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.PatchItem;
+import com.oracle.cgbu.cne.nrf.domain.ProblemDetails;
+import com.oracle.cgbu.cne.nrf.domain.SubscriptionData;
+import com.oracle.cgbu.cne.nrf.domain.UriScheme;
+import com.oracle.cgbu.cne.nrf.metrics.MetricsDimension;
+import com.oracle.cgbu.cne.nrf.metrics.NrfMetrics;
+import com.oracle.cgbu.cne.nrf.service.NfSubsService;
+import com.oracle.cgbu.cne.nrf.service.helper.NrfServiceStatus;
+import com.oracle.cgbu.cne.nrf.service.helper.ValidationHelper;
+
+@RestController()
+public class NFSubscriptionController implements NfSubscriptionApi {
+	private static Logger logger = LogManager.getLogger(NFSubscriptionController.class);
+
+	private final ObjectMapper objectMapper;
+	private final HttpServletRequest request;
+
+	private NrfConfigurations nrfConfig;
+
+	@Autowired
+	private NrfMetrics nrfMetrics;
+	
+	@Autowired
+	ValidationHelper validationHelper;
+
+
+	@Autowired
+	private NfSubsService nrfService;
+
+	@Autowired
+	private NrfSystemOptionsManager nrfSystemOptionsManager;
+
+	private long msgProcessStartTime;
+
+	private NrfSystemOptions nrfSystemOptions;
+
+	private NrfEngSystemOptions nrfEngSystemOptions;
+
+	@Autowired
+	MetricsDimension metricsDimension;
+
+	public MetricsDimension getMetricsDimension() {
+		return metricsDimension;
+	}
+
+	public void setMetricsDimension(MetricsDimension metricsDimension) {
+		this.metricsDimension = metricsDimension;
+	}
+
+	private static final String PRIMARY = "primary";
+	private static final String SECONDARY = "secondary";
+	public static final Integer HTTP_PORT = 80;
+	public static final Integer HTTPS_PORT = 443;
+	private static final int PRIMARY_NRF_INDEX = 0;
+	private static final int SECONDARY_NRF_INDEX = 1;
+
+	@Value("${nrf.sub-svc.pod-name}")
+	private String podName;
+
+	@Autowired
+	public NFSubscriptionController(ObjectMapper objectMapper, HttpServletRequest request) {
+		this.objectMapper = objectMapper;
+		this.request = request;
+		this.objectMapper.setSerializationInclusion(Include.NON_NULL);
+		this.objectMapper.setSerializationInclusion(Include.NON_EMPTY);
+	}
+
+	@Autowired
+	public void setNrfConfig(NrfConfigurations config) {
+		if (config == null || config.getSubSvc() == null) {
+			throw new NrfConfigException("Bad NRF configuration. Missing 'nrf.sub-svc.*' properties.");
+		}
+		this.nrfConfig = config;
+
+		if (config.getSubSvc().getPublishedResourceApi() == null
+				|| config.getSubSvc().getPublishedResourceApi().isEmpty()) {
+			throw new NrfConfigException("Bad NRF configuration. Missing 'nrf.sub-svc.resource-api' property.");
+		}
+
+	}
+
+	private String fetchSubscriptionServiceExternalURI() {
+		NrfConfigurations.ServiceConfig ep = nrfConfig.getSubSvc();
+		String uri = "";
+		uri = ((ep.getUriSchema() == null) ? "http" : ep.getUriSchema()) + "://";
+		uri += nrfSystemOptions.getGeneralSystemOptions().getOcnrfEndPointHost().trim();
+		uri += ":" + nrfSystemOptions.getGeneralSystemOptions().getOcnrfEndPointPort() + "/";
+
+		uri += ep.getPublishedResourceApi();
+
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+
+		logMsg.clear();
+		logMsg.put("logMsg", "Subscription Controller External URI");
+		logMsg.put("uri", uri);
+		logger.info(logMsg.toString());
+		return uri;
+	}
+
+	public void fillThreadContext(String nrfTxId, String ServiceOperation, String ocLogId) {
+		ThreadContext.clearMap();
+		ThreadContext.put("nrfTxId", nrfTxId);
+		ThreadContext.put("subsystem", ServiceOperation);
+		ThreadContext.put("hostname", System.getenv("HOSTNAME"));
+		ThreadContext.put("ocLogId", ocLogId);
+
+	}
+
+	private String generateTraceId() {
+		StringBuilder traceId = new StringBuilder().append(System.currentTimeMillis()).append("_")
+				.append(Thread.currentThread().getId()).append("_").append(podName);
+		return traceId.toString();
+	}
+
+	public String extractUUID() {
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		String ocLogIdGenerated = generateTraceId();
+		if (this.request.getHeader("ocLogId") == null) {
+			logMsg.clear();
+			logMsg.put("logMsg", "ocLogId not received in Header");
+			logMsg.put("ocLogIdGenerated", ocLogIdGenerated);
+			logger.warn(logMsg.toString());
+			return ocLogIdGenerated;
+		}
+
+		String uuid = this.request.getHeader("ocLogId").toString();
+		logMsg.clear();
+		logMsg.put("logMsg", "ocLogId extracted from Header");
+		logMsg.put("ocLogIdTriggered", uuid);
+		logMsg.put("ocLogIdGenerated", ocLogIdGenerated);
+		logger.info(logMsg.toString());
+		return uuid + ":" + ocLogIdGenerated;
+	}
+
+	public String validateOriginatorNfType(String originatorNfType) {
+		NFTypeValidator nFTypeValidator = new NFTypeValidator();
+		boolean status = nFTypeValidator.isValid(originatorNfType, null);
+		if (status) {
+			return originatorNfType;
+		}
+		return "UNKNOWN";
+	}
+
+	private String getUriPrefix() {
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+
+		String uri = ((nrfConfig.getSubSvc().getUriSchema() == null) ? "http" : nrfConfig.getSubSvc().getUriSchema())
+				+ "://";
+		String host = this.request.getHeader("Host");
+		if (host != null) {
+			logMsg.clear();
+			logMsg.put("logMsg", "Host header received but not used");
+			logger.info(logMsg.toString());
+		}
+
+		uri = this.fetchSubscriptionServiceExternalURI() + "/";
+		return uri;
+	}
+
+	@Override
+	public ResponseEntity<Object> nfStatusSubscribe(@Valid @RequestBody SubscriptionData body,
+			BindingResult bindingResult) {
+		String serviceOperation = "NfSubscribe";
+		String nrfTxId = "nrf-tx-" + (int) (Math.random() * Integer.MAX_VALUE);
+		fillThreadContext(nrfTxId, "nfStatusSubscribe", extractUUID());
+
+		// Set Controller's and Service's NrfSystemOptions and NrfEngSystemOptions
+		setNrfSystemAndEngineeringOptions();
+
+		/* fetch nf authentication status for nfSubscription */
+		FeatureStatus nfSubscriptionAuthenticationStatus = ( nrfSystemOptions.getNfAuthenticationSystemOptions() == null )nrfSystemOptions.getNfAuthenticationSystemOptions()
+				.getNfSubscriptionAuthenticationStatus();
+
+		nrfService.setNrfSystemAndEngineeringOptions(nrfSystemOptions, nrfEngSystemOptions);
+
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		msgProcessStartTime = nrfMetrics.getCurrentTime();
+		metricsDimension.setMethod(RequestMethod.POST);
+		metricsDimension.setServiceOperation(serviceOperation);
+
+		logMsg.clear();
+		logMsg.put("logMsg", "NF status subscription request received");
+		logMsg.put("body", body);
+		logger.info(logMsg.toString());
+
+		if (NrfServiceStatus.getNnrfManagementServiceAlive() == false) {
+			logMsg.clear();
+			logMsg.put("logMsg",
+					"Service unavailable. NnrfManagement service is down as registration service or auditor service is down");
+			logMsg.put("SubscriptionData", body);
+			logger.warn(logMsg.toString());
+			ProblemDetails prob = new ProblemDetails(HttpStatus.SERVICE_UNAVAILABLE.value());
+			nrfMetrics.pegSubscriptionResponse("UNKNOWN", HttpStatus.valueOf(prob.getStatus()), "Create",
+					msgProcessStartTime);
+			return ResponseEntity.status(prob.getStatus()).contentType(MediaType.APPLICATION_PROBLEM_JSON).body(prob);
+		}
+
+		String userAgent = this.request.getHeader("User-Agent");
+		logMsg.clear();
+		logMsg.put("logMsg", "User-Agent present in header");
+		logMsg.put("User-Agent", userAgent);
+		logger.info(logMsg.toString());
+
+		if (userAgent == null) {
+			userAgent = "UNKNOWN";
+		} else if (userAgent.contains("-")) {
+			String[] temp = userAgent.split("-");
+			userAgent = validateOriginatorNfType(temp[0]);
+		} else {
+			userAgent = validateOriginatorNfType(userAgent);
+		}
+
+		String originatorNfType = (body.getReqNfType() == null) ? userAgent
+				: validateOriginatorNfType(body.getReqNfType());
+		nrfMetrics.pegSubscriptionRequest(originatorNfType, "Create");
+
+		if (bindingResult.hasErrors()) {
+			ProblemDetails prob = handleBadRequest(bindingResult);
+			logMsg.clear();
+			logMsg.put("logMsg", "NF status subscription failed with problemDetails");
+			logMsg.put("SubscriptionData", body);
+			logMsg.put("problemDetails", prob);
+			logger.error(logMsg.toString());
+			nrfMetrics.pegSubscriptionResponse(originatorNfType, HttpStatus.valueOf(prob.getStatus()), "Create",
+					msgProcessStartTime);
+			throw new NrfException(prob);
+		}
+
+		List<NfConfig> nrfHostConfig = null;
+		if (nrfSystemOptions.getForwardingSystemOptions() != null) {
+			nrfHostConfig = nrfSystemOptions.getForwardingSystemOptions().getNrfHostConfig();
+		}
+		ForwardingData forwardingData = this.parseViaHeader(this.request, nrfHostConfig);
+		if (forwardingData.isLoop()) {
+			ProblemDetails problemDetails = (ProblemDetails) getFailureResponseByErrorCondition(
+					ErrorCondition.NRF_Forwarding_Loop_Detection);
+			logMsg.clear();
+			logMsg.put("logMsg", "NF status subscription failed with errorCondition :"
+					+ ErrorCondition.NRF_Forwarding_Loop_Detection);
+			logMsg.put("SubscriptionData", body);
+			logMsg.put("problemDetails", problemDetails);
+			logger.error(logMsg.toString());
+			nrfMetrics.pegSubscriptionForwardingRequest(originatorNfType, "Create");
+			nrfMetrics.pegSubscriptionForwardingResponse("Create", originatorNfType, problemDetails.getStatus(),
+					"LoopDetected");
+			return ResponseEntity.status(problemDetails.getStatus()).contentType(MediaType.APPLICATION_PROBLEM_JSON)
+					.body(problemDetails);
+		}
+
+		String uri = getUriPrefix();
+		try {
+			body.semanticValidation();
+		} catch (NrfException e) {
+			nrfMetrics.pegSubscriptionResponse(originatorNfType, HttpStatus.valueOf(e.getProbDetails().getStatus()),
+					"Create", msgProcessStartTime);
+			throw new NrfException(e.getProbDetails());
+		}
+
+		// code for nfAuth starts
+		logMsg.clear();
+		logMsg.put("logMsg", "Check feature flag for NF FQDN Authentication support");
+		logMsg.put("nfSubscriptionAuthenticationStatus", nfSubscriptionAuthenticationStatus);
+		logger.info(logMsg.toString());
+		/*
+		 * NRF with subscriptionAuthentiation status set to true should perform
+		 * authentication
+		 */
+		if (nfSubscriptionAuthenticationStatus.equals(FeatureStatus.ENABLED)) {
+
+			validationHelper.setValidationParameters(forwardingData, request, nrfSystemOptions, nrfEngSystemOptions);
+			GenericResponse genericResponse = validationHelper.performNfAuthentication();
+			if (genericResponse.getResponse() != null) {
+				ProblemDetails problemDetails = (ProblemDetails) genericResponse.getResponse();
+				HttpHeaders httpHeaders = genericResponse.getHeaders();
+				String tlsFqdn = parseOcXfccDnsHeader();
+				logMsg.clear();
+				logMsg.put("logMsg", "NF Authentication failed for service operation NFSubscribe");
+				logMsg.put("nfSubscriptionAuthenticationStatus", nfSubscriptionAuthenticationStatus);
+				logMsg.put("problemDetails", problemDetails);
+				logMsg.put("TLSFqdn",tlsFqdn);
+				logMsg.put("subscription data", body);
+				logMsg.put("originatorNfType",originatorNfType);
+				logMsg.put("HttpStatusCode",problemDetails.getStatus());
+				logMsg.put("headers", httpHeaders);
+				logger.error(logMsg.toString());
+
+				if (httpHeaders == null) {
+					return ResponseEntity.status(problemDetails.getStatus())
+							.contentType(MediaType.APPLICATION_PROBLEM_JSON).body(problemDetails);
+				} else {
+					return ResponseEntity.status(problemDetails.getStatus())
+							.contentType(MediaType.APPLICATION_PROBLEM_JSON).headers(httpHeaders).body(problemDetails);
+				}
+			} else {
+				logMsg.put("logMsg", "NF FQDN Authentication successful");
+				logger.info(logMsg.toString());
+			}
+
+		}
+		// code for nfAuth ends
+
+		Object o = nrfService.createSubscription(body, uri, originatorNfType, forwardingData);
+		if (o instanceof HashMap<?, ?>) {
+			o = ((HashMap) o).get("response");
+		}
+		if (o instanceof SubscriptionData) {
+			URI loc = null;
+			SubscriptionData obj = (SubscriptionData) o;
+
+			loc = URI.create(uri + obj.getSubscriptionId());
+			logMsg.clear();
+			logMsg.put("logMsg", "Sending NF status subscription response with location header and content");
+			logMsg.put("locationHeader", loc);
+			logMsg.put("content", obj);
+			logger.info(logMsg.toString());
+			nrfMetrics.pegSubscriptionResponse(originatorNfType, HttpStatus.CREATED, "Create", msgProcessStartTime);
+			return ResponseEntity.created(loc).body(obj);
+		} else {
+			if (o instanceof ProblemDetails) {
+				ProblemDetails obj = (ProblemDetails) o;
+				logMsg.clear();
+				logMsg.put("logMsg", "Sending NF status subscription failure response");
+				logMsg.put("uri", uri);
+				logMsg.put("body", body);
+				logger.error(logMsg.toString());
+				nrfMetrics.pegSubscriptionResponse(originatorNfType, HttpStatus.valueOf(obj.getStatus()), "Create",
+						msgProcessStartTime);
+				return ResponseEntity.status(obj.getStatus()).contentType(MediaType.APPLICATION_PROBLEM_JSON).body(obj);
+			} else {
+				ProblemDetails obj = ProblemDetails.forInternalError();
+				obj.setCause("Unknown error occurred");
+				logMsg.clear();
+				logMsg.put("logMsg", "Sending NF status subscription failure response");
+				logMsg.put("uri", uri);
+				logMsg.put("SubscriptionData", body);
+				logger.error(logMsg.toString());
+				nrfMetrics.pegSubscriptionResponse(originatorNfType, HttpStatus.valueOf(obj.getStatus()), "Create",
+						msgProcessStartTime);
+				return ResponseEntity.status(obj.getStatus()).contentType(MediaType.APPLICATION_PROBLEM_JSON).body(obj);
+			}
+		}
+	}
+
+	@Override
+	public ResponseEntity<Object> nfStatusUnsubscribe(@PathVariable("subscriptionId") @Valid String subscriptionId) {
+		String serviceOperation = "NfUnsubscribe";
+		String nrfTxId = "nrf-tx-" + (int) (Math.random() * Integer.MAX_VALUE);
+		fillThreadContext(nrfTxId, "nfStatusUnsubscribe", extractUUID());
+
+		// Set Controller's and Service's NrfSystemOptions and NrfEngSystemOptions
+		setNrfSystemAndEngineeringOptions();
+
+		/* fetch nf authentication status for nfSubscription */
+		FeatureStatus nfSubscriptionAuthenticationStatus = nrfSystemOptions.getNfAuthenticationSystemOptions()
+				.getNfSubscriptionAuthenticationStatus();
+
+		nrfService.setNrfSystemAndEngineeringOptions(nrfSystemOptions, nrfEngSystemOptions);
+
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		metricsDimension.setServiceOperation(serviceOperation);
+		metricsDimension.setMethod(RequestMethod.DELETE);
+		msgProcessStartTime = nrfMetrics.getCurrentTime();
+
+		logMsg.clear();
+		logMsg.put("logMsg", "Request received for removal of subscription for subscriptionId");
+		logMsg.put("subscriptionId", subscriptionId);
+		logger.info(logMsg.toString());
+
+		if (NrfServiceStatus.getNnrfManagementServiceAlive() == false) {
+			logMsg.clear();
+			logMsg.put("logMsg",
+					"Service unavailable.NnrfManagement service is down as registration service or auditor service is down");
+			logMsg.put("subscriptionId", subscriptionId);
+			logger.warn(logMsg.toString());
+			ProblemDetails prob = new ProblemDetails(HttpStatus.SERVICE_UNAVAILABLE.value());
+			nrfMetrics.pegUnsubscriptionResponse("UNKNOWN", HttpStatus.valueOf(prob.getStatus()), msgProcessStartTime);
+			return ResponseEntity.status(prob.getStatus()).contentType(MediaType.APPLICATION_PROBLEM_JSON).body(prob);
+		}
+
+		String uri = getUriPrefix();
+		String originatorNfType = this.request.getHeader("User-Agent");
+
+		logMsg.clear();
+		logMsg.put("logMsg", "User-Agent present in header");
+		logMsg.put("User-Agent", originatorNfType);
+		logger.info(logMsg.toString());
+
+		if (originatorNfType == null) {
+			originatorNfType = "UNKNOWN";
+		} else if (originatorNfType.contains("-")) {
+			String[] temp = originatorNfType.split("-");
+			originatorNfType = validateOriginatorNfType(temp[0]);
+		} else {
+			originatorNfType = validateOriginatorNfType(originatorNfType);
+		}
+
+		List<NfConfig> nrfHostConfig = null;
+		if (nrfSystemOptions.getForwardingSystemOptions() != null) {
+			nrfHostConfig = nrfSystemOptions.getForwardingSystemOptions().getNrfHostConfig();
+		}
+		ForwardingData forwardingData = this.parseViaHeader(this.request, nrfHostConfig);
+		if (forwardingData.isLoop()) {
+			ProblemDetails problemDetails = (ProblemDetails) getFailureResponseByErrorCondition(
+					ErrorCondition.NRF_Forwarding_Loop_Detection);
+			logMsg.clear();
+			logMsg.put("logMsg", "Sending response for subscription removal with http status :"
+					+ ErrorCondition.NRF_Forwarding_Loop_Detection);
+			logMsg.put("subscriptionId", subscriptionId);
+			logMsg.put("problemDetails", problemDetails);
+			logger.error(logMsg.toString());
+			nrfMetrics.pegSubscriptionForwardingRequest(originatorNfType, "Delete");
+			nrfMetrics.pegSubscriptionForwardingResponse("Delete", originatorNfType, problemDetails.getStatus(),
+					"LoopDetected");
+			return ResponseEntity.status(problemDetails.getStatus()).contentType(MediaType.APPLICATION_PROBLEM_JSON)
+					.body(problemDetails);
+		}
+
+		Boolean forwardedRequest = forwardingData.isForwarded();
+
+		// code for nfAuth starts
+		logMsg.clear();
+		logMsg.put("logMsg", "Checking feature flag for NF FQDN Authentication support");
+		logMsg.put("nfSubscriptionAuthenticationStatus", nfSubscriptionAuthenticationStatus);
+		logger.info(logMsg.toString());
+		/*
+		 * NRF with subscriptionAuthentiation status set to true should perform
+		 * authentication
+		 */
+		if (nfSubscriptionAuthenticationStatus.equals(FeatureStatus.ENABLED)) {
+
+			validationHelper.setValidationParameters(forwardingData, request, nrfSystemOptions, nrfEngSystemOptions);
+			GenericResponse genericResponse = validationHelper.performNfAuthentication();
+			String tlsFqdn = parseOcXfccDnsHeader();
+			if (genericResponse.getResponse() != null) {
+				ProblemDetails problemDetails = (ProblemDetails) genericResponse.getResponse();
+				HttpHeaders httpHeaders = genericResponse.getHeaders();
+				logMsg.clear();
+				logMsg.put("logMsg", "NF Authentication failed for service operation nfStatusUnsubscribe");
+				logMsg.put("TLSFqdn",tlsFqdn);
+				logMsg.put("subscriptionId", subscriptionId);
+				logMsg.put("originatorNfType",originatorNfType);
+				logMsg.put("HttpStatusCode",problemDetails.getStatus());
+				logMsg.put("problemDetails", problemDetails);
+				logMsg.put("headers", httpHeaders);
+				
+				logger.error(logMsg.toString());
+
+				if (httpHeaders == null) {
+					return ResponseEntity.status(problemDetails.getStatus())
+							.contentType(MediaType.APPLICATION_PROBLEM_JSON).body(problemDetails);
+				} else {
+					return ResponseEntity.status(problemDetails.getStatus())
+							.contentType(MediaType.APPLICATION_PROBLEM_JSON).headers(httpHeaders).body(problemDetails);
+				}
+			} else {
+				logMsg.put("logMsg", "NF FQDN Authentication successful");
+				logger.info(logMsg.toString());
+			}
+
+		}
+		// code for nfAuth ends
+
+		Object object = nrfService.deleteSubscription(subscriptionId, uri, forwardedRequest, originatorNfType);
+
+		if (object instanceof ProblemDetails) {
+			nrfMetrics.pegUnsubscriptionRequest(originatorNfType);
+			ProblemDetails problemDetails = (ProblemDetails) object;
+			if (problemDetails.getStatus() == HttpStatus.INTERNAL_SERVER_ERROR.value()) {
+				logMsg.clear();
+				logMsg.put("logMsg", "Sending response for subscription removal with http status");
+				logMsg.put("status", HttpStatus.INTERNAL_SERVER_ERROR);
+				logMsg.put("subscriptionId", subscriptionId);
+				logMsg.put("problemDetails", problemDetails);
+				logger.error(logMsg.toString());
+			} else if (problemDetails.getStatus() == HttpStatus.NOT_FOUND.value()) {
+				logMsg.clear();
+				logMsg.put("logMsg", "Sending response for subscription removal with http status");
+				logMsg.put("subscriptionId", subscriptionId);
+				logMsg.put("status", HttpStatus.NOT_FOUND);
+				logMsg.put("problemDetails", problemDetails);
+				logger.error(logMsg.toString());
+			}
+			nrfMetrics.pegUnsubscriptionResponse(originatorNfType, HttpStatus.valueOf(problemDetails.getStatus()),
+					msgProcessStartTime);
+			return ResponseEntity.status(problemDetails.getStatus()).contentType(MediaType.APPLICATION_PROBLEM_JSON)
+					.body(problemDetails);
+		} else {
+			String reqNfType = (String) object;
+			if (originatorNfType.equals("UNKNOWN")) {
+				originatorNfType = reqNfType;
+			}
+			nrfMetrics.pegUnsubscriptionRequest(originatorNfType);
+			logMsg.clear();
+			logMsg.put("logMsg", "Sending response for subscription removal with http status");
+			logMsg.put("subscriptionId", subscriptionId);
+			logMsg.put("status", HttpStatus.NO_CONTENT);
+			logger.info(logMsg.toString());
+			nrfMetrics.pegUnsubscriptionResponse(originatorNfType, HttpStatus.NO_CONTENT, msgProcessStartTime);
+			return new ResponseEntity<Object>(HttpStatus.NO_CONTENT);
+		}
+	}
+
+	@ExceptionHandler
+	public ResponseEntity<ProblemDetails> handleNrfException(NrfException e) {
+		return ResponseEntity.status(e.getProbDetails().getStatus()).contentType(MediaType.APPLICATION_PROBLEM_JSON)
+				.body(e.getProbDetails());
+	}
+
+	private ProblemDetails handleBadRequest(BindingResult bindingResult) {
+		ProblemDetails prob = ProblemDetails.forBadRequest();
+
+		List<ObjectError> errList = bindingResult.getAllErrors();
+		ListIterator<ObjectError> it = errList.listIterator();
+		while (it.hasNext()) {
+			ObjectError err = it.next();
+			if (err instanceof FieldError) {
+				FieldError fErr = (FieldError) err;
+				prob.addInvalidParam(new InvalidParam(fErr.getField(), fErr.getDefaultMessage()));
+			} else {
+				prob.setDetail(err.getDefaultMessage());
+			}
+		}
+		return prob;
+	}
+
+	@Override
+	public ResponseEntity<Object> getSubscriptions() {
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		String nrfTxId = "nrf-tx-" + (int) (Math.random() * Integer.MAX_VALUE);
+
+		fillThreadContext(nrfTxId, "getSubscriptions", extractUUID());
+
+		// Set Controller's and Service's NrfSystemOptions and NrfEngSystemOptions
+		setNrfSystemAndEngineeringOptions();
+		nrfService.setNrfSystemAndEngineeringOptions(nrfSystemOptions, nrfEngSystemOptions);
+
+		if (NrfServiceStatus.getNnrfManagementServiceAlive() == false) {
+			logMsg.clear();
+			logMsg.put("logMsg",
+					"Service unable because NNrf_Management service is down as registration service or auditor service  is down");
+			logger.info(logMsg.toString());
+			ProblemDetails prob = new ProblemDetails(HttpStatus.SERVICE_UNAVAILABLE.value());
+			return ResponseEntity.status(prob.getStatus()).contentType(MediaType.APPLICATION_PROBLEM_JSON).body(prob);
+		}
+
+		Object o = nrfService.getSubscriptions();
+		ProblemDetails pDetails;
+		List<SubscriptionData> list;
+
+		if (o instanceof ProblemDetails) {
+			pDetails = (ProblemDetails) o;
+
+			return ResponseEntity.status(pDetails.getStatus()).contentType(MediaType.APPLICATION_PROBLEM_JSON)
+					.body(pDetails);
+		} else {
+			list = (List<SubscriptionData>) o;
+			return ResponseEntity.ok().body(list);
+		}
+	}
+
+	@Override
+	public ResponseEntity<Object> onNfRegisteredNotificationEvent(@PathVariable("nfInstanceId") String nfInstanceId,
+			@RequestBody NotificationData notificationData, @RequestHeader HttpHeaders headers,
+			BindingResult bindingResult) {
+
+		String nrfTxId = this.request.getHeader("Correlation-ID");
+		// fetch ocLogId
+		String ocLogId = this.request.getHeader("ocLogId");
+		fillThreadContext(nrfTxId, "notifyProfileRegistration", ocLogId);
+
+		// Set Controller's and Service's NrfSystemOptions and NrfEngSystemOptions
+		setNrfSystemAndEngineeringOptions();
+		nrfService.setNrfSystemAndEngineeringOptions(nrfSystemOptions, nrfEngSystemOptions);
+
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+
+		logMsg.clear();
+		logMsg.put("logMsg", "Notification received for NF profile registration");
+		logMsg.put("notificationData", notificationData);
+		logMsg.put("nfInstanceId", nfInstanceId);
+		logMsg.put("headers", headers);
+		logger.info(logMsg.toString());
+		if (nrfTxId == null) {
+			logMsg.clear();
+			logMsg.put("logMsg", "No correlationId found in header");
+			logger.warn(logMsg.toString());
+		} else {
+			logMsg.clear();
+			logMsg.put("logMsg", "correlationId found in header");
+			logMsg.put("nrfTxId", nrfTxId);
+			logger.info(logMsg.toString());
+		}
+
+		if (bindingResult.hasErrors()) {
+			logMsg.clear();
+			ProblemDetails pDetails = handleBadRequest(bindingResult);
+			logMsg.put("logMsg", "Invalid notification received for NF profile registration");
+			logMsg.put("problemDetails", pDetails);
+			logMsg.put("notificationData", notificationData);
+			logMsg.put("headers", headers);
+			logger.error(logMsg.toString());
+			return ResponseEntity.status(pDetails.getStatus()).contentType(MediaType.APPLICATION_PROBLEM_JSON)
+					.body(pDetails);
+		} else {
+			if (!nrfService.handleNfStatusEvent(nfInstanceId, notificationData, ocLogId)) {
+				logMsg.clear();
+				logMsg.put("logMsg", "Unable to dispatch all notifications!!");
+				logMsg.put("notificationData", notificationData);
+				logMsg.put("headers", headers);
+				logger.error(logMsg.toString());
+				return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+						.contentType(MediaType.APPLICATION_PROBLEM_JSON).build();
+			}
+		}
+		return ResponseEntity.ok().build();
+	}
+
+	@Override
+	public ResponseEntity<Object> onNfProfileChangedNotificationEvent(@PathVariable("nfInstanceId") String nfInstanceId,
+			@RequestBody NotificationData notificationData, @RequestHeader HttpHeaders headers,
+			BindingResult bindingResult) {
+
+		String nrfTxId = this.request.getHeader("Correlation-ID");
+		String ocLogId = this.request.getHeader("ocLogId");
+		fillThreadContext(nrfTxId, "notifyProfileChange", ocLogId);
+
+		// Set Controller's and Service's NrfSystemOptions and NrfEngSystemOptions
+		setNrfSystemAndEngineeringOptions();
+		nrfService.setNrfSystemAndEngineeringOptions(nrfSystemOptions, nrfEngSystemOptions);
+
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		logMsg.clear();
+		logMsg.put("logMsg", "Notification received for NF profile Change");
+		logMsg.put("notificationData", notificationData);
+		logMsg.put("nfInstanceId", nfInstanceId);
+		logMsg.put("headers", headers);
+		logger.info(logMsg.toString());
+
+		if (nrfTxId == null) {
+			logMsg.clear();
+			logMsg.put("logMsg", "No correlationId found in header");
+			logger.warn(logMsg.toString());
+		} else {
+			logMsg.clear();
+			logMsg.put("logMsg", "correlationId found in header");
+			logMsg.put("nrfTxId", nrfTxId);
+			logger.info(logMsg.toString());
+		}
+		if (bindingResult.hasErrors()) {
+			logMsg.clear();
+			ProblemDetails pDetails = handleBadRequest(bindingResult);
+			logMsg.put("logMsg", "Invalid notification received for NF profile change");
+			logMsg.put("notificationData", notificationData);
+			logMsg.put("nfInstanceId", nfInstanceId);
+			logMsg.put("headers", headers);
+			logMsg.put("problemDetails", handleBadRequest(bindingResult));
+			logger.error(logMsg.toString());
+			return ResponseEntity.status(pDetails.getStatus()).contentType(MediaType.APPLICATION_PROBLEM_JSON)
+					.body(pDetails);
+
+		} else {
+			if (!nrfService.handleNfStatusEvent(nfInstanceId, notificationData, ocLogId)) {
+				logMsg.clear();
+				logMsg.put("logMsg", "Unable to dispatch all notifications!!");
+				logMsg.put("notificationData", notificationData);
+				logMsg.put("nfInstanceId", nfInstanceId);
+				logMsg.put("headers", headers);
+				logger.error(logMsg.toString());
+				return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+						.contentType(MediaType.APPLICATION_PROBLEM_JSON).build();
+			}
+		}
+		return ResponseEntity.ok().build();
+	}
+
+	@Override
+	public ResponseEntity<Object> onNfDeregisteredNotificationEvent(@PathVariable("nfInstanceId") String nfInstanceId,
+			@RequestBody NotificationData notificationData, @RequestHeader HttpHeaders headers,
+			BindingResult bindingResult) {
+
+		String nrfTxId = this.request.getHeader("Correlation-ID");
+		String ocLogId = this.request.getHeader("ocLogId");
+		fillThreadContext(nrfTxId, "notifyProfileDeregistration", ocLogId);
+
+		// Set Controller's and Service's NrfSystemOptions and NrfEngSystemOptions
+		setNrfSystemAndEngineeringOptions();
+		nrfService.setNrfSystemAndEngineeringOptions(nrfSystemOptions, nrfEngSystemOptions);
+
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+
+		logMsg.clear();
+		logMsg.put("logMsg", "Notification received for NF profile deregistration");
+		logMsg.put("notificationData", notificationData);
+		logMsg.put("nfInstanceId", nfInstanceId);
+		logMsg.put("headers", headers);
+		logger.warn(logMsg.toString());
+
+		if (nrfTxId == null) {
+			logMsg.clear();
+			logMsg.put("logMsg", "No correlationId found in header");
+			logger.info(logMsg.toString());
+		} else {
+			logMsg.clear();
+			logMsg.put("logMsg", "correlationId found in header");
+			logMsg.put("nrfTxId", nrfTxId);
+			logger.info(logMsg.toString());
+		}
+		if (bindingResult.hasErrors()) {
+			logMsg.clear();
+			logMsg.put("logMsg", "Invalid notification received for NF profile deregistration");
+			logMsg.put("notificationData", notificationData);
+			logMsg.put("nfInstanceId", nfInstanceId);
+			logMsg.put("headers", headers);
+			logMsg.put("problemDetails", handleBadRequest(bindingResult));
+			logger.error(logMsg.toString());
+		} else {
+			if (!nrfService.handleNfStatusEvent(nfInstanceId, notificationData, ocLogId)) {
+				logMsg.clear();
+				logMsg.put("logMsg", "Unable to dispatch all notifications!!");
+				logMsg.put("notificationData", notificationData);
+				logMsg.put("nfInstanceId", nfInstanceId);
+				logMsg.put("headers", headers);
+				logger.error(logMsg.toString());
+				return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+						.contentType(MediaType.APPLICATION_PROBLEM_JSON).build();
+			}
+		}
+		return ResponseEntity.ok().build();
+	}
+
+	@ExceptionHandler
+	public ResponseEntity<ProblemDetails> handleCustomException(Exception e) {
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+
+		logMsg.clear();
+		logMsg.put("logMsg", "Custom exception");
+		logMsg.put("Exception", e.toString());
+		logger.error(logMsg.toString());
+		String originatorNfType = this.request.getHeader("User-Agent");
+		if (originatorNfType == null) {
+			originatorNfType = "UNKNOWN";
+		} else if (originatorNfType.contains("-")) {
+			String[] temp = originatorNfType.split("-");
+			originatorNfType = validateOriginatorNfType(temp[0]);
+		} else {
+			originatorNfType = validateOriginatorNfType(originatorNfType);
+		}
+		if (this.request.getMethod().equals("POST")) {
+			nrfMetrics.pegSubscriptionRequest(originatorNfType, "Create");
+		} else if (this.request.getMethod().equals("PATCH")) {
+			nrfMetrics.pegSubscriptionRequest(originatorNfType, "Update");
+		}
+		ProblemDetails problem = ProblemDetails.forBadRequest();
+		problem.setCause("Bad Request");
+		problem.setDetail("Json Error");
+
+		if (e.getMessage() != null) {
+			if (e.getMessage().contains("NotificationEventType")) {
+				problem.setCause("Invalid Input Data");
+				problem.setDetail("reqNotifEvents contains invalid value");
+				problem.addInvalidParam(new InvalidParam("reqNotifEvents", "must contain only valid values"));
+			} else if (e.getMessage().contains("Failed to parse Date")) {
+				problem.setDetail("Date Format is not compliant to ISO 8601");
+				if (e.getMessage().contains("validityTime")) {
+					problem.addInvalidParam(new InvalidParam("validityTime", "must be ISO 8601 compliant"));
+				}
+			}
+		}
+		if (this.request.getMethod().equals("POST")) {
+			nrfMetrics.pegSubscriptionResponse(originatorNfType, HttpStatus.valueOf(problem.getStatus()), "Create",
+					msgProcessStartTime);
+		} else if (this.request.getMethod().equals("PATCH")) {
+			nrfMetrics.pegSubscriptionResponse(originatorNfType, HttpStatus.valueOf(problem.getStatus()), "Update",
+					msgProcessStartTime);
+		}
+		return ResponseEntity.status(problem.getStatus()).contentType(MediaType.APPLICATION_PROBLEM_JSON).body(problem);
+	}
+
+	@Override
+	public ResponseEntity<Object> nfSubscriptionUpdate(@PathVariable("subscriptionId") String subscriptionId,
+			@RequestBody List<PatchItem> body) {
+		String serviceOperation = "NfSubscribe";
+		String nrfTxId = "nrf-tx-" + (int) (Math.random() * Integer.MAX_VALUE);
+		fillThreadContext(nrfTxId, "nfSubscriptionUpdate", extractUUID());
+
+		// Set Controller's and Service's NrfSystemOptions and NrfEngSystemOptions
+		setNrfSystemAndEngineeringOptions();
+		
+
+		/* fetch nf authentication status for nfSubscription */
+		FeatureStatus nfSubscriptionAuthenticationStatus = nrfSystemOptions.getNfAuthenticationSystemOptions().getNfSubscriptionAuthenticationStatus();
+		
+		nrfService.setNrfSystemAndEngineeringOptions(nrfSystemOptions, nrfEngSystemOptions);
+
+		metricsDimension.setServiceOperation(serviceOperation);
+		metricsDimension.setMethod(RequestMethod.PATCH);
+		long startTime = nrfMetrics.getCurrentTime();
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+
+		ProblemDetails prob = null;
+		boolean validityTimeChange = false;
+		SubscriptionData subscriptionData = null;
+		String uri = getUriPrefix();
+		String originatorNfType = this.request.getHeader("User-Agent");
+
+		if (NrfServiceStatus.getNnrfManagementServiceAlive() == false) {
+			logMsg.clear();
+			logMsg.put("logMsg",
+					"Service unavailable.NnrfManagement service is down as registration service or auditor service  is down");
+			logMsg.put("subscriptionId", subscriptionId);
+			logger.warn(logMsg.toString());
+			prob = new ProblemDetails(HttpStatus.SERVICE_UNAVAILABLE.value());
+			nrfMetrics.pegSubscriptionResponse("UNKNOWN", HttpStatus.valueOf(prob.getStatus()), "Update", startTime);
+			return ResponseEntity.status(prob.getStatus()).contentType(MediaType.APPLICATION_PROBLEM_JSON).body(prob);
+		}
+
+		if (originatorNfType == null) {
+			originatorNfType = "UNKNOWN";
+		} else if (originatorNfType.contains("-")) {
+			String[] temp = originatorNfType.split("-");
+			originatorNfType = validateOriginatorNfType(temp[0]);
+		} else {
+			originatorNfType = validateOriginatorNfType(originatorNfType);
+		}
+		logMsg.clear();
+		logMsg.put("logMsg", "Request received for subscription update");
+		logMsg.put("subscriptionId", subscriptionId);
+		logMsg.put("body", body);
+		logger.info(logMsg.toString());
+		nrfMetrics.pegSubscriptionRequest(originatorNfType, "Update");
+
+		if (!this.request.getContentType().equals("application/json-patch+json")) {
+			prob = ProblemDetails.forUnsupportedContentType();
+			prob.setDetail("Supported Media Type: 'application/json-patch+json'");
+			logMsg.clear();
+			logMsg.put("logMsg", "Sending subscription update response with problemDetails");
+			logMsg.put("subscriptionId", subscriptionId);
+			logMsg.put("problemDetails", prob);
+			logger.error(logMsg.toString());
+			nrfMetrics.pegSubscriptionResponse(originatorNfType, HttpStatus.valueOf(prob.getStatus()), "Update",
+					startTime);
+			return ResponseEntity.status(prob.getStatus()).contentType(MediaType.APPLICATION_PROBLEM_JSON).body(prob);
+		}
+
+		List<NfConfig> nrfHostConfig = null;
+		if (nrfSystemOptions.getForwardingSystemOptions() != null) {
+			nrfHostConfig = nrfSystemOptions.getForwardingSystemOptions().getNrfHostConfig();
+		}
+		ForwardingData forwardingData = this.parseViaHeader(this.request, nrfHostConfig);
+		if (forwardingData.isLoop()) {
+			ProblemDetails problemDetails = (ProblemDetails) getFailureResponseByErrorCondition(
+					ErrorCondition.NRF_Forwarding_Loop_Detection);
+			logMsg.clear();
+			logMsg.put("logMsg", "Sending response for subscription removal with http status :"
+					+ ErrorCondition.NRF_Forwarding_Loop_Detection);
+			logMsg.put("subscriptionId", subscriptionId);
+			logMsg.put("problemDetails", problemDetails);
+			logger.error(logMsg.toString());
+			nrfMetrics.pegSubscriptionForwardingRequest(originatorNfType, "Update");
+			nrfMetrics.pegSubscriptionForwardingResponse("Update", originatorNfType, problemDetails.getStatus(),
+					"LoopDetected");
+			return ResponseEntity.status(problemDetails.getStatus()).contentType(MediaType.APPLICATION_PROBLEM_JSON)
+					.body(problemDetails);
+		}
+
+		Boolean checkForwardedRequest = forwardingData.isForwarded();
+
+		// code for nfAuth starts
+		logMsg.clear();
+		logMsg.put("logMsg", "Checking status flag for NF FQDN Authentication support");
+		logMsg.put("nfSubscriptionAuthenticationStatus", nfSubscriptionAuthenticationStatus);
+		logger.info(logMsg.toString());
+		/*
+		 * NRF with subscriptionAuthentiation status set to true should perform
+		 * authentication
+		 */
+		if (nfSubscriptionAuthenticationStatus.equals(FeatureStatus.ENABLED)) {
+
+			validationHelper.setValidationParameters(forwardingData, request, nrfSystemOptions, nrfEngSystemOptions);
+			GenericResponse genericResponse = validationHelper.performNfAuthentication();
+			if (genericResponse.getResponse() != null) {
+				ProblemDetails problemDetails = (ProblemDetails) genericResponse.getResponse();
+				HttpHeaders httpHeaders = genericResponse.getHeaders();
+				String tlsFqdn = parseOcXfccDnsHeader();
+				logMsg.clear();
+				logMsg.put("logMsg", "NF Authentication failed for service operation nfSubscriptionUpdate");
+				logMsg.put("problemDetails", problemDetails);
+				logMsg.put("TLSFqdn",tlsFqdn);
+				logMsg.put("subscriptionId", subscriptionId);
+				logMsg.put("originatorNfType",originatorNfType);
+				logMsg.put("HttpStatusCode",HttpStatus.valueOf(problemDetails.getStatus()));
+				logMsg.put("response headers", httpHeaders);
+				logger.error(logMsg.toString());
+
+				if (httpHeaders == null) {
+					return ResponseEntity.status(problemDetails.getStatus())
+							.contentType(MediaType.APPLICATION_PROBLEM_JSON).body(problemDetails);
+				} else {
+					return ResponseEntity.status(problemDetails.getStatus())
+							.contentType(MediaType.APPLICATION_PROBLEM_JSON).headers(httpHeaders).body(problemDetails);
+				}
+			} else {
+				logMsg.put("logMsg", "NF FQDN Authentication successful");
+				logger.info(logMsg.toString());
+			}
+
+		}
+		// code for nfAuth ends
+
+		Iterator<PatchItem> iter = body.iterator();
+		prob = ProblemDetails.forBadRequest();
+		boolean isValid = true;
+		while (iter.hasNext()) {
+			PatchItem item = iter.next();
+			List<InvalidParam> errors = item.semanticValidation();
+			if (errors != null) {
+				isValid = false;
+				for (InvalidParam err : errors) {
+					prob.addInvalidParam(err);
+				}
+			} else {
+				if ((item.getOp().equals("replace") && item.getPath().equals("/validityTime")) && (isValid == true)) {
+					Object retVal = nrfService.updateSubscription(subscriptionId, item, uri, checkForwardedRequest,
+							originatorNfType);
+					if (retVal instanceof ProblemDetails) {
+						prob = (ProblemDetails) retVal;
+						logMsg.clear();
+						logMsg.put("logMsg", "Sending subscription update response with problemDetails");
+						logMsg.put("subscriptionId", subscriptionId);
+						logMsg.put("body", body);
+						logMsg.put("problemDetails", prob);
+						logger.error(logMsg.toString());
+						nrfMetrics.pegSubscriptionResponse(originatorNfType, HttpStatus.valueOf(prob.getStatus()),
+								"Update", startTime);
+						return ResponseEntity.status(prob.getStatus()).contentType(MediaType.APPLICATION_PROBLEM_JSON)
+								.body(prob);
+					} else {
+						ObjectMapper om = new ObjectMapper();
+						// HashMap<String,Object> subsPatchResponse = om.convertValue(retVal, new
+						// TypeReference<HashMap<String,Object>>(){});
+						HashMap<String, Object> subsPatchResponse = (HashMap<String, Object>) retVal;
+						Boolean forwardedResponse = (Boolean) subsPatchResponse.get("forwardedResponse");
+						Object response = subsPatchResponse.get("response");
+						if (forwardedResponse != null) {
+							logMsg.clear();
+							logMsg.put("logMsg", "Sending subscription update response with ");
+							logMsg.put("response", response);
+							logMsg.put("subscriptionId", subscriptionId);
+							logger.info(logMsg.toString());
+
+							if (forwardedResponse == true) {
+								logMsg.clear();
+								logMsg.put("logMsg", "forwardedresponse");
+								if (response instanceof SubscriptionData) {
+									logMsg.put("httpStatus", HttpStatus.OK);
+									logger.info(logMsg.toString());
+									return ResponseEntity.status(HttpStatus.OK).contentType(MediaType.APPLICATION_JSON)
+											.body((SubscriptionData) response);
+								} else if (response instanceof ProblemDetails) {
+									ProblemDetails problemDetails = (ProblemDetails) response;
+									logMsg.put("httpStatus", problemDetails.getStatus());
+									logger.info(logMsg.toString());
+									return ResponseEntity.status(problemDetails.getStatus())
+											.contentType(MediaType.APPLICATION_PROBLEM_JSON).body(problemDetails);
+								} else {
+									logMsg.put("httpStatus", HttpStatus.NO_CONTENT);
+									logger.info(logMsg.toString());
+									return new ResponseEntity<Object>(HttpStatus.NO_CONTENT);
+								}
+							}
+						} else if (subsPatchResponse.get("validityTimeChange") != null) {
+							validityTimeChange = (boolean) subsPatchResponse.get("validityTimeChange");
+							subscriptionData = om.convertValue(subsPatchResponse.get("patchedSubscription"),
+									SubscriptionData.class);
+
+						}
+					}
+				} else {
+					prob.setDetail("subscription update request should contain "
+							+ "only replace operation on validityTime attribute");
+					isValid = false;
+				}
+			}
+		}
+
+		if (!isValid) {
+			logMsg.clear();
+			logMsg.put("logMsg", "Sending subscription update response with problemDetails");
+			logMsg.put("subscriptionId", subscriptionId);
+			logMsg.put("body", body);
+			logMsg.put("problemDetails", prob);
+			logger.error(logMsg.toString());
+			nrfMetrics.pegSubscriptionResponse(originatorNfType, HttpStatus.valueOf(prob.getStatus()), "Update",
+					startTime);
+			return ResponseEntity.status(prob.getStatus()).contentType(MediaType.APPLICATION_PROBLEM_JSON).body(prob);
+		} else {
+			if (validityTimeChange == true) {
+				logMsg.clear();
+				logMsg.put("logMsg", "Sending subscription update response with http status");
+				logMsg.put("status", HttpStatus.OK);
+				logMsg.put("content", subscriptionData);
+				logger.info(logMsg.toString());
+				nrfMetrics.pegSubscriptionResponse(originatorNfType, HttpStatus.OK, "Update", startTime);
+				return ResponseEntity.status(HttpStatus.OK).contentType(MediaType.APPLICATION_JSON)
+						.body(subscriptionData);
+			} else {
+				logMsg.clear();
+				logMsg.put("logMsg", "Sending subscription update response with http status");
+				logMsg.put("status", HttpStatus.NO_CONTENT);
+				logger.info(logMsg.toString());
+				nrfMetrics.pegSubscriptionResponse(originatorNfType, HttpStatus.NO_CONTENT, "Update", startTime);
+				return new ResponseEntity<Object>(HttpStatus.NO_CONTENT);
+			}
+		}
+	}
+
+	public ForwardingData parseViaHeader(HttpServletRequest request, List<NfConfig> nrfHostConfigList) {
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		ForwardingData forwardingData = new ForwardingData();
+		forwardingData.setLoopDetected(false);
+		forwardingData.setIsForwardingPossible(true);
+		List<String> forwardedFrom = new ArrayList<String>();
+		if (this.request.getHeader("Via") != null) {
+
+			Iterator<String> viaHeadersList = this.request.getHeaders("Via").asIterator();
+			while (viaHeadersList.hasNext()) {
+				String viaHeaderValue = viaHeadersList.next();
+				// separating [protocol-name"/"]protocol-version host[":"port] using whitespace
+				String[] viaheaderInfo = viaHeaderValue.split(" ");
+				String protocolVersion = viaheaderInfo[0];
+				String viaHeaderHost = viaheaderInfo[1];
+
+				// By default is HTTP, if protocol-name is empty in Via header
+				String protocolName = "HTTP";
+
+				// if [protocol-name"/"]protocol-version come where protocol-name is optional
+				if (viaheaderInfo[0].contains("/")) {
+					String[] protocolNameAndVersion = viaheaderInfo[0].trim().split("/");
+					protocolName = protocolNameAndVersion[0];
+					protocolVersion = protocolNameAndVersion[1];
+				}
+
+				// By default is HTTP_PORT (80), if port is empty in Via header
+				Integer viaHeaderPort = HTTP_PORT;
+
+				// if host[":"port] come where port is optional
+				if (viaheaderInfo[1].contains(":")) {
+					String[] retrieveHostAndPort = viaheaderInfo[1].split(":");
+					viaHeaderHost = retrieveHostAndPort[0];
+					viaHeaderPort = Integer.parseInt(retrieveHostAndPort[1]);
+				}
+				logMsg.put("logMsg", "Via header received");
+				logMsg.put("protocolName", protocolName);
+				logMsg.put("protocolVersion", protocolVersion);
+				logMsg.put("host", viaHeaderHost);
+				logMsg.put("port", viaHeaderPort);
+				logger.info(logMsg.toString());
+
+				String selfHostName = nrfSystemOptions.getGeneralSystemOptions().getOcnrfEndPointHost();
+				Integer selfPort = nrfSystemOptions.getGeneralSystemOptions().getOcnrfEndPointPort();
+				if (viaHeaderHost.equals(selfHostName) && viaHeaderPort.toString().equals(selfPort.toString())) {
+					forwardingData.setLoopDetected(true);
+					break;
+				}
+
+				if (nrfHostConfigList != null) {
+					// iterating over nrfHostConfigList to detect forwardedRequest
+					int iter = 0;
+					int nrfHostConfigListSize = nrfHostConfigList.size();
+
+					while (iter < nrfHostConfigListSize) {
+						Integer nrfHostConfigPort = nrfHostConfigList.get(iter).getPort();
+						String nrfHostConfigHostName = nrfHostConfigList.get(iter).getFqdn();
+						UriScheme uriScheme = nrfHostConfigList.get(iter).getScheme();
+						if (nrfHostConfigPort == null) {
+							if (uriScheme.equals(UriScheme.HTTP)) {
+								nrfHostConfigPort = HTTP_PORT;
+							} else if (uriScheme.equals(UriScheme.HTTPS)) {
+								nrfHostConfigPort = HTTPS_PORT;
+							}
+						}
+
+						if (nrfHostConfigHostName.equals(viaHeaderHost)
+								&& nrfHostConfigPort.toString().equals(viaHeaderPort.toString())
+								&& protocolVersion.equals("2.0")) {
+							logMsg.clear();
+							logMsg.put("logMsg", "forwardedRequest received");
+							logMsg.put("nrfHostConfigHostName", nrfHostConfigHostName);
+							logMsg.put("nrfHostConfigPort", nrfHostConfigPort);
+							logger.info(logMsg.toString());
+							if (iter == PRIMARY_NRF_INDEX) {
+								// forwarded from primaryNrf
+								forwardedFrom.add(PRIMARY);
+								if (nrfHostConfigListSize == 1) {
+									// the request is forwarded from the only NRF configured.
+									forwardingData.setIsForwardingPossible(false);
+								}
+							} else if (iter == SECONDARY_NRF_INDEX) {
+								// forwarded from Secondary NRF.
+								forwardedFrom.add(SECONDARY);
+							}
+						}
+						iter++;
+					}
+				}
+
+				if (forwardingData.isLoop()) {
+					break;
+				}
+
+			}
+			forwardingData.setViaHeader(this.request.getHeaders("via").asIterator());
+		}
+		forwardingData.setForwardedFrom(forwardedFrom);
+		if (forwardingData.isForwardedFromPrimaryNrf() == true
+				&& forwardingData.isForwardedFromSecondaryNrf() == true) {
+			// forwarded from both primary and secondary NRFs, so further forwarding is not
+			// possible.
+			forwardingData.setIsForwardingPossible(false);
+		}
+		logMsg.clear();
+		logMsg.put("logMsg", "Exiting parseViaHeader");
+		logMsg.put("isForwardingPossible", forwardingData.isForwardingPossible());
+		logMsg.put("isForwardedFromPrimaryNrf", forwardingData.isForwardedFromPrimaryNrf());
+		logMsg.put("isForwardedFromSecondaryNrf", forwardingData.isForwardedFromSecondaryNrf());
+		logMsg.put("ForwardingData", forwardingData.toString());
+		logger.info(logMsg.toString());
+		return forwardingData;
+	}
+
+	public Object getFailureResponseByErrorCondition(ErrorCondition errCondition) {
+		List<ErrorInfo> errorInfoList = this.nrfSystemOptions.getErrorResponses().getNrfForwardingErrorResponses();
+		ProblemDetails prob = null;
+		Object retVal = null;
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		logMsg.clear();
+		logMsg.put("logMsg", "Entering getFailureResponseByErrorCondition function");
+		logMsg.put("errCondition", errCondition);
+		logMsg.put("errorInfoList", errorInfoList);
+		logger.info(logMsg.toString());
+		for (ErrorInfo errorInfo : errorInfoList) {
+			if (errorInfo.getErrorCondition().equals(errCondition)) {
+				logMsg.clear();
+				logMsg.put("logMsg", "errorInfo selected for errCondition : " + errCondition);
+				logMsg.put("errorInfo.detectionResultCode", errorInfo.getErrorDetectionResultCode());
+				logMsg.put("errorInfo.errorCode", errorInfo.getErrorCode());
+				logMsg.put("errorInfo.errorResponse", errorInfo.getErrorResponse());
+				logger.info(logMsg.toString());
+				if (HttpStatus.valueOf(errorInfo.getErrorCode()).is2xxSuccessful()) {
+					/* case where 2xx is configured as errorCode */
+					retVal = new ArrayList<NfProfile>();
+				} else {
+					prob = new ProblemDetails();
+					prob.setStatus((int) errorInfo.getErrorCode());
+					prob.setDetail(errorInfo.getErrorResponse());
+					prob.setTitle(errorInfo.getErrorResponse());
+					prob.setCause(errorInfo.getErrorResponse());
+					retVal = prob;
+				}
+				break;
+			}
+		}
+		logMsg.clear();
+		logMsg.put("logMsg", "Exit from getFailureResponseByErrorCondition function");
+		if (retVal != null) {
+			logMsg.put("Failure response by ErrorCondition", retVal.toString());
+		} else {
+			logMsg.put("Failure response", "ErrorCondition is NULL");
+		}
+		logger.info(logMsg.toString());
+		return retVal;
+	}
+
+	public String parseOcXfccDnsHeader() {
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+
+		logMsg.clear();
+		logMsg.put("logMsg", "Parsing OC-XFCC-DNS  header");
+		logger.info(logMsg.toString());
+
+		String ocDnsHeaderValue = this.request.getHeader("OC-XFCC-DNS");
+		logMsg.put("OC-XFCC-DNS header recieved with value", ocDnsHeaderValue);
+		if (ocDnsHeaderValue == null) {
+			logMsg.clear();
+			logger.warn(logMsg.toString());
+		} else {
+			logger.info(logMsg.toString());
+		}
+
+		return ocDnsHeaderValue;
+	}
+
+	public void setNrfSystemAndEngineeringOptions() {
+
+		logger.info("setNrfSystemAndEngineeringOptions() invoked");
+
+		this.nrfSystemOptions = nrfSystemOptionsManager.getNrfSystemOptions();
+		logger.info("NrfSystemOptions for the request: " + nrfSystemOptions);
+
+		this.nrfEngSystemOptions = nrfSystemOptionsManager.getNrfEngSystemOptions();
+		logger.info("NrfEngSystemOptions for the request: " + nrfEngSystemOptions);
+	}
+
+}

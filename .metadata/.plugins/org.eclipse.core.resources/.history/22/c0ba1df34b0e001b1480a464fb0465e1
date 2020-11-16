@@ -1,0 +1,1293 @@
+package com.oracle.cgbu.cne.nrf.test;
+
+import static org.junit.Assert.fail;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.when;
+
+import java.io.IOException;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.Iterator;
+import java.util.List;
+
+import org.junit.After;
+import org.junit.Assert;
+import org.junit.Before;
+import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.mockito.ArgumentCaptor;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.Mockito;
+import org.mockito.Spy;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.http.HttpStatus;
+import org.springframework.test.context.ContextConfiguration;
+import org.springframework.test.context.TestPropertySource;
+import org.springframework.test.context.junit4.SpringRunner;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonMappingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.oracle.cgbu.cne.nrf.audit.HeartbeatAuditor;
+import com.oracle.cgbu.cne.nrf.config.NrfConfigurations;
+import com.oracle.cgbu.cne.nrf.config.NrfConfigurations.GlobalConfig;
+import com.oracle.cgbu.cne.nrf.dao.NfInstance;
+import com.oracle.cgbu.cne.nrf.dao.NfInstancesRepository;
+import com.oracle.cgbu.cne.nrf.dao.NfStatusMonitor;
+import com.oracle.cgbu.cne.nrf.dao.NfStatusMonitorDoc;
+import com.oracle.cgbu.cne.nrf.dao.NfStatusMonitorRepository;
+import com.oracle.cgbu.cne.nrf.dao.NrfSystemOptionsDao;
+import com.oracle.cgbu.cne.nrf.dao.NrfSystemOptionsRepository;
+import com.oracle.cgbu.cne.nrf.domain.Events;
+import com.oracle.cgbu.cne.nrf.domain.HeartbeatInfo;
+import com.oracle.cgbu.cne.nrf.domain.NFStatus;
+import com.oracle.cgbu.cne.nrf.domain.NfHeartBeat;
+import com.oracle.cgbu.cne.nrf.domain.NfProfile;
+import com.oracle.cgbu.cne.nrf.domain.NrfEngSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.NrfSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.VersionedJsonDoc;
+import com.oracle.cgbu.cne.nrf.domain.VersionedJsonDocList;
+import com.oracle.cgbu.cne.nrf.metrics.CommonNrfMetrics;
+import com.oracle.cgbu.cne.nrf.metrics.MetricsDimension;
+import com.oracle.cgbu.cne.nrf.metrics.NrfMetrics;
+import com.oracle.cgbu.cne.nrf.service.NfUpgradeServiceImpl;
+import com.oracle.cgbu.cne.nrf.service.NrfEventManager;
+import com.oracle.cgbu.cne.nrf.service.RestClient;
+
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.Metrics;
+
+@RunWith(SpringRunner.class)
+@TestPropertySource("classpath:application-test.properties")
+public class HeartBeatAuditorTest {
+	
+	@Mock
+	private NrfSystemOptionsRepository nrfSystemOptionsRepository;
+	
+	@Mock
+	private NrfEventManager nrfEventManager;
+	
+	@Mock
+	private NfInstancesRepository nfRepo;
+
+	@Mock
+	private RestClient client;
+
+	@Mock
+	private NfStatusMonitorRepository hbRepo;
+	
+	@Mock
+	private NfUpgradeServiceImpl nfUpgradeSeviceImpl;
+
+	@InjectMocks
+	HeartbeatAuditor obj;
+	
+	NrfConfigurations nrfConfig = new NrfConfigurations();
+	
+	@Mock
+	CommonNrfMetrics commonNrfMetrics;
+	
+	@Spy
+	MetricsDimension metricsDimension;
+	
+	private String serviceOperation="NrfAuditor";
+	private String FIND="find";
+	private String NF_STATUS_MONITOR="NfStatusMonitor";
+	private String NF_INSTANCES="NfInstances";
+	private String NRF_SYSTEMOPTIONS="NrfSystemOptions";
+	private String DELETE="delete";
+	private String UPDATE="update";
+	private String REQUEST_METHOD="NotApplicable";
+	
+	int count_dbmetrics_find_nrfSystemOptions_200_OK;
+	int count_dbmetrics_find_nfStatusMonitor_200_OK;
+	int count_dbmetrics_find_nfInstances_200_OK;
+	int count_dbmetrics_update_nfInstances_200_OK;
+	int count_dbmetrics_update_nfStatusMonitor_200_OK;
+	String version = "v1";
+	
+	@Before
+	public void setUp() throws Exception {
+		// My familiarity and skills with mockito aren't enough to investigate
+		// why obj.om is coming as null when it is @Autowired in HeartbeatAuditor class
+		// hence this work around
+		//this.nfUpgradeSeviceImpl = new NfUpgradeServiceImpl();
+		obj.setObjectMapper(new ObjectMapper());
+		NrfMetrics nrfMetrics = new NrfMetrics();
+		nrfMetrics.setObjectMapper(new ObjectMapper());
+		nrfMetrics.setNfUpgradeServiceImpl(new NfUpgradeServiceImpl());
+		obj.setNrfMetrics(nrfMetrics);
+		obj.setCommonNrfMetrics(new CommonNrfMetrics());
+		obj.setNfUpgradeServiceImpl(new NfUpgradeServiceImpl());
+		this.nrfConfig.setGlobalConfig(new GlobalConfig());
+		GlobalConfig globalConfig = nrfConfig.getGlobalConfig();
+		globalConfig.setNrfInstanceId("6faf1bbc-6e4a-4454-a507-a14ef8e1bc5c");
+		this.nrfConfig.setGlobalConfig(globalConfig);
+		obj.setConfig(nrfConfig);
+		String nrfLevel = "default-ocnrf";
+		Metrics.globalRegistry.config().commonTags("NrfLevel",nrfLevel,"NfType","AMF");
+		NrfSystemOptionsDao systemOptionsDao = TestDataGenerator.generateNrfSystemOptionsDao();
+		NrfSystemOptionsDao systemOptionsDaoError = TestDataGenerator.generateNrfSystemOptionsDao_errorResponses();
+		NrfSystemOptionsDao systemOptionsDaoEngError = TestDataGenerator.generateNrfSystemOptionsDao_engErrorResponses();
+		NrfSystemOptionsDao engSystemOptionsDao = TestDataGenerator.generateNrfEngSystemOptionsDao();
+		ArrayList<NrfSystemOptionsDao> systemOptionsList = new ArrayList<NrfSystemOptionsDao>() { 
+            { 
+                add(systemOptionsDao); 
+                add(engSystemOptionsDao); 
+                add(systemOptionsDaoError);
+                add(systemOptionsDaoEngError);
+                
+            } 
+        }; 
+        when(nrfSystemOptionsRepository.findbyRecordOwner(any())).thenReturn(systemOptionsList);
+		}
+
+	@After
+	public void tearDown() throws Exception {
+		Metrics.globalRegistry.getMeters().forEach((meter) -> Metrics.globalRegistry.remove(meter));
+	}
+
+	
+	@Test
+	public void testGaugeMetricsForActiveregistrations() {
+		Metrics.globalRegistry.gauge("ocnrf.active.registrations.count", obj.getNrfMetrics().getHashMap().get("AMF") );
+		List<NfStatusMonitor> list = new ArrayList<NfStatusMonitor>();
+		NfStatusMonitor nfStatusMonitor = null;
+		try {
+			NfHeartBeat hb = TestDataGenerator.generateHeartBeatRecord(NFStatus.REGISTERED);
+			hb.setLastHbTimeStamp(new Date(System.currentTimeMillis()-90000));
+			hb.setNfInstanceId("6faf1bbc-6e4a-4454-a507-a14ef8e1bc5c");
+			hb.setNumHbMissed(1);
+			hb.setNumHbMissedBeforeAudit(2);
+			this.nrfConfig.setGlobalConfig(new GlobalConfig());
+			nfStatusMonitor = new NfStatusMonitor(hb, nrfConfig.getGlobalConfig().getNrfInstanceId()); 
+			list.add(nfStatusMonitor);
+		} catch (IOException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+			fail("NfStatusMonitor list could not be prepared.");
+		}
+		when(hbRepo.findLatestNfStatusMonitorByNfInstanceId("6faf1bbc-6e4a-4454-a507-a14ef8e1bc5c")).thenReturn(nfStatusMonitor);
+		when(hbRepo.findMissedHbRecords(Mockito.anyLong(),any())).thenReturn(list);
+		when(hbRepo.save(any())).thenReturn(null);
+		
+
+		NfInstance inst = null;
+		try {
+			NfProfile profile = TestDataGenerator.generateNF("AMF");
+			profile.setNfInstanceId("6faf1bbc-6e4a-4454-a507-a14ef8e1bc5c");
+			this.nrfConfig.setGlobalConfig(new GlobalConfig());
+			inst = new NfInstance(profile, nrfConfig.getGlobalConfig().getNrfInstanceId());
+		} catch (IOException e1) {
+			// TODO Auto-generated catch block
+			e1.printStackTrace();
+		}
+		when(nfRepo.findLatestNfInstanceByNfInstanceId(any())).thenReturn(inst);
+		when(nfRepo.save(any())).thenReturn(inst);
+		when(nfRepo.countByNfTypeAndNfStatus(any(),any())).thenReturn(10);
+		obj.auditCycle(Duration.ofSeconds(30));
+
+		Assert.assertEquals(10, Metrics.globalRegistry.get("ocnrf.active.registrations.count")
+				.tag("NfType", "AMF").tag("NrfLevel", "default-ocnrf").gauge().value(),0);
+
+		try {
+			list.clear();
+			NfHeartBeat hb = TestDataGenerator.generateHeartBeatRecord(NFStatus.REGISTERED);
+			hb.setLastHbTimeStamp(new Date(System.currentTimeMillis()-30000));
+			hb.setNfInstanceId("6faf1bbc-6e4a-4454-a507-a14ef8e1bc5c");
+			hb.setNumHbMissedBeforeAudit(2);
+			this.nrfConfig.setGlobalConfig(new GlobalConfig());
+			nfStatusMonitor = new NfStatusMonitor(hb, nrfConfig.getGlobalConfig().getNrfInstanceId()); 
+			list.add(nfStatusMonitor);
+		} catch (IOException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+			fail("NfStatusMonitor list could not be prepared.");
+		}
+
+		when(hbRepo.findLatestNfStatusMonitorByNfInstanceId("6faf1bbc-6e4a-4454-a507-a14ef8e1bc5c")).thenReturn(nfStatusMonitor);
+		when(nfRepo.countByNfTypeAndNfStatus(any(),any())).thenReturn(5);
+		obj.auditCycle(Duration.ofSeconds(30));
+
+		Assert.assertEquals(5, Metrics.globalRegistry.get("ocnrf.active.registrations.count")
+				.tag("NfType", "AMF").tag("NrfLevel", "default-ocnrf").gauge().value(),0);
+
+		try {
+			list.clear();
+			NfHeartBeat hb = TestDataGenerator.generateHeartBeatRecord(NFStatus.REGISTERED);
+			hb.setLastHbTimeStamp(new Date(System.currentTimeMillis()-30000));
+			hb.setNfInstanceId("6faf1bbc-6e4a-4454-a507-a14ef8e1bc5c");
+			hb.setNumHbMissedBeforeAudit(2);
+			this.nrfConfig.setGlobalConfig(new GlobalConfig());
+			nfStatusMonitor = new NfStatusMonitor(hb, nrfConfig.getGlobalConfig().getNrfInstanceId()); 
+			list.add(nfStatusMonitor);
+		} catch (IOException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+			fail("NfStatusMonitor list could not be prepared.");
+		}
+
+		when(hbRepo.findLatestNfStatusMonitorByNfInstanceId("6faf1bbc-6e4a-4454-a507-a14ef8e1bc5c")).thenReturn(nfStatusMonitor);
+		when(nfRepo.countByNfTypeAndNfStatus(any(),any())).thenReturn(0);
+		obj.auditCycle(Duration.ofSeconds(30));
+
+		Assert.assertEquals(0, Metrics.globalRegistry.get("ocnrf.active.registrations.count")
+				.tag("NfType", "AMF").tag("NrfLevel", "default-ocnrf").gauge().value(),0);
+	}
+	
+	@Test
+	public void test() throws JsonMappingException, JsonProcessingException {
+
+		List<NfStatusMonitor> list = new ArrayList<NfStatusMonitor>();
+		NfStatusMonitor nfStatusMonitor = null;
+		try {
+			NfHeartBeat hb = TestDataGenerator.generateHeartBeatRecord(NFStatus.REGISTERED);
+			hb.setLastHbTimeStamp(new Date(System.currentTimeMillis()-120000));
+			nfStatusMonitor = new NfStatusMonitor(hb, nrfConfig.getGlobalConfig().getNrfInstanceId());
+			list.add(nfStatusMonitor);
+			when(hbRepo.findLatestNfStatusMonitorByNfInstanceId(hb.getNfInstanceId())).thenReturn(nfStatusMonitor);
+			hb = TestDataGenerator.generateHeartBeatRecord(NFStatus.REGISTERED);
+			hb.setLastHbTimeStamp(new Date(System.currentTimeMillis()-60000));
+			nfStatusMonitor = new NfStatusMonitor(hb, nrfConfig.getGlobalConfig().getNrfInstanceId());
+			list.add(nfStatusMonitor);
+			when(hbRepo.findLatestNfStatusMonitorByNfInstanceId(hb.getNfInstanceId())).thenReturn(nfStatusMonitor);
+			hb = TestDataGenerator.generateHeartBeatRecord(NFStatus.REGISTERED);
+			hb.setLastHbTimeStamp(new Date(System.currentTimeMillis()-30000));
+			nfStatusMonitor = new NfStatusMonitor(hb, nrfConfig.getGlobalConfig().getNrfInstanceId());
+			list.add(nfStatusMonitor);
+			when(hbRepo.findLatestNfStatusMonitorByNfInstanceId(hb.getNfInstanceId())).thenReturn(nfStatusMonitor);
+			hb = TestDataGenerator.generateHeartBeatRecord(NFStatus.REGISTERED);
+			hb.setLastHbTimeStamp(new Date(System.currentTimeMillis()-5000));
+			nfStatusMonitor = new NfStatusMonitor(hb, nrfConfig.getGlobalConfig().getNrfInstanceId());
+			list.add(nfStatusMonitor);
+			when(hbRepo.findLatestNfStatusMonitorByNfInstanceId(hb.getNfInstanceId())).thenReturn(nfStatusMonitor);
+			hb = TestDataGenerator.generateHeartBeatRecord(NFStatus.REGISTERED);
+			hb.setLastHbTimeStamp(new Date(System.currentTimeMillis()-45000));
+			hb.setNumHbMissed(1);
+			nfStatusMonitor = new NfStatusMonitor(hb, nrfConfig.getGlobalConfig().getNrfInstanceId());
+			list.add(nfStatusMonitor);
+			when(hbRepo.findLatestNfStatusMonitorByNfInstanceId(hb.getNfInstanceId())).thenReturn(nfStatusMonitor);
+		} catch (IOException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+			fail("NfStatusMonitor list could not be prepared.");
+		}
+
+		when(hbRepo.findMissedHbRecords(Mockito.anyLong(),any())).thenReturn(list);
+		when(hbRepo.save(any())).thenReturn(null);
+		NfInstance inst = null;
+		try {
+			inst = new NfInstance(TestDataGenerator.generateNF("AMF"), nrfConfig.getGlobalConfig().getNrfInstanceId());
+		} catch (IOException e1) {
+			// TODO Auto-generated catch block
+			e1.printStackTrace();
+		}
+		when(nfRepo.findLatestNfInstanceByNfInstanceId(any())).thenReturn(inst);
+		when(nfRepo.save(any())).thenReturn(inst);
+
+		NfStatusMonitor[] arr = list.toArray(new NfStatusMonitor[0]);
+		List<NfStatusMonitorDoc> docList = new ArrayList<NfStatusMonitorDoc>();
+		for(int i = 0; i < 5; i++) {
+			NfStatusMonitor nfStatus = arr[i];
+			VersionedJsonDocList versionJsonList = new ObjectMapper().readValue(nfStatus.getNfStatusMonitorJsonDocList(),VersionedJsonDocList.class);
+			String response = getDocBasedOnVersion("v1", versionJsonList.getVersionedJsonDocList());
+			docList.add(new ObjectMapper().readValue(response, NfStatusMonitorDoc.class));
+		}
+		Assert.assertEquals(0, docList.get(0).getNumHbMissed());
+		Assert.assertEquals(NFStatus.REGISTERED, arr[0].getNfStatus());
+		Assert.assertEquals(0, docList.get(1).getNumHbMissed());
+		Assert.assertEquals(0, docList.get(2).getNumHbMissed());
+		Assert.assertEquals(0, docList.get(3).getNumHbMissed());
+		Assert.assertEquals(1, docList.get(4).getNumHbMissed());
+		
+		// hb duration = 30s, num allowed missed hb = 3
+		obj.auditCycle(Duration.ofSeconds(30));
+	
+		arr = list.toArray(new NfStatusMonitor[0]);
+
+		List<NfStatusMonitorDoc> docList1 = new ArrayList<NfStatusMonitorDoc>();
+		for(int i = 0; i < 5; i++) {
+			NfStatusMonitor nfStatus = arr[i];
+			VersionedJsonDocList versionJsonList = new ObjectMapper().readValue(nfStatus.getNfStatusMonitorJsonDocList(),VersionedJsonDocList.class);
+			String response = getDocBasedOnVersion("v1", versionJsonList.getVersionedJsonDocList());
+			docList1.add(new ObjectMapper().readValue(response, NfStatusMonitorDoc.class));
+		}
+		
+		ArgumentCaptor<NfStatusMonitor> argument1 = ArgumentCaptor.forClass(NfStatusMonitor.class);
+        ArgumentCaptor<Events> argument2 = ArgumentCaptor.forClass(Events.class);
+        ArgumentCaptor<Integer> argument3 = ArgumentCaptor.forClass(Integer.class);
+        Mockito.verify(nrfEventManager, Mockito.times(3)).recordNfAuditEvent(argument1.capture(),argument2.capture(),argument3.capture());
+        Assert.assertEquals(Events.NFPROFILE_AUDIT_SUSPENDED_EVENT, argument2.getAllValues().get(0));
+        Assert.assertEquals(arr[0].getNfInstanceId(),argument1.getAllValues().get(0).getNfInstanceId());
+		Assert.assertEquals(4, docList1.get(0).getNumHbMissed());
+
+		Assert.assertEquals(NFStatus.SUSPENDED, arr[0].getNfStatus());
+		Assert.assertEquals(2, docList1.get(1).getNumHbMissed());
+		Assert.assertEquals(1, docList1.get(2).getNumHbMissed());
+		Assert.assertEquals(0, docList1.get(3).getNumHbMissed());
+		Assert.assertEquals(1, docList1.get(4).getNumHbMissed());	
+		Assert.assertEquals(Metrics.globalRegistry.get("ocnrf.dbmetrics").tag("method",REQUEST_METHOD)
+      			.tag("dbOperation",FIND).tag("serviceOperation",serviceOperation).tag("HttpStatusCode",String.valueOf((HttpStatus.OK).value())).tag("tableName",NF_INSTANCES ).counter().count(), this.count_dbmetrics_find_nfInstances_200_OK+25,0);
+		Assert.assertEquals(Metrics.globalRegistry.get("ocnrf.dbmetrics").tag("method",REQUEST_METHOD)
+      			.tag("dbOperation",FIND).tag("serviceOperation",serviceOperation).tag("HttpStatusCode",String.valueOf((HttpStatus.OK).value())).tag("tableName",NF_STATUS_MONITOR ).counter().count(), this.count_dbmetrics_find_nfStatusMonitor_200_OK+4,0);
+		Assert.assertEquals(Metrics.globalRegistry.get("ocnrf.dbmetrics").tag("method",REQUEST_METHOD)
+      			.tag("dbOperation",UPDATE).tag("serviceOperation",serviceOperation).tag("HttpStatusCode",String.valueOf((HttpStatus.OK).value())).tag("tableName",NF_INSTANCES ).counter().count(), this.count_dbmetrics_update_nfInstances_200_OK+1,0);
+		Assert.assertEquals(Metrics.globalRegistry.get("ocnrf.dbmetrics").tag("method",REQUEST_METHOD)
+      			.tag("dbOperation",UPDATE).tag("serviceOperation",serviceOperation).tag("HttpStatusCode",String.valueOf((HttpStatus.OK).value())).tag("tableName",NF_STATUS_MONITOR ).counter().count(), this.count_dbmetrics_update_nfStatusMonitor_200_OK+3,0);
+		
+	}
+	
+	@Test
+	public void test1() throws JsonMappingException, JsonProcessingException {
+
+		List<NfStatusMonitor> list = new ArrayList<NfStatusMonitor>();
+		NfStatusMonitor nfStatusMonitor = null;
+		try {
+			NfHeartBeat hb = TestDataGenerator.generateHeartBeatRecord(NFStatus.UNDISCOVERABLE);
+			hb.setLastHbTimeStamp(new Date(System.currentTimeMillis()-120000));
+			nfStatusMonitor = new NfStatusMonitor(hb, nrfConfig.getGlobalConfig().getNrfInstanceId());
+			list.add(nfStatusMonitor);
+			when(hbRepo.findLatestNfStatusMonitorByNfInstanceId(hb.getNfInstanceId())).thenReturn(nfStatusMonitor);
+			hb = TestDataGenerator.generateHeartBeatRecord(NFStatus.UNDISCOVERABLE);
+			hb.setLastHbTimeStamp(new Date(System.currentTimeMillis()-60000));
+			nfStatusMonitor = new NfStatusMonitor(hb, nrfConfig.getGlobalConfig().getNrfInstanceId());
+			list.add(nfStatusMonitor);
+			when(hbRepo.findLatestNfStatusMonitorByNfInstanceId(hb.getNfInstanceId())).thenReturn(nfStatusMonitor);
+			hb = TestDataGenerator.generateHeartBeatRecord(NFStatus.UNDISCOVERABLE);
+			hb.setLastHbTimeStamp(new Date(System.currentTimeMillis()-30000));
+			nfStatusMonitor = new NfStatusMonitor(hb, nrfConfig.getGlobalConfig().getNrfInstanceId());
+			list.add(nfStatusMonitor);
+			when(hbRepo.findLatestNfStatusMonitorByNfInstanceId(hb.getNfInstanceId())).thenReturn(nfStatusMonitor);
+			hb = TestDataGenerator.generateHeartBeatRecord(NFStatus.UNDISCOVERABLE);
+			hb.setLastHbTimeStamp(new Date(System.currentTimeMillis()-5000));
+			nfStatusMonitor = new NfStatusMonitor(hb, nrfConfig.getGlobalConfig().getNrfInstanceId());
+			list.add(nfStatusMonitor);
+			when(hbRepo.findLatestNfStatusMonitorByNfInstanceId(hb.getNfInstanceId())).thenReturn(nfStatusMonitor);
+			hb = TestDataGenerator.generateHeartBeatRecord(NFStatus.UNDISCOVERABLE);
+			hb.setLastHbTimeStamp(new Date(System.currentTimeMillis()-45000));
+			hb.setNumHbMissed(1);
+			nfStatusMonitor = new NfStatusMonitor(hb, nrfConfig.getGlobalConfig().getNrfInstanceId());
+			list.add(nfStatusMonitor);
+			when(hbRepo.findLatestNfStatusMonitorByNfInstanceId(hb.getNfInstanceId())).thenReturn(nfStatusMonitor);
+		} catch (IOException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+			fail("NfStatusMonitor list could not be prepared.");
+		}
+
+		when(hbRepo.findMissedHbRecords(Mockito.anyLong(),any())).thenReturn(list);
+		when(hbRepo.save(any())).thenReturn(null);
+		NfInstance inst = null;
+		try {
+			inst = new NfInstance(TestDataGenerator.generateNF("AMF"), nrfConfig.getGlobalConfig().getNrfInstanceId());
+		} catch (IOException e1) {
+			// TODO Auto-generated catch block
+			e1.printStackTrace();
+		}
+		when(nfRepo.findLatestNfInstanceByNfInstanceId(any())).thenReturn(inst);
+		when(nfRepo.save(any())).thenReturn(inst);
+
+		NfStatusMonitor[] arr = list.toArray(new NfStatusMonitor[0]);
+		List<NfStatusMonitorDoc> docList = new ArrayList<NfStatusMonitorDoc>();
+		for(int i = 0; i < 5; i++) {
+			NfStatusMonitor nfStatus = arr[i];
+			VersionedJsonDocList versionJsonList = new ObjectMapper().readValue(nfStatus.getNfStatusMonitorJsonDocList(),VersionedJsonDocList.class);
+			String response = getDocBasedOnVersion("v1", versionJsonList.getVersionedJsonDocList());
+			docList.add(new ObjectMapper().readValue(response, NfStatusMonitorDoc.class));
+		}
+		Assert.assertEquals(0, docList.get(0).getNumHbMissed());
+		Assert.assertEquals(NFStatus.UNDISCOVERABLE, arr[0].getNfStatus());
+		Assert.assertEquals(0, docList.get(1).getNumHbMissed());
+		Assert.assertEquals(0, docList.get(2).getNumHbMissed());
+		Assert.assertEquals(0, docList.get(3).getNumHbMissed());
+		Assert.assertEquals(1, docList.get(4).getNumHbMissed());
+		
+		// hb duration = 30s, num allowed missed hb = 3
+		obj.auditCycle(Duration.ofSeconds(30));
+	
+		arr = list.toArray(new NfStatusMonitor[0]);
+		List<NfStatusMonitorDoc> docList1 = new ArrayList<NfStatusMonitorDoc>();
+		for(int i = 0; i < 5; i++) {
+			NfStatusMonitor nfStatus = arr[i];
+			VersionedJsonDocList versionJsonList = new ObjectMapper().readValue(nfStatus.getNfStatusMonitorJsonDocList(),VersionedJsonDocList.class);
+			String response = getDocBasedOnVersion("v1", versionJsonList.getVersionedJsonDocList());
+			docList1.add(new ObjectMapper().readValue(response, NfStatusMonitorDoc.class));
+		}
+
+		Assert.assertEquals(4, docList1.get(0).getNumHbMissed());
+		Assert.assertEquals(NFStatus.SUSPENDED, arr[0].getNfStatus());
+		Assert.assertEquals(2, docList1.get(1).getNumHbMissed());
+		Assert.assertEquals(1, docList1.get(2).getNumHbMissed());
+		Assert.assertEquals(0, docList1.get(3).getNumHbMissed());
+		Assert.assertEquals(1, docList1.get(4).getNumHbMissed());		
+		Assert.assertEquals(Metrics.globalRegistry.get("ocnrf.dbmetrics").tag("method",REQUEST_METHOD)
+      			.tag("dbOperation",FIND).tag("serviceOperation",serviceOperation).tag("HttpStatusCode",String.valueOf((HttpStatus.OK).value())).tag("tableName",NF_INSTANCES ).counter().count(), this.count_dbmetrics_find_nfInstances_200_OK+25,0);
+		Assert.assertEquals(Metrics.globalRegistry.get("ocnrf.dbmetrics").tag("method",REQUEST_METHOD)
+      			.tag("dbOperation",FIND).tag("serviceOperation",serviceOperation).tag("HttpStatusCode",String.valueOf((HttpStatus.OK).value())).tag("tableName",NF_STATUS_MONITOR ).counter().count(), this.count_dbmetrics_find_nfStatusMonitor_200_OK+4,0);
+		Assert.assertEquals(Metrics.globalRegistry.get("ocnrf.dbmetrics").tag("method",REQUEST_METHOD)
+      			.tag("dbOperation",UPDATE).tag("serviceOperation",serviceOperation).tag("HttpStatusCode",String.valueOf((HttpStatus.OK).value())).tag("tableName",NF_INSTANCES ).counter().count(), this.count_dbmetrics_update_nfInstances_200_OK+1,0);
+		Assert.assertEquals(Metrics.globalRegistry.get("ocnrf.dbmetrics").tag("method",REQUEST_METHOD)
+      			.tag("dbOperation",UPDATE).tag("serviceOperation",serviceOperation).tag("HttpStatusCode",String.valueOf((HttpStatus.OK).value())).tag("tableName",NF_STATUS_MONITOR ).counter().count(), this.count_dbmetrics_update_nfStatusMonitor_200_OK+3,0);
+	}
+	
+	@Test
+	public void test_heartbeatAudit() throws IOException {
+		
+        /*------------------------------------------
+        Profile     HBTimer       LastHBTimestamp		
+        ------------------------------------------
+        1            60             now - 160
+        2	         120            now - 370
+        3	         180            now - 100
+        4	         180            now - 200
+        5            60             now - 200
+        6            90             now - 190
+        7            100            now - 110
+        8	         120            now - 200*/
+			
+		List<NfStatusMonitor> list = new ArrayList<NfStatusMonitor>();
+		try {
+			NfStatusMonitor nfStatusMonitor = null;
+			NfStatusMonitorDoc statusDoc = null;
+			NfHeartBeat hb = TestDataGenerator.generateHeartBeatRecord(NFStatus.REGISTERED);
+			hb.setHeartBeatTimer(60);
+			hb.setLastHbTimeStamp(new Date(System.currentTimeMillis()-160000));
+			nfStatusMonitor = new NfStatusMonitor(hb, nrfConfig.getGlobalConfig().getNrfInstanceId());
+//			statusDoc = new NfStatusMonitorDoc(hb,this.nrfConfig.getGlobalConfig().getNrfInstanceId(),new Date());
+//			statusDoc.setCreationTimestamp(nfStatusMonitor.getLastUpdateTimestamp());
+			list.add(nfStatusMonitor);
+			//when(nfUpgradeSeviceImpl.findNfStatusMonitorDocWithVersion("v1", nfStatusMonitor)).thenReturn(statusDoc.toString());
+			when(hbRepo.findLatestNfStatusMonitorByNfInstanceId(hb.getNfInstanceId())).thenReturn(nfStatusMonitor);
+			hb = TestDataGenerator.generateHeartBeatRecord(NFStatus.REGISTERED);
+			hb.setHeartBeatTimer(120);
+			hb.setLastHbTimeStamp(new Date(System.currentTimeMillis()-490000));
+			nfStatusMonitor = new NfStatusMonitor(hb, nrfConfig.getGlobalConfig().getNrfInstanceId());
+//			statusDoc = new NfStatusMonitorDoc(hb,this.nrfConfig.getGlobalConfig().getNrfInstanceId(),new Date());
+//			statusDoc.setCreationTimestamp(nfStatusMonitor.getLastUpdateTimestamp());
+			list.add(nfStatusMonitor);
+			when(hbRepo.findLatestNfStatusMonitorByNfInstanceId(hb.getNfInstanceId())).thenReturn(nfStatusMonitor);
+			//when(nfUpgradeSeviceImpl.findNfStatusMonitorDocWithVersion("v1", nfStatusMonitor)).thenReturn(statusDoc.toString());
+			hb = TestDataGenerator.generateHeartBeatRecord(NFStatus.REGISTERED);
+			hb.setHeartBeatTimer(180);
+			nfStatusMonitor = new NfStatusMonitor(hb, nrfConfig.getGlobalConfig().getNrfInstanceId()); 
+//			statusDoc = new NfStatusMonitorDoc(hb,this.nrfConfig.getGlobalConfig().getNrfInstanceId(),new Date());
+//			statusDoc.setCreationTimestamp(nfStatusMonitor.getLastUpdateTimestamp());
+			hb.setLastHbTimeStamp(new Date(System.currentTimeMillis()-100000));
+			list.add(nfStatusMonitor);
+			when(hbRepo.findLatestNfStatusMonitorByNfInstanceId(hb.getNfInstanceId())).thenReturn(nfStatusMonitor);
+			//when(nfUpgradeSeviceImpl.findNfStatusMonitorDocWithVersion("v1", nfStatusMonitor)).thenReturn(statusDoc.toString());
+			hb = TestDataGenerator.generateHeartBeatRecord(NFStatus.REGISTERED);
+			hb.setHeartBeatTimer(180);
+			hb.setLastHbTimeStamp(new Date(System.currentTimeMillis()-200000));
+			nfStatusMonitor = new NfStatusMonitor(hb, nrfConfig.getGlobalConfig().getNrfInstanceId()); 
+//			statusDoc = new NfStatusMonitorDoc(hb,this.nrfConfig.getGlobalConfig().getNrfInstanceId(),new Date());
+//			statusDoc.setCreationTimestamp(nfStatusMonitor.getLastUpdateTimestamp());
+			list.add(nfStatusMonitor);
+			when(hbRepo.findLatestNfStatusMonitorByNfInstanceId(hb.getNfInstanceId())).thenReturn(nfStatusMonitor);
+			//when(nfUpgradeSeviceImpl.findNfStatusMonitorDocWithVersion("v1", nfStatusMonitor)).thenReturn(statusDoc.toString());
+			hb = TestDataGenerator.generateHeartBeatRecord(NFStatus.REGISTERED);
+			hb.setHeartBeatTimer(60);
+			hb.setLastHbTimeStamp(new Date(System.currentTimeMillis()-250000));
+			nfStatusMonitor = new NfStatusMonitor(hb, nrfConfig.getGlobalConfig().getNrfInstanceId()); 
+//			statusDoc = new NfStatusMonitorDoc(hb,this.nrfConfig.getGlobalConfig().getNrfInstanceId(),new Date());
+//			statusDoc.setCreationTimestamp(nfStatusMonitor.getLastUpdateTimestamp());
+			list.add(nfStatusMonitor);
+			when(hbRepo.findLatestNfStatusMonitorByNfInstanceId(hb.getNfInstanceId())).thenReturn(nfStatusMonitor);
+			//when(nfUpgradeSeviceImpl.findNfStatusMonitorDocWithVersion("v1", nfStatusMonitor)).thenReturn(statusDoc.toString());
+			hb = TestDataGenerator.generateHeartBeatRecord(NFStatus.REGISTERED);
+			hb.setHeartBeatTimer(90);
+			hb.setLastHbTimeStamp(new Date(System.currentTimeMillis()-190000));
+			nfStatusMonitor = new NfStatusMonitor(hb, nrfConfig.getGlobalConfig().getNrfInstanceId());
+//			statusDoc = new NfStatusMonitorDoc(hb,this.nrfConfig.getGlobalConfig().getNrfInstanceId(),new Date());
+//			statusDoc.setCreationTimestamp(nfStatusMonitor.getLastUpdateTimestamp());
+			list.add(nfStatusMonitor);
+			when(hbRepo.findLatestNfStatusMonitorByNfInstanceId(hb.getNfInstanceId())).thenReturn(nfStatusMonitor);
+			//when(nfUpgradeSeviceImpl.findNfStatusMonitorDocWithVersion("v1", nfStatusMonitor)).thenReturn(statusDoc.toString());
+			hb = TestDataGenerator.generateHeartBeatRecord(NFStatus.REGISTERED);
+			hb.setHeartBeatTimer(100);
+			hb.setLastHbTimeStamp(new Date(System.currentTimeMillis()-110000));
+			nfStatusMonitor = new NfStatusMonitor(hb, nrfConfig.getGlobalConfig().getNrfInstanceId()); 
+//			statusDoc = new NfStatusMonitorDoc(hb,this.nrfConfig.getGlobalConfig().getNrfInstanceId(),new Date());
+//			statusDoc.setCreationTimestamp(nfStatusMonitor.getLastUpdateTimestamp());
+			list.add(nfStatusMonitor);
+			when(hbRepo.findLatestNfStatusMonitorByNfInstanceId(hb.getNfInstanceId())).thenReturn(nfStatusMonitor);
+			//when(nfUpgradeSeviceImpl.findNfStatusMonitorDocWithVersion("v1", nfStatusMonitor)).thenReturn(statusDoc.toString());
+			hb = TestDataGenerator.generateHeartBeatRecord(NFStatus.REGISTERED);
+			hb.setHeartBeatTimer(120);
+			hb.setLastHbTimeStamp(new Date(System.currentTimeMillis()-200000));
+			nfStatusMonitor = new NfStatusMonitor(hb, nrfConfig.getGlobalConfig().getNrfInstanceId()); 
+//			statusDoc = new NfStatusMonitorDoc(hb,this.nrfConfig.getGlobalConfig().getNrfInstanceId(),new Date());
+//			statusDoc.setCreationTimestamp(nfStatusMonitor.getLastUpdateTimestamp());
+			list.add(nfStatusMonitor);
+			when(hbRepo.findLatestNfStatusMonitorByNfInstanceId(hb.getNfInstanceId())).thenReturn(nfStatusMonitor);
+			//when(nfUpgradeSeviceImpl.findNfStatusMonitorDocWithVersion("v1", nfStatusMonitor)).thenReturn(statusDoc.toString());
+			
+			
+		} catch (IOException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+			fail("NfStatusMonitor list could not be prepared.");
+		}
+
+		when(hbRepo.findMissedHbRecords(Mockito.anyLong(),any())).thenReturn(list);
+		when(hbRepo.save(any())).thenReturn(null);
+		NfInstance inst = null;
+		NfProfile profile = TestDataGenerator.generateNF("AMF");
+		try {
+			inst = new NfInstance(profile, nrfConfig.getGlobalConfig().getNrfInstanceId());
+			profile.getAdditionalAttributes().setCreationTimestamp(inst.getLastUpdateTimestamp());
+			profile.getAdditionalAttributes().setRecordCreator(inst.getRecordOwner());
+		} catch (IOException e1) {
+			// TODO Auto-generated catch block
+			e1.printStackTrace();
+		}
+		when(nfRepo.findLatestNfInstanceByNfInstanceId(any())).thenReturn(inst);
+		//when(nfUpgradeSeviceImpl.findNfProfileWithVersion("v1", inst)).thenReturn(profile.toString());
+		//profile.setNfStatus(NFStatus.SUSPENDED);
+		//when(nfUpgradeSeviceImpl.modifyVersionSpecificNfInstanceData("v1", inst,profile.toString())).thenReturn(value)
+		when(nfRepo.save(any())).thenReturn(inst);
+
+		NfStatusMonitor[] arr = list.toArray(new NfStatusMonitor[0]);
+		List<NfStatusMonitorDoc> docList = new ArrayList<NfStatusMonitorDoc>();
+		for(int i = 0; i < 5; i++) {
+			NfStatusMonitor nfStatus = arr[i];
+			VersionedJsonDocList versionJsonList = new ObjectMapper().readValue(nfStatus.getNfStatusMonitorJsonDocList(),VersionedJsonDocList.class);
+			String response = getDocBasedOnVersion("v1", versionJsonList.getVersionedJsonDocList());
+			docList.add(new ObjectMapper().readValue(response, NfStatusMonitorDoc.class));
+		}
+		Assert.assertEquals(0, docList.get(0).getNumHbMissed());
+		Assert.assertEquals(NFStatus.REGISTERED, arr[0].getNfStatus());
+		Assert.assertEquals(0, docList.get(1).getNumHbMissed());
+		Assert.assertEquals(0, docList.get(2).getNumHbMissed());
+		Assert.assertEquals(0, docList.get(3).getNumHbMissed());
+		Assert.assertEquals(0, docList.get(4).getNumHbMissed());
+		
+		// hb duration = 60s, num allowed missed hb = 3
+		NrfEngSystemOptions engSystemOptions = TestDataGenerator.generateNrfEngSystemOptions();
+		NrfSystemOptionsDao systemOptionsDao = TestDataGenerator.generateNrfSystemOptionsDao();
+		NrfSystemOptions nrfSystemOptions = TestDataGenerator.generateNrfSystemOptions();
+		HeartbeatInfo heartbeatInfo = nrfSystemOptions.getNfManagementOptions().getNfHeartbeatTimers().get(0);
+		heartbeatInfo.setMinHbTimer(Duration.ofSeconds(60));
+		List<HeartbeatInfo> nfHeartbeatTimers = new ArrayList<HeartbeatInfo>();
+		nfHeartbeatTimers.add(heartbeatInfo);		
+		nrfSystemOptions.getNfManagementOptions().setNfHeartbeatTimers(nfHeartbeatTimers);
+		List<VersionedJsonDoc> listVersionedJsonDoc1 = new ArrayList<>();
+		VersionedJsonDoc versionJsonDoc1 = new VersionedJsonDoc();
+		versionJsonDoc1.setVersion("v1");
+		versionJsonDoc1.setDoc(nrfSystemOptions.toString());
+		listVersionedJsonDoc1.add(versionJsonDoc1);
+		VersionedJsonDocList versionJsonDocList1 = new VersionedJsonDocList();
+		versionJsonDocList1.setVersionedJsonDocList(listVersionedJsonDoc1);
+		systemOptionsDao.setConfigurationJsonDocList(versionJsonDocList1.toString());
+		
+		NrfSystemOptionsDao systemOptionsDaoError = TestDataGenerator.generateNrfSystemOptionsDao_errorResponses();
+		NrfSystemOptionsDao systemOptionsDaoEngError = TestDataGenerator.generateNrfSystemOptionsDao_engErrorResponses();
+		NrfSystemOptionsDao engSystemOptionsDao = TestDataGenerator.generateNrfEngSystemOptionsDao();
+		List<VersionedJsonDoc> listVersionedJsonDoc = new ArrayList<>();
+		VersionedJsonDoc versionJsonDoc = new VersionedJsonDoc();
+		versionJsonDoc.setVersion("v1");
+		versionJsonDoc.setDoc(engSystemOptions.toString());
+		listVersionedJsonDoc.add(versionJsonDoc);
+		VersionedJsonDocList versionJsonDocList = new VersionedJsonDocList();
+		versionJsonDocList.setVersionedJsonDocList(listVersionedJsonDoc);
+		engSystemOptionsDao.setConfigurationJsonDocList(versionJsonDocList.toString());
+		ArrayList<NrfSystemOptionsDao> systemOptionsList = new ArrayList<NrfSystemOptionsDao>() { 
+            { 
+                add(systemOptionsDao); 
+                add(engSystemOptionsDao); 
+                add(systemOptionsDaoError);
+                add(systemOptionsDaoEngError);
+                
+            } 
+        }; 
+        when(nrfSystemOptionsRepository.findbyRecordOwner(any())).thenReturn(systemOptionsList);		
+		obj.auditCycle(Duration.ofSeconds(60));
+	
+		arr = list.toArray(new NfStatusMonitor[0]);
+		List<NfStatusMonitorDoc> doclist = new ArrayList<NfStatusMonitorDoc>();
+		for(int i = 0; i < 8; i++) {
+			NfStatusMonitor nfStatus = arr[i];
+			VersionedJsonDocList versionJsonList = new ObjectMapper().readValue(nfStatus.getNfStatusMonitorJsonDocList(),VersionedJsonDocList.class);
+			String response = getDocBasedOnVersion("v1", versionJsonList.getVersionedJsonDocList());
+			doclist.add(new ObjectMapper().readValue(response, NfStatusMonitorDoc.class));
+		}
+		Assert.assertEquals(2, doclist.get(0).getNumHbMissed());
+	    Assert.assertEquals(NFStatus.REGISTERED, arr[0].getNfStatus());
+		Assert.assertEquals(4, doclist.get(1).getNumHbMissed());
+		Assert.assertEquals(NFStatus.SUSPENDED, arr[1].getNfStatus());
+		Assert.assertEquals(0, doclist.get(2).getNumHbMissed());
+		Assert.assertEquals(NFStatus.REGISTERED, arr[2].getNfStatus());
+		Assert.assertEquals(1, doclist.get(3).getNumHbMissed());
+		Assert.assertEquals(NFStatus.REGISTERED, arr[3].getNfStatus());
+		Assert.assertEquals(4, doclist.get(4).getNumHbMissed());
+		Assert.assertEquals(NFStatus.SUSPENDED, arr[4].getNfStatus());
+		Assert.assertEquals(2, doclist.get(5).getNumHbMissed());
+		Assert.assertEquals(NFStatus.REGISTERED, arr[5].getNfStatus());
+		Assert.assertEquals(1, doclist.get(6).getNumHbMissed());
+		Assert.assertEquals(NFStatus.REGISTERED, arr[6].getNfStatus());
+		Assert.assertEquals(1, doclist.get(7).getNumHbMissed());
+		Assert.assertEquals(NFStatus.REGISTERED, arr[7].getNfStatus());
+		
+	}
+	
+	@Test
+	public void test_heartbeatAudit1() throws JsonMappingException, JsonProcessingException {
+		
+        /*------------------------------------------
+        Profile     HBTimer       LastHBTimestamp		
+        ------------------------------------------
+        1            60             now - 160
+        2	         120            now - 370
+        3	         180            now - 100
+        4	         180            now - 200
+        5            60             now - 200
+        6            90             now - 190
+        7            100            now - 110
+        8	         120            now - 200*/
+			
+		List<NfStatusMonitor> list = new ArrayList<NfStatusMonitor>();
+		try {
+			NfStatusMonitor nfStatusMonitor = null;
+			NfHeartBeat hb = TestDataGenerator.generateHeartBeatRecord(NFStatus.UNDISCOVERABLE);
+			hb.setHeartBeatTimer(60);
+			hb.setLastHbTimeStamp(new Date(System.currentTimeMillis()-160000));
+			nfStatusMonitor = new NfStatusMonitor(hb, nrfConfig.getGlobalConfig().getNrfInstanceId());
+			list.add(nfStatusMonitor);
+			when(hbRepo.findLatestNfStatusMonitorByNfInstanceId(hb.getNfInstanceId())).thenReturn(nfStatusMonitor);
+			hb = TestDataGenerator.generateHeartBeatRecord(NFStatus.UNDISCOVERABLE);
+			hb.setHeartBeatTimer(120);
+			hb.setLastHbTimeStamp(new Date(System.currentTimeMillis()-490000));
+			nfStatusMonitor =  new NfStatusMonitor(hb, nrfConfig.getGlobalConfig().getNrfInstanceId());
+			list.add(nfStatusMonitor);
+			when(hbRepo.findLatestNfStatusMonitorByNfInstanceId(hb.getNfInstanceId())).thenReturn(nfStatusMonitor);
+			hb = TestDataGenerator.generateHeartBeatRecord(NFStatus.UNDISCOVERABLE);
+			hb.setHeartBeatTimer(180);
+			hb.setLastHbTimeStamp(new Date(System.currentTimeMillis()-100000));
+			nfStatusMonitor = new NfStatusMonitor(hb, nrfConfig.getGlobalConfig().getNrfInstanceId()); 
+			list.add(nfStatusMonitor);
+			when(hbRepo.findLatestNfStatusMonitorByNfInstanceId(hb.getNfInstanceId())).thenReturn(nfStatusMonitor);
+			hb = TestDataGenerator.generateHeartBeatRecord(NFStatus.UNDISCOVERABLE);
+			hb.setHeartBeatTimer(180);
+			hb.setLastHbTimeStamp(new Date(System.currentTimeMillis()-200000));
+			nfStatusMonitor = new NfStatusMonitor(hb, nrfConfig.getGlobalConfig().getNrfInstanceId()); 
+			list.add(nfStatusMonitor);
+			when(hbRepo.findLatestNfStatusMonitorByNfInstanceId(hb.getNfInstanceId())).thenReturn(nfStatusMonitor);
+			hb = TestDataGenerator.generateHeartBeatRecord(NFStatus.UNDISCOVERABLE);
+			hb.setHeartBeatTimer(60);
+			hb.setLastHbTimeStamp(new Date(System.currentTimeMillis()-250000));
+			nfStatusMonitor = new NfStatusMonitor(hb, nrfConfig.getGlobalConfig().getNrfInstanceId()); 
+			list.add(nfStatusMonitor);
+			when(hbRepo.findLatestNfStatusMonitorByNfInstanceId(hb.getNfInstanceId())).thenReturn(nfStatusMonitor);
+			hb = TestDataGenerator.generateHeartBeatRecord(NFStatus.UNDISCOVERABLE);
+			hb.setHeartBeatTimer(90);
+			hb.setLastHbTimeStamp(new Date(System.currentTimeMillis()-190000));
+			nfStatusMonitor = new NfStatusMonitor(hb, nrfConfig.getGlobalConfig().getNrfInstanceId()); 
+			list.add(nfStatusMonitor);
+			when(hbRepo.findLatestNfStatusMonitorByNfInstanceId(hb.getNfInstanceId())).thenReturn(nfStatusMonitor);
+			hb = TestDataGenerator.generateHeartBeatRecord(NFStatus.UNDISCOVERABLE);
+			hb.setHeartBeatTimer(100);
+			hb.setLastHbTimeStamp(new Date(System.currentTimeMillis()-110000));
+			nfStatusMonitor = new NfStatusMonitor(hb, nrfConfig.getGlobalConfig().getNrfInstanceId()); 
+			list.add(nfStatusMonitor);
+			when(hbRepo.findLatestNfStatusMonitorByNfInstanceId(hb.getNfInstanceId())).thenReturn(nfStatusMonitor);
+			hb = TestDataGenerator.generateHeartBeatRecord(NFStatus.UNDISCOVERABLE);
+			hb.setHeartBeatTimer(120);
+			hb.setLastHbTimeStamp(new Date(System.currentTimeMillis()-200000));
+			nfStatusMonitor = new NfStatusMonitor(hb, nrfConfig.getGlobalConfig().getNrfInstanceId()); 
+			list.add(nfStatusMonitor);
+			when(hbRepo.findLatestNfStatusMonitorByNfInstanceId(hb.getNfInstanceId())).thenReturn(nfStatusMonitor);
+			
+		} catch (IOException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+			fail("NfStatusMonitor list could not be prepared.");
+		}
+
+		when(hbRepo.findMissedHbRecords(Mockito.anyLong(),any())).thenReturn(list);
+		when(hbRepo.save(any())).thenReturn(null);
+		NfInstance inst = null;
+		try {
+			inst = new NfInstance(TestDataGenerator.generateNF("AMF"), nrfConfig.getGlobalConfig().getNrfInstanceId());
+		} catch (IOException e1) {
+			// TODO Auto-generated catch block
+			e1.printStackTrace();
+		}
+		when(nfRepo.findLatestNfInstanceByNfInstanceId(any())).thenReturn(inst);
+		when(nfRepo.save(any())).thenReturn(inst);
+
+		NfStatusMonitor[] arr = list.toArray(new NfStatusMonitor[0]);
+		List<NfStatusMonitorDoc> docList = new ArrayList<NfStatusMonitorDoc>();
+		for(int i = 0; i < 5; i++) {
+			NfStatusMonitor nfStatus = arr[i];
+			VersionedJsonDocList versionJsonList = new ObjectMapper().readValue(nfStatus.getNfStatusMonitorJsonDocList(),VersionedJsonDocList.class);
+			String response = getDocBasedOnVersion("v1", versionJsonList.getVersionedJsonDocList());
+			docList.add(new ObjectMapper().readValue(response, NfStatusMonitorDoc.class));
+		}
+		Assert.assertEquals(0, docList.get(0).getNumHbMissed());
+		Assert.assertEquals(NFStatus.UNDISCOVERABLE, arr[0].getNfStatus());
+		Assert.assertEquals(0, docList.get(1).getNumHbMissed());
+		Assert.assertEquals(0, docList.get(2).getNumHbMissed());
+		Assert.assertEquals(0, docList.get(3).getNumHbMissed());
+		Assert.assertEquals(0, docList.get(4).getNumHbMissed());
+		
+		// hb duration = 60s, num allowed missed hb = 3
+		NrfEngSystemOptions engSystemOptions = TestDataGenerator.generateNrfEngSystemOptions();
+		NrfSystemOptionsDao systemOptionsDao = TestDataGenerator.generateNrfSystemOptionsDao();
+		NrfSystemOptions nrfSystemOptions = TestDataGenerator.generateNrfSystemOptions();
+		HeartbeatInfo heartbeatInfo = nrfSystemOptions.getNfManagementOptions().getNfHeartbeatTimers().get(0);
+		heartbeatInfo.setMinHbTimer(Duration.ofSeconds(60));
+		List<HeartbeatInfo> nfHeartbeatTimers = new ArrayList<HeartbeatInfo>();
+		nfHeartbeatTimers.add(heartbeatInfo);		
+		nrfSystemOptions.getNfManagementOptions().setNfHeartbeatTimers(nfHeartbeatTimers);
+		List<VersionedJsonDoc> listVersionedJsonDoc1 = new ArrayList<>();
+		VersionedJsonDoc versionJsonDoc1 = new VersionedJsonDoc();
+		versionJsonDoc1.setVersion("v1");
+		versionJsonDoc1.setDoc(nrfSystemOptions.toString());
+		listVersionedJsonDoc1.add(versionJsonDoc1);
+		VersionedJsonDocList versionJsonDocList1 = new VersionedJsonDocList();
+		versionJsonDocList1.setVersionedJsonDocList(listVersionedJsonDoc1);
+		systemOptionsDao.setConfigurationJsonDocList(versionJsonDocList1.toString());
+		
+		NrfSystemOptionsDao systemOptionsDaoError = TestDataGenerator.generateNrfSystemOptionsDao_errorResponses();
+		NrfSystemOptionsDao systemOptionsDaoEngError = TestDataGenerator.generateNrfSystemOptionsDao_engErrorResponses();
+		NrfSystemOptionsDao engSystemOptionsDao = TestDataGenerator.generateNrfEngSystemOptionsDao();
+		List<VersionedJsonDoc> listVersionedJsonDoc = new ArrayList<>();
+		VersionedJsonDoc versionJsonDoc = new VersionedJsonDoc();
+		versionJsonDoc.setVersion("v1");
+		versionJsonDoc.setDoc(engSystemOptions.toString());
+		listVersionedJsonDoc.add(versionJsonDoc);
+		VersionedJsonDocList versionJsonDocList = new VersionedJsonDocList();
+		versionJsonDocList.setVersionedJsonDocList(listVersionedJsonDoc);
+		engSystemOptionsDao.setConfigurationJsonDocList(versionJsonDocList.toString());
+		ArrayList<NrfSystemOptionsDao> systemOptionsList = new ArrayList<NrfSystemOptionsDao>() { 
+            { 
+                add(systemOptionsDao); 
+                add(engSystemOptionsDao); 
+                add(systemOptionsDaoError);
+                add(systemOptionsDaoEngError);
+                
+            } 
+        }; 
+        when(nrfSystemOptionsRepository.findbyRecordOwner(any())).thenReturn(systemOptionsList);
+		obj.auditCycle(Duration.ofSeconds(60));
+	
+		arr = list.toArray(new NfStatusMonitor[0]);
+		docList = new ArrayList<NfStatusMonitorDoc>();
+		for(int i = 0; i < 8; i++) {
+			NfStatusMonitor nfStatus = arr[i];
+			VersionedJsonDocList versionJsonList = new ObjectMapper().readValue(nfStatus.getNfStatusMonitorJsonDocList(),VersionedJsonDocList.class);
+			String response = getDocBasedOnVersion("v1", versionJsonList.getVersionedJsonDocList());
+			docList.add(new ObjectMapper().readValue(response, NfStatusMonitorDoc.class));
+		}
+		Assert.assertEquals(2, docList.get(0).getNumHbMissed());
+	    Assert.assertEquals(NFStatus.UNDISCOVERABLE, arr[0].getNfStatus());
+		Assert.assertEquals(4, docList.get(1).getNumHbMissed());
+		Assert.assertEquals(NFStatus.SUSPENDED, arr[1].getNfStatus());
+		Assert.assertEquals(0, docList.get(2).getNumHbMissed());
+		Assert.assertEquals(NFStatus.UNDISCOVERABLE, arr[2].getNfStatus());
+		Assert.assertEquals(1, docList.get(3).getNumHbMissed());
+		Assert.assertEquals(NFStatus.UNDISCOVERABLE, arr[3].getNfStatus());
+		Assert.assertEquals(4, docList.get(4).getNumHbMissed());
+		Assert.assertEquals(NFStatus.SUSPENDED, arr[4].getNfStatus());
+		Assert.assertEquals(2, docList.get(5).getNumHbMissed());
+		Assert.assertEquals(NFStatus.UNDISCOVERABLE, arr[5].getNfStatus());
+		Assert.assertEquals(1, docList.get(6).getNumHbMissed());
+		Assert.assertEquals(NFStatus.UNDISCOVERABLE, arr[6].getNfStatus());
+		Assert.assertEquals(1, docList.get(7).getNumHbMissed());
+		Assert.assertEquals(NFStatus.UNDISCOVERABLE, arr[7].getNfStatus());
+		
+	}
+	
+	@Test
+	public void testHeartBeatsMissedBeforeAuditCycle() {
+		
+		Counter search = Metrics.globalRegistry.find("ocnrf.heartbeat.missed")
+	               .tag("NfType", "AMF").tag("NfInstanceId","6faf1bbc-6e4a-4454-a507-a14ef8e1bc5c")
+	               .tag("NrfLevel", "default-ocnrf").counter();
+		double prev_response = (search != null) ? search.count() : 0;
+
+		NfStatusMonitor nfStatusMonitor = null;
+		List<NfStatusMonitor> list = new ArrayList<NfStatusMonitor>();
+		try {
+			NfHeartBeat hb = TestDataGenerator.generateHeartBeatRecord(NFStatus.REGISTERED);
+			hb.setLastHbTimeStamp(new Date(System.currentTimeMillis()-90000));
+			hb.setNfInstanceId("6faf1bbc-6e4a-4454-a507-a14ef8e1bc5c");
+			hb.setNumHbMissed(1);
+			hb.setNumHbMissedBeforeAudit(2);
+			nfStatusMonitor = new NfStatusMonitor(hb, nrfConfig.getGlobalConfig().getNrfInstanceId());
+			list.add(nfStatusMonitor);
+		} catch (IOException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+			fail("NfStatusMonitor list could not be prepared.");
+		}
+
+		when(hbRepo.findLatestNfStatusMonitorByNfInstanceId("6faf1bbc-6e4a-4454-a507-a14ef8e1bc5c")).thenReturn(nfStatusMonitor);
+		when(hbRepo.findMissedHbRecords(Mockito.anyLong(),any())).thenReturn(list);
+		when(hbRepo.save(any())).thenReturn(null);
+		NfInstance inst = null;
+		try {
+			NfProfile profile = TestDataGenerator.generateNF("AMF");
+			profile.setNfInstanceId("6faf1bbc-6e4a-4454-a507-a14ef8e1bc5c");
+			inst = new NfInstance(profile, nrfConfig.getGlobalConfig().getNrfInstanceId());
+		} catch (IOException e1) {
+			// TODO Auto-generated catch block
+			e1.printStackTrace();
+		}
+		when(nfRepo.findLatestNfInstanceByNfInstanceId(any())).thenReturn(inst);
+		when(nfRepo.save(any())).thenReturn(inst);
+		
+		obj.auditCycle(Duration.ofSeconds(30));
+		
+		Assert.assertEquals(prev_response+4,Metrics.globalRegistry.get("ocnrf.heartbeat.missed")
+				               .tag("NfType", "AMF").tag("NfInstanceId","6faf1bbc-6e4a-4454-a507-a14ef8e1bc5c")
+				               .tag("NrfLevel", "default-ocnrf").counter().count(),0);
+		
+		// Only missedBeforeAudit
+		try {
+			list.clear();
+			NfHeartBeat hb = TestDataGenerator.generateHeartBeatRecord(NFStatus.REGISTERED);
+			hb.setLastHbTimeStamp(new Date(System.currentTimeMillis()-30000));
+			hb.setNfInstanceId("6faf1bbc-6e4a-4454-a507-a14ef8e1bc5c");
+			hb.setNumHbMissedBeforeAudit(2);
+			nfStatusMonitor = new NfStatusMonitor(hb, nrfConfig.getGlobalConfig().getNrfInstanceId());
+			list.add(nfStatusMonitor);
+		} catch (IOException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+			fail("NfStatusMonitor list could not be prepared.");
+		}
+		when(hbRepo.findLatestNfStatusMonitorByNfInstanceId("6faf1bbc-6e4a-4454-a507-a14ef8e1bc5c")).thenReturn(nfStatusMonitor);
+        obj.auditCycle(Duration.ofSeconds(30));
+		
+        // Previous cycle 4 + current cycle 3
+		Assert.assertEquals(prev_response+4+3,Metrics.globalRegistry.get("ocnrf.heartbeat.missed")
+				               .tag("NfType", "AMF").tag("NfInstanceId","6faf1bbc-6e4a-4454-a507-a14ef8e1bc5c")
+				               .tag("NrfLevel", "default-ocnrf").counter().count(),0);
+	}
+	
+	@Test
+	public void testHeartBeat_when_latest_remote_record_is_deregistered() throws JsonMappingException, JsonProcessingException {
+		List<NfStatusMonitor> list = new ArrayList<NfStatusMonitor>();
+		NfStatusMonitor nfStatusMonitorLocal = null;
+		try {
+			NfStatusMonitor nfStatusMonitor = null;
+			NfHeartBeat hb = TestDataGenerator.generateHeartBeatRecord(NFStatus.REGISTERED);
+			hb.setHeartBeatTimer(60);
+			hb.setNfInstanceId("6faf1bbc-6e4a-4454-a507-a14ef8e1bc5c");
+			hb.setLastHbTimeStamp(new Date(System.currentTimeMillis()-160000));
+			nfStatusMonitorLocal = new NfStatusMonitor(hb, nrfConfig.getGlobalConfig().getNrfInstanceId());
+			list.add(nfStatusMonitorLocal);
+			hb = TestDataGenerator.generateHeartBeatRecord(NFStatus.DEREGISTERED);
+			hb.setHeartBeatTimer(60);
+			hb.setNfInstanceId("6faf1bbc-6e4a-4454-a507-a14ef8e1bc5c");
+			hb.setLastHbTimeStamp(new Date(System.currentTimeMillis()));
+			nfStatusMonitor = new NfStatusMonitor(hb, nrfConfig.getGlobalConfig().getNrfInstanceId());
+			when(hbRepo.findLatestNfStatusMonitorByNfInstanceId(hb.getNfInstanceId())).thenReturn(nfStatusMonitor);	
+			NfProfile profile = TestDataGenerator.generateNF("AMF");
+			profile.setNfInstanceId("6faf1bbc-6e4a-4454-a507-a14ef8e1bc5c");
+			NfInstance inst = new NfInstance(profile, nrfConfig.getGlobalConfig().getNrfInstanceId());
+			when(nfRepo.findLatestNfInstanceByNfInstanceId(any())).thenReturn(inst);
+		} catch (IOException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+			fail("NfStatusMonitor list could not be prepared.");
+		}
+
+		when(hbRepo.findMissedHbRecords(Mockito.anyLong(),any())).thenReturn(list);
+	
+		NfStatusMonitor[] arr = list.toArray(new NfStatusMonitor[0]);
+		List<NfStatusMonitorDoc> docList = new ArrayList<NfStatusMonitorDoc>();
+		NfStatusMonitor nfStatus = arr[0];
+		VersionedJsonDocList versionJsonList = new ObjectMapper().readValue(nfStatus.getNfStatusMonitorJsonDocList(),VersionedJsonDocList.class);
+		String response = getDocBasedOnVersion("v1", versionJsonList.getVersionedJsonDocList());
+		docList.add(new ObjectMapper().readValue(response, NfStatusMonitorDoc.class));
+		Assert.assertEquals(0, docList.get(0).getNumHbMissed());
+		Assert.assertEquals(NFStatus.REGISTERED, arr[0].getNfStatus());
+
+		// hb duration = 60s, num allowed missed hb = 3
+		NrfEngSystemOptions engSystemOptions = TestDataGenerator.generateNrfEngSystemOptions();
+		NrfSystemOptionsDao systemOptionsDao = TestDataGenerator.generateNrfSystemOptionsDao();
+		NrfSystemOptions nrfSystemOptions = TestDataGenerator.generateNrfSystemOptions();
+		HeartbeatInfo heartbeatInfo = nrfSystemOptions.getNfManagementOptions().getNfHeartbeatTimers().get(0);
+		heartbeatInfo.setMinHbTimer(Duration.ofSeconds(60));
+		List<HeartbeatInfo> nfHeartbeatTimers = new ArrayList<HeartbeatInfo>();
+		nfHeartbeatTimers.add(heartbeatInfo);		
+		nrfSystemOptions.getNfManagementOptions().setNfHeartbeatTimers(nfHeartbeatTimers);
+		List<VersionedJsonDoc> listVersionedJsonDoc1 = new ArrayList<>();
+		VersionedJsonDoc versionJsonDoc1 = new VersionedJsonDoc();
+		versionJsonDoc1.setVersion("v1");
+		versionJsonDoc1.setDoc(nrfSystemOptions.toString());
+		listVersionedJsonDoc1.add(versionJsonDoc1);
+		VersionedJsonDocList versionJsonDocList1 = new VersionedJsonDocList();
+		versionJsonDocList1.setVersionedJsonDocList(listVersionedJsonDoc1);
+		systemOptionsDao.setConfigurationJsonDocList(versionJsonDocList1.toString());
+		
+		NrfSystemOptionsDao systemOptionsDaoError = TestDataGenerator.generateNrfSystemOptionsDao_errorResponses();
+		NrfSystemOptionsDao systemOptionsDaoEngError = TestDataGenerator.generateNrfSystemOptionsDao_engErrorResponses();
+		NrfSystemOptionsDao engSystemOptionsDao = TestDataGenerator.generateNrfEngSystemOptionsDao();
+		
+		List<VersionedJsonDoc> versionedJsonList = new ArrayList<>();
+		VersionedJsonDoc versionJsonDoc = new VersionedJsonDoc();
+		versionJsonDoc.setVersion("v1");
+		versionJsonDoc.setDoc(engSystemOptions.toString());
+		versionedJsonList.add(versionJsonDoc);
+		VersionedJsonDocList versionJsonDocList = new VersionedJsonDocList();
+		versionJsonDocList.setVersionedJsonDocList(versionedJsonList);
+		engSystemOptionsDao.setConfigurationJsonDocList(versionJsonDocList.toString());
+
+		ArrayList<NrfSystemOptionsDao> systemOptionsList = new ArrayList<NrfSystemOptionsDao>() { 
+            { 
+                add(systemOptionsDao); 
+                add(engSystemOptionsDao); 
+                add(systemOptionsDaoError);
+                add(systemOptionsDaoEngError);
+                
+            } 
+        }; 
+        when(nrfSystemOptionsRepository.findbyRecordOwner(any())).thenReturn(systemOptionsList);
+		obj.auditCycle(Duration.ofSeconds(60));
+	
+		Mockito.verify(hbRepo, Mockito.times(1)).delete(nfStatusMonitorLocal);
+		Mockito.verify(nfRepo, Mockito.times(1)).deleteByNfInstanceId(nfStatusMonitorLocal.getNfInstanceId(), nfStatusMonitorLocal.getRecordOwner());
+		
+	}
+	
+	@Test
+	public void testHeartBeat_when_latest_remote_record_is_before_grace_period() throws JsonMappingException, JsonProcessingException {
+		List<NfStatusMonitor> list = new ArrayList<NfStatusMonitor>();
+		NfStatusMonitor nfStatusMonitorLocal = null;
+		try {
+			NfStatusMonitor nfStatusMonitor = null;
+			NfHeartBeat hb = TestDataGenerator.generateHeartBeatRecord(NFStatus.REGISTERED);
+			hb.setHeartBeatTimer(60);
+			hb.setNfInstanceId("6faf1bbc-6e4a-4454-a507-a14ef8e1bc5c");
+			hb.setLastHbTimeStamp(new Date(System.currentTimeMillis()));
+			nfStatusMonitorLocal = new NfStatusMonitor(hb, nrfConfig.getGlobalConfig().getNrfInstanceId());
+			list.add(nfStatusMonitorLocal);
+			hb = TestDataGenerator.generateHeartBeatRecord(NFStatus.SUSPENDED);
+			hb.setHeartBeatTimer(60);
+			hb.setNfInstanceId("6faf1bbc-6e4a-4454-a507-a14ef8e1bc5c");
+			hb.setLastHbTimeStamp(new Date(System.currentTimeMillis()));
+			nfStatusMonitor = new NfStatusMonitor(hb, nrfConfig.getGlobalConfig().getNrfInstanceId());
+			when(hbRepo.findLatestNfStatusMonitorByNfInstanceId(hb.getNfInstanceId())).thenReturn(nfStatusMonitor);			
+		} catch (IOException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+			fail("NfStatusMonitor list could not be prepared.");
+		}
+
+		when(hbRepo.findMissedHbRecords(Mockito.anyLong(),any())).thenReturn(list);
+	
+		NfStatusMonitor[] arr = list.toArray(new NfStatusMonitor[0]);
+		List<NfStatusMonitorDoc> docList = new ArrayList<NfStatusMonitorDoc>();
+		
+		NfStatusMonitor nfStatus = arr[0];
+		VersionedJsonDocList versionJsonList = new ObjectMapper().readValue(nfStatus.getNfStatusMonitorJsonDocList(),VersionedJsonDocList.class);
+		String response = getDocBasedOnVersion("v1", versionJsonList.getVersionedJsonDocList());
+		docList.add(new ObjectMapper().readValue(response, NfStatusMonitorDoc.class));
+		Assert.assertEquals(0, docList.get(0).getNumHbMissed());
+		Assert.assertEquals(NFStatus.REGISTERED, arr[0].getNfStatus());
+
+		// hb duration = 60s, num allowed missed hb = 3
+		NrfEngSystemOptions engSystemOptions = TestDataGenerator.generateNrfEngSystemOptions();
+		NrfSystemOptionsDao systemOptionsDao = TestDataGenerator.generateNrfSystemOptionsDao();
+		NrfSystemOptions nrfSystemOptions = TestDataGenerator.generateNrfSystemOptions();
+		HeartbeatInfo heartbeatInfo = nrfSystemOptions.getNfManagementOptions().getNfHeartbeatTimers().get(0);
+		heartbeatInfo.setMinHbTimer(Duration.ofSeconds(60));
+		List<HeartbeatInfo> nfHeartbeatTimers = new ArrayList<HeartbeatInfo>();
+		nfHeartbeatTimers.add(heartbeatInfo);	
+		nrfSystemOptions.getNfManagementOptions().setNfHeartbeatTimers(nfHeartbeatTimers);
+		List<VersionedJsonDoc> listVersionedJsonDoc1 = new ArrayList<>();
+		VersionedJsonDoc versionJsonDoc1 = new VersionedJsonDoc();
+		versionJsonDoc1.setVersion("v1");
+		versionJsonDoc1.setDoc(nrfSystemOptions.toString());
+		listVersionedJsonDoc1.add(versionJsonDoc1);
+		VersionedJsonDocList versionJsonDocList1 = new VersionedJsonDocList();
+		versionJsonDocList1.setVersionedJsonDocList(listVersionedJsonDoc1);
+		systemOptionsDao.setConfigurationJsonDocList(versionJsonDocList1.toString());
+		
+		NrfSystemOptionsDao systemOptionsDaoError = TestDataGenerator.generateNrfSystemOptionsDao_errorResponses();
+		NrfSystemOptionsDao systemOptionsDaoEngError = TestDataGenerator.generateNrfSystemOptionsDao_engErrorResponses();
+		NrfSystemOptionsDao engSystemOptionsDao = TestDataGenerator.generateNrfEngSystemOptionsDao();
+		List<VersionedJsonDoc> vjsonlist = new ArrayList<>();
+		VersionedJsonDoc versionJsonDoc = new VersionedJsonDoc();
+		versionJsonDoc.setVersion("v1");
+		versionJsonDoc.setDoc(engSystemOptions.toString());
+		vjsonlist.add(versionJsonDoc);
+		VersionedJsonDocList versionJsonDocList = new VersionedJsonDocList();
+		versionJsonDocList.setVersionedJsonDocList(vjsonlist);
+		engSystemOptionsDao.setConfigurationJsonDocList(versionJsonDocList.toString());
+		ArrayList<NrfSystemOptionsDao> systemOptionsList = new ArrayList<NrfSystemOptionsDao>() { 
+            { 
+                add(systemOptionsDao); 
+                add(engSystemOptionsDao); 
+                add(systemOptionsDaoError);
+                add(systemOptionsDaoEngError);
+                
+            } 
+        }; 
+        System.out.println(systemOptionsDao);
+        when(nrfSystemOptionsRepository.findbyRecordOwner(any())).thenReturn(systemOptionsList);
+		obj.auditCycle(Duration.ofSeconds(60));
+	
+		Mockito.verify(hbRepo, Mockito.times(0)).delete(nfStatusMonitorLocal);
+		Mockito.verify(nfRepo, Mockito.times(0)).deleteByNfInstanceId(nfStatusMonitorLocal.getNfInstanceId(), nfStatusMonitorLocal.getRecordOwner());
+	}
+	
+	@Test
+	public void testHeartBeat_when_local_record_is_older_than_the_replication_latency_of_latest_remote_record() {
+		List<NfStatusMonitor> list = new ArrayList<NfStatusMonitor>();
+		NfStatusMonitor nfStatusMonitorLocal = null;
+		NfHeartBeat hb = null;
+		try {
+			NfStatusMonitor nfStatusMonitor = null;
+			hb = TestDataGenerator.generateHeartBeatRecord(NFStatus.REGISTERED);
+			hb.setHeartBeatTimer(60);
+			hb.setNfInstanceId("6faf1bbc-6e4a-4454-a507-a14ef8e1bc5c");
+			hb.setLastHbTimeStamp(new Date(System.currentTimeMillis()-160000));
+			nfStatusMonitorLocal = new NfStatusMonitor(hb, nrfConfig.getGlobalConfig().getNrfInstanceId());
+			list.add(nfStatusMonitorLocal);
+			hb = TestDataGenerator.generateHeartBeatRecord(NFStatus.REGISTERED);
+			hb.setHeartBeatTimer(60);
+			hb.setNfInstanceId("6faf1bbc-6e4a-4454-a507-a14ef8e1bc5c");
+			hb.setLastHbTimeStamp(new Date(System.currentTimeMillis()));
+			nfStatusMonitor = new NfStatusMonitor(hb, nrfConfig.getGlobalConfig().getNrfInstanceId());
+			when(hbRepo.findLatestNfStatusMonitorByNfInstanceId(hb.getNfInstanceId())).thenReturn(nfStatusMonitor);		
+			NfProfile profile = TestDataGenerator.generateNF("AMF");
+			profile.setNfInstanceId("6faf1bbc-6e4a-4454-a507-a14ef8e1bc5c");
+			NfInstance inst = new NfInstance(profile, nrfConfig.getGlobalConfig().getNrfInstanceId());
+			when(nfRepo.findLatestNfInstanceByNfInstanceId(any())).thenReturn(inst);
+		} catch (IOException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+			fail("NfStatusMonitor list could not be prepared.");
+		}
+
+		NfStatusMonitorDoc doc = new NfStatusMonitorDoc(hb,this.nrfConfig.getGlobalConfig().getNrfInstanceId(),new Date());
+		doc.setCreationTimestamp(nfStatusMonitorLocal.getLastUpdateTimestamp());
+		when(nfUpgradeSeviceImpl.findNfStatusMonitorDocWithVersion("v1", nfStatusMonitorLocal)).thenReturn(doc.toString());
+		when(hbRepo.findMissedHbRecords(Mockito.anyLong(),any())).thenReturn(list);
+	
+		NfStatusMonitor[] arr = list.toArray(new NfStatusMonitor[0]);
+		NfStatusMonitor nfStatusMonitor = arr[0];
+		System.out.println(nfStatusMonitor.getNfStatusMonitorJsonDocList());
+		NfUpgradeServiceImpl service = new NfUpgradeServiceImpl();
+		String str = service.findNfStatusMonitorDocWithVersion(version, nfStatusMonitor);
+		NfStatusMonitorDoc pojo = null;
+		 try {
+			pojo = new ObjectMapper().readValue(str, NfStatusMonitorDoc.class);
+		} catch (JsonMappingException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		} catch (JsonProcessingException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+		Assert.assertEquals(0, pojo.getNumHbMissed());
+		Assert.assertEquals(NFStatus.REGISTERED, arr[0].getNfStatus());
+
+		// hb duration = 60s, num allowed missed hb = 3
+		NrfEngSystemOptions engSystemOptions = TestDataGenerator.generateNrfEngSystemOptions();
+		NrfSystemOptionsDao systemOptionsDao = TestDataGenerator.generateNrfSystemOptionsDao();
+		NrfSystemOptions nrfSystemOptions = TestDataGenerator.generateNrfSystemOptions();
+		HeartbeatInfo heartbeatInfo = nrfSystemOptions.getNfManagementOptions().getNfHeartbeatTimers().get(0);
+		heartbeatInfo.setMinHbTimer(Duration.ofSeconds(60));
+		List<HeartbeatInfo> nfHeartbeatTimers = new ArrayList<HeartbeatInfo>();
+		nfHeartbeatTimers.add(heartbeatInfo);		
+		nrfSystemOptions.getNfManagementOptions().setNfHeartbeatTimers(nfHeartbeatTimers);
+		List<VersionedJsonDoc> listVersionedJsonDoc1 = new ArrayList<>();
+		VersionedJsonDoc versionJsonDoc1 = new VersionedJsonDoc();
+		versionJsonDoc1.setVersion("v1");
+		versionJsonDoc1.setDoc(nrfSystemOptions.toString());
+		listVersionedJsonDoc1.add(versionJsonDoc1);
+		VersionedJsonDocList versionJsonDocList1 = new VersionedJsonDocList();
+		versionJsonDocList1.setVersionedJsonDocList(listVersionedJsonDoc1);
+		systemOptionsDao.setConfigurationJsonDocList(versionJsonDocList1.toString());
+		
+		NrfSystemOptionsDao systemOptionsDaoError = TestDataGenerator.generateNrfSystemOptionsDao_errorResponses();
+		NrfSystemOptionsDao systemOptionsDaoEngError = TestDataGenerator.generateNrfSystemOptionsDao_engErrorResponses();
+		NrfSystemOptionsDao engSystemOptionsDao = TestDataGenerator.generateNrfEngSystemOptionsDao();
+		List<VersionedJsonDoc> docList = new ArrayList<>();
+		VersionedJsonDoc versionJsonDoc = new VersionedJsonDoc();
+		versionJsonDoc.setVersion("v1");
+		versionJsonDoc.setDoc(engSystemOptions.toString());
+		docList.add(versionJsonDoc);
+		VersionedJsonDocList versionJsonDocList = new VersionedJsonDocList();
+		versionJsonDocList.setVersionedJsonDocList(docList);
+		engSystemOptionsDao.setConfigurationJsonDocList(versionJsonDocList.toString());
+		ArrayList<NrfSystemOptionsDao> systemOptionsList = new ArrayList<NrfSystemOptionsDao>() { 
+            { 
+                add(systemOptionsDao); 
+                add(engSystemOptionsDao); 
+                add(systemOptionsDaoError);
+                add(systemOptionsDaoEngError);
+                
+            } 
+        }; 
+        when(nrfSystemOptionsRepository.findbyRecordOwner(any())).thenReturn(systemOptionsList);
+		obj.auditCycle(Duration.ofSeconds(60));
+	
+		Mockito.verify(hbRepo, Mockito.times(1)).delete(nfStatusMonitorLocal);
+		Mockito.verify(nfRepo, Mockito.times(1)).deleteByNfInstanceId(nfStatusMonitorLocal.getNfInstanceId(), nfStatusMonitorLocal.getRecordOwner());
+	}
+	
+	public void getMetricsValues()
+	{
+		// retrieving register metrics
+		
+		try {
+			this.count_dbmetrics_find_nfInstances_200_OK = (int)Metrics.globalRegistry.get("ocnrf.dbmetrics").tag("method",REQUEST_METHOD).
+					tag("dbOperation",FIND).tag("serviceOperation",serviceOperation).tag("HttpStatusCode",String.valueOf((HttpStatus.OK).value())).tag("tableName", NF_INSTANCES).counter().count();
+		} catch (Exception e) {
+			this.count_dbmetrics_find_nfInstances_200_OK=0;		
+			}
+		try {
+			this.count_dbmetrics_find_nfStatusMonitor_200_OK = (int)Metrics.globalRegistry.get("ocnrf.dbmetrics").tag("method",REQUEST_METHOD).
+					tag("dbOperation",FIND).tag("serviceOperation",serviceOperation).tag("HttpStatusCode",String.valueOf((HttpStatus.OK).value())).tag("tableName", NF_STATUS_MONITOR).counter().count();
+		} catch (Exception e) {
+			this.count_dbmetrics_find_nfInstances_200_OK=0;		
+			}
+		try {
+			this.count_dbmetrics_find_nrfSystemOptions_200_OK = (int)Metrics.globalRegistry.get("ocnrf.dbmetrics").tag("method",REQUEST_METHOD).
+					tag("dbOperation",FIND).tag("serviceOperation",serviceOperation).tag("HttpStatusCode",String.valueOf((HttpStatus.OK).value())).tag("tableName", NRF_SYSTEMOPTIONS).counter().count();
+		} catch (Exception e) {
+			this.count_dbmetrics_find_nrfSystemOptions_200_OK=0;		
+			}
+		try {
+			this.count_dbmetrics_update_nfInstances_200_OK = (int)Metrics.globalRegistry.get("ocnrf.dbmetrics").tag("method",REQUEST_METHOD).
+					tag("dbOperation",UPDATE).tag("serviceOperation",serviceOperation).tag("HttpStatusCode",String.valueOf((HttpStatus.OK).value())).tag("tableName", NF_INSTANCES).counter().count();
+		} catch (Exception e) {
+			this.count_dbmetrics_update_nfInstances_200_OK=0;		
+			}
+		try {
+			this.count_dbmetrics_update_nfStatusMonitor_200_OK = (int)Metrics.globalRegistry.get("ocnrf.dbmetrics").tag("method",REQUEST_METHOD).
+					tag("dbOperation",UPDATE).tag("serviceOperation",serviceOperation).tag("HttpStatusCode",String.valueOf((HttpStatus.OK).value())).tag("tableName", NF_STATUS_MONITOR).counter().count();
+		} catch (Exception e) {
+			this.count_dbmetrics_update_nfStatusMonitor_200_OK=0;		
+			}
+			
+	}
+	
+	public String getDocBasedOnVersion(String version,List<VersionedJsonDoc> list) {
+		String object = null;
+		Iterator<VersionedJsonDoc> iterator = list.iterator();
+		while(iterator.hasNext()) {
+			VersionedJsonDoc jsonDoc = (VersionedJsonDoc) iterator.next();
+		    if(jsonDoc.getVersion().equals(version)) {
+		    	String doc = jsonDoc.getDoc();
+		    	object = doc;
+		    }
+		}
+		return object;
+	}
+
+	@Test
+	public void test_heartbeatAudit_HbInfo_AMF() throws JsonMappingException, JsonProcessingException {
+		
+        /*------------------------------------------
+        Profile     HBTimer       LastHBTimestamp		
+        ------------------------------------------
+        1            50             now - 110*/
+			
+		List<NfStatusMonitor> list = new ArrayList<NfStatusMonitor>();
+		try {
+			NfStatusMonitor nfStatusMonitor = null;
+			NfHeartBeat hb = TestDataGenerator.generateHeartBeatRecord(NFStatus.UNDISCOVERABLE);
+			hb.setHeartBeatTimer(50);
+			hb.setLastHbTimeStamp(new Date(System.currentTimeMillis()-110000));
+			nfStatusMonitor = new NfStatusMonitor(hb, nrfConfig.getGlobalConfig().getNrfInstanceId());
+			list.add(nfStatusMonitor);
+			when(hbRepo.findLatestNfStatusMonitorByNfInstanceId(hb.getNfInstanceId())).thenReturn(nfStatusMonitor);
+			
+		} catch (IOException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+			fail("NfStatusMonitor list could not be prepared.");
+		}
+
+		when(hbRepo.findMissedHbRecords(Mockito.anyLong(),any())).thenReturn(list);
+		when(hbRepo.save(any())).thenReturn(null);
+		NfInstance inst = null;
+		try {
+			inst = new NfInstance(TestDataGenerator.generateNF("AMF"), nrfConfig.getGlobalConfig().getNrfInstanceId());
+		} catch (IOException e1) {
+			// TODO Auto-generated catch block
+			e1.printStackTrace();
+		}
+		when(nfRepo.findLatestNfInstanceByNfInstanceId(any())).thenReturn(inst);
+		when(nfRepo.save(any())).thenReturn(inst);
+
+		NfStatusMonitor[] arr = list.toArray(new NfStatusMonitor[0]);
+		List<NfStatusMonitorDoc> docList = new ArrayList<NfStatusMonitorDoc>();
+		for(int i = 0; i < 1; i++) {
+			NfStatusMonitor nfStatus = arr[i];
+			VersionedJsonDocList versionJsonList = new ObjectMapper().readValue(nfStatus.getNfStatusMonitorJsonDocList(),VersionedJsonDocList.class);
+			String response = getDocBasedOnVersion("v1", versionJsonList.getVersionedJsonDocList());
+			docList.add(new ObjectMapper().readValue(response, NfStatusMonitorDoc.class));
+		}
+		Assert.assertEquals(0, docList.get(0).getNumHbMissed());
+		Assert.assertEquals(NFStatus.UNDISCOVERABLE, arr[0].getNfStatus());
+		
+		// hb duration = 60s, num allowed missed hb = 3 for ALL_NF_TYPE
+		// hb duration = 50s, num allowed missed hb = 1 for AMF
+		NrfEngSystemOptions engSystemOptions = TestDataGenerator.generateNrfEngSystemOptions();
+		NrfSystemOptionsDao systemOptionsDao = TestDataGenerator.generateNrfSystemOptionsDao();
+		NrfSystemOptions nrfSystemOptions = TestDataGenerator.generateNrfSystemOptions();
+		HeartbeatInfo heartbeatInfo = nrfSystemOptions.getNfManagementOptions().getNfHeartbeatTimers().get(0);
+		heartbeatInfo.setMinHbTimer(Duration.ofSeconds(60));
+		List<HeartbeatInfo> nfHeartbeatTimers = new ArrayList<HeartbeatInfo>();
+		nfHeartbeatTimers.add(heartbeatInfo);	
+		heartbeatInfo = new HeartbeatInfo(heartbeatInfo);
+		heartbeatInfo.setNfType("AMF");
+		heartbeatInfo.setNfHeartbeatMissAllowed(1);
+		nfHeartbeatTimers.add(heartbeatInfo);
+		nrfSystemOptions.getNfManagementOptions().setNfHeartbeatTimers(nfHeartbeatTimers);
+		List<VersionedJsonDoc> listVersionedJsonDoc1 = new ArrayList<>();
+		VersionedJsonDoc versionJsonDoc1 = new VersionedJsonDoc();
+		versionJsonDoc1.setVersion("v1");
+		versionJsonDoc1.setDoc(nrfSystemOptions.toString());
+		listVersionedJsonDoc1.add(versionJsonDoc1);
+		VersionedJsonDocList versionJsonDocList1 = new VersionedJsonDocList();
+		versionJsonDocList1.setVersionedJsonDocList(listVersionedJsonDoc1);
+		systemOptionsDao.setConfigurationJsonDocList(versionJsonDocList1.toString());
+		
+		NrfSystemOptionsDao systemOptionsDaoError = TestDataGenerator.generateNrfSystemOptionsDao_errorResponses();
+		NrfSystemOptionsDao systemOptionsDaoEngError = TestDataGenerator.generateNrfSystemOptionsDao_engErrorResponses();
+		NrfSystemOptionsDao engSystemOptionsDao = TestDataGenerator.generateNrfEngSystemOptionsDao();
+		List<VersionedJsonDoc> listVersionedJsonDoc = new ArrayList<>();
+		VersionedJsonDoc versionJsonDoc = new VersionedJsonDoc();
+		versionJsonDoc.setVersion("v1");
+		versionJsonDoc.setDoc(engSystemOptions.toString());
+		listVersionedJsonDoc.add(versionJsonDoc);
+		VersionedJsonDocList versionJsonDocList = new VersionedJsonDocList();
+		versionJsonDocList.setVersionedJsonDocList(listVersionedJsonDoc);
+		engSystemOptionsDao.setConfigurationJsonDocList(versionJsonDocList.toString());
+		ArrayList<NrfSystemOptionsDao> systemOptionsList = new ArrayList<NrfSystemOptionsDao>() { 
+            { 
+                add(systemOptionsDao); 
+                add(engSystemOptionsDao); 
+                add(systemOptionsDaoError);
+                add(systemOptionsDaoEngError);
+                
+            } 
+        }; 
+        when(nrfSystemOptionsRepository.findbyRecordOwner(any())).thenReturn(systemOptionsList);
+		obj.auditCycle(Duration.ofSeconds(60));
+	
+		arr = list.toArray(new NfStatusMonitor[0]);
+		docList = new ArrayList<NfStatusMonitorDoc>();
+		for(int i = 0; i < 1; i++) {
+			NfStatusMonitor nfStatus = arr[i];
+			VersionedJsonDocList versionJsonList = new ObjectMapper().readValue(nfStatus.getNfStatusMonitorJsonDocList(),VersionedJsonDocList.class);
+			String response = getDocBasedOnVersion("v1", versionJsonList.getVersionedJsonDocList());
+			docList.add(new ObjectMapper().readValue(response, NfStatusMonitorDoc.class));
+		}
+		Assert.assertEquals(2, docList.get(0).getNumHbMissed());
+	    Assert.assertEquals(NFStatus.SUSPENDED, arr[0].getNfStatus());
+	}
+	
+}

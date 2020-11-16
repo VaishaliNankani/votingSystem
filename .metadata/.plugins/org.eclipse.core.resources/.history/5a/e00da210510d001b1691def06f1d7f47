@@ -1,0 +1,32 @@
+package com.oracle.cgbu.cne.nrf.domain;
+
+import java.util.HashMap;
+
+public class DataUtility {
+	
+	private HashMap<String, String> propagatedHeaders = new HashMap<String, String>();
+	
+	private String nfFqdn = null;
+
+	public String getNfFqdn() {
+		return nfFqdn;
+	}
+
+	public void setNfFqdn(String nfFqdn) {
+		this.nfFqdn = nfFqdn;
+	}
+
+	public HashMap<String, String> getPropagatedHeaders() {
+		return propagatedHeaders;
+	}
+
+	public void setPropagatedHeaders(HashMap<String, String> propagatedHeaders) {
+		this.propagatedHeaders = propagatedHeaders;
+	}
+
+	@Override
+	public String toString() {
+		return "DataUtility [propagatedHeaders=" + propagatedHeaders + ", nfFqdn=" + nfFqdn + "]";
+	}
+	
+}

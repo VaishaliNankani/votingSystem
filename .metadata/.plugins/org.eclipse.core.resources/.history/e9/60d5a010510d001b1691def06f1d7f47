@@ -1,0 +1,250 @@
+// Copyright 2018 (C), Oracle and/or its affiliates. All rights reserved.
+
+package com.oracle.cgbu.cne.nrf.dao;
+
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.List;
+
+import javax.persistence.Column;
+import javax.persistence.Entity;
+import javax.persistence.EnumType;
+import javax.persistence.Enumerated;
+import javax.persistence.Id;
+import javax.persistence.IdClass;
+import javax.persistence.Table;
+import javax.validation.constraints.NotNull;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.oracle.cgbu.cne.nrf.domain.AdditionalAttributes;
+import com.oracle.cgbu.cne.nrf.domain.EpochTime;
+import com.oracle.cgbu.cne.nrf.domain.NFStatus;
+import com.oracle.cgbu.cne.nrf.domain.NfInstanceId;
+import com.oracle.cgbu.cne.nrf.domain.NfProfile;
+import com.oracle.cgbu.cne.nrf.domain.VersionedJsonDoc;
+import com.oracle.cgbu.cne.nrf.domain.VersionedJsonDocList;
+
+@Entity
+@IdClass(NfInstanceId.class)
+@Table(name = "NfInstances")
+public class NfInstance {
+
+	@Id
+	@NotNull
+	@Column(name = "nfInstanceId", nullable = false, updatable = false, unique = true)
+	private String nfInstanceId;
+	
+	@Id
+	@NotNull
+	@Column(name= "recordOwner")
+	private String recordOwner;
+	
+
+	@Override
+	public int hashCode() {
+		final int prime = 31;
+		int result = 1;
+		result = prime * result + (int) (lastUpdateFromNFTimestamp ^ (lastUpdateFromNFTimestamp >>> 32));
+		result = prime * result + (int) (lastUpdateTimestamp ^ (lastUpdateTimestamp >>> 32));
+		result = prime * result + ((nfInstanceId == null) ? 0 : nfInstanceId.hashCode());
+		result = prime * result + ((nfProfileJsonDocList == null) ? 0 : nfProfileJsonDocList.hashCode());
+		result = prime * result + ((nfStatus == null) ? 0 : nfStatus.hashCode());
+		result = prime * result + ((nfType == null) ? 0 : nfType.hashCode());
+		result = prime * result + ((recordOwner == null) ? 0 : recordOwner.hashCode());
+		return result;
+	}
+
+	@Override
+	public boolean equals(Object obj) {
+		if (this == obj)
+			return true;
+		if (obj == null)
+			return false;
+		if (getClass() != obj.getClass())
+			return false;
+		NfInstance other = (NfInstance) obj;
+		if (lastUpdateFromNFTimestamp != other.lastUpdateFromNFTimestamp)
+			return false;
+		if (lastUpdateTimestamp != other.lastUpdateTimestamp)
+			return false;
+		if (nfInstanceId == null) {
+			if (other.nfInstanceId != null)
+				return false;
+		} else if (!nfInstanceId.equals(other.nfInstanceId))
+			return false;
+		if (nfProfileJsonDocList == null) {
+			if (other.nfProfileJsonDocList != null)
+				return false;
+		} else if (!nfProfileJsonDocList.equals(other.nfProfileJsonDocList))
+			return false;
+		if (nfStatus != other.nfStatus)
+			return false;
+		if (nfType == null) {
+			if (other.nfType != null)
+				return false;
+		} else if (!nfType.equals(other.nfType))
+			return false;
+		if (recordOwner == null) {
+			if (other.recordOwner != null)
+				return false;
+		} else if (!recordOwner.equals(other.recordOwner))
+			return false;
+		return true;
+	}
+
+	@Override
+	public String toString() {
+		return "NfInstance [nfInstanceId=" + nfInstanceId + ", recordOwner=" + recordOwner + ", nfType=" + nfType
+				+ ", nfStatus=" + nfStatus + ", nfProfileJsonDocList=" + nfProfileJsonDocList + ", lastUpdateTimestamp="
+				+ lastUpdateTimestamp + ", lastUpdateFromNFTimestamp=" + lastUpdateFromNFTimestamp + "]";
+	}
+
+	@NotNull
+	@Column(name = "nfType", nullable = false, updatable = false)
+	private String nfType;
+	
+	@NotNull
+	@Enumerated(value=EnumType.STRING)
+	@Column(name = "nfStatus", nullable = false)
+	private NFStatus nfStatus;
+	
+	@NotNull
+	@Column(name = "nfProfileJsonDocList", nullable = false, columnDefinition = "json")
+	private String nfProfileJsonDocList;
+	
+	@Column(name = "lastUpdateTimestamp", nullable = false)
+	private long lastUpdateTimestamp;
+	
+	@Column(name = "lastUpdateFromNFTimestamp", nullable = false)
+	private long lastUpdateFromNFTimestamp;
+	
+	public long getLastUpdateFromNFTimestamp() {
+		return lastUpdateFromNFTimestamp;
+	}
+
+	private static final String VERSION = "v1";
+	
+	public void setLastUpdateFromNFTimestamp(Object lastUpdateFromNFTimestamp) {
+		if(lastUpdateFromNFTimestamp instanceof Date) {
+			this.lastUpdateFromNFTimestamp = EpochTime.fetchEpochFromDate((Date) lastUpdateFromNFTimestamp);
+		}else{
+			this.lastUpdateFromNFTimestamp = (long)lastUpdateFromNFTimestamp;
+		}
+	}
+
+	public NfInstance( ) {
+		super();
+	}
+	
+	public NfInstance(NfProfile profile, String nrfInstanceId) throws JsonProcessingException {
+		super();		
+		this.setNfInstanceId(profile.getNfInstanceId());
+		this.setNfStatus(profile.getNfStatus());
+		this.setType(profile.getNfType());
+		this.setRecordOwner(nrfInstanceId);
+		Date currDate = new Date();
+		this.setLastUpdateTimestamp(currDate);
+		this.setLastUpdateFromNFTimestamp(currDate);
+		AdditionalAttributes additionalAttributes = new AdditionalAttributes();
+		additionalAttributes.setCreationTimestamp(currDate);
+		additionalAttributes.setRecordCreator(nrfInstanceId);
+		profile.setAdditionalAttributes(additionalAttributes);
+		
+		List<VersionedJsonDoc> versionedDocList = new ArrayList<>();
+		VersionedJsonDoc versionJsonDoc = new VersionedJsonDoc();
+		versionJsonDoc.setVersion(VERSION);
+		versionJsonDoc.setDoc(profile.toString());
+		versionedDocList.add(versionJsonDoc);
+		
+		VersionedJsonDocList versionJsonDocList = new VersionedJsonDocList();
+		versionJsonDocList.setVersionedJsonDocList(versionedDocList);
+		this.setNfProfileJsonDocList(versionJsonDocList.toString());
+	}
+	
+	public NfInstance(NfInstance nfInstance,String nrfInstanceId,String nfInstanceId) {
+		super();
+		this.setNfInstanceId(nfInstanceId);
+		this.setNfStatus(nfInstance.getNfStatus());
+		this.setType(nfInstance.getNfType());
+		this.setNfProfileJsonDocList(nfInstance.getNfProfileJsonDocList());
+		this.setRecordOwner(nrfInstanceId);
+		this.setLastUpdateFromNFTimestamp(nfInstance.getLastUpdateFromNFTimestamp());
+		Date currdate = new Date();
+		this.setLastUpdateTimestamp(currdate);
+	}
+	
+	public NfInstance(NfInstance nfInstance,String nrfInstanceId) {
+		this.setNfInstanceId(nfInstance.getNfInstanceId());
+		this.setRecordOwner(nrfInstanceId);
+		this.setNfStatus(nfInstance.getNfStatus());
+		this.setType(nfInstance.getNfType());
+		this.setNfProfileJsonDocList(nfInstance.getNfProfileJsonDocList());
+		this.setLastUpdateFromNFTimestamp(nfInstance.getLastUpdateFromNFTimestamp());
+		Date currDate = new Date();
+		this.setLastUpdateTimestamp(currDate);
+	}
+
+	public String getNfInstanceId() {
+		return nfInstanceId;
+	}
+
+	public void setNfInstanceId(String nfInstanceId) {
+		this.nfInstanceId = nfInstanceId;
+	}
+
+	
+
+	public String getRecordOwner() {
+		return recordOwner;
+	}
+
+	public void setRecordOwner(String recordOwner) {
+		this.recordOwner = recordOwner;
+	}
+
+	public String getType() {
+		return nfType;
+	}
+
+	public void setType(String type) {
+		this.nfType = type;
+	}
+
+	public NFStatus getNfStatus() {
+		return nfStatus;
+	}
+
+	public void setNfStatus(NFStatus nfStatus) {
+		this.nfStatus = nfStatus;
+	}
+
+
+	public String getNfProfileJsonDocList() {
+		return nfProfileJsonDocList;
+	}
+
+	public void setNfProfileJsonDocList(String nfProfileJsonDocList) {
+		this.nfProfileJsonDocList = nfProfileJsonDocList;
+	}
+
+	public String getNfType() {
+		return nfType;
+	}
+
+	public void setNfType(String nfType) {
+		this.nfType = nfType;
+	}
+
+	public long getLastUpdateTimestamp() {
+		return lastUpdateTimestamp;
+	}
+
+	public void setLastUpdateTimestamp(Object lastUpdateTimestamp) {
+		if(lastUpdateTimestamp instanceof Date) {
+			this.lastUpdateTimestamp = EpochTime.fetchEpochFromDate((Date) lastUpdateTimestamp);
+		}else{
+			this.lastUpdateTimestamp = (long)lastUpdateTimestamp;
+		}
+	}
+	
+}

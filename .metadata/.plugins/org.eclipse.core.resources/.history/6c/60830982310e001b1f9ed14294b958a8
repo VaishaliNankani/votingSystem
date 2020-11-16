@@ -1,0 +1,168 @@
+package com.oracle.cgbu.cne.nrf.service;
+
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.event.ContextRefreshedEvent;
+import org.springframework.context.event.EventListener;
+import org.springframework.stereotype.Component;
+
+import com.oracle.cgbu.cne.nrf.NrfConfigException;
+import com.oracle.cgbu.cne.nrf.audit.AuditManager;
+import com.oracle.cgbu.cne.nrf.config.NrfConfigurations;
+import com.oracle.cgbu.cne.nrf.dao.NrfSystemOptionsDao;
+import com.oracle.cgbu.cne.nrf.dao.NrfSystemOptionsRepository;
+import com.oracle.cgbu.cne.nrf.domain.ErrorResponses;
+import com.oracle.cgbu.cne.nrf.domain.ForwardingOptions;
+import com.oracle.cgbu.cne.nrf.domain.GeneralOptions;
+import com.oracle.cgbu.cne.nrf.domain.GeoRedundancyOptions;
+import com.oracle.cgbu.cne.nrf.domain.LogLevelOptions;
+import com.oracle.cgbu.cne.nrf.domain.NfAccessTokenOptions;
+import com.oracle.cgbu.cne.nrf.domain.NfAuthenticationOptions;
+import com.oracle.cgbu.cne.nrf.domain.NfDiscoveryOptions;
+import com.oracle.cgbu.cne.nrf.domain.NfManagementOptions;
+import com.oracle.cgbu.cne.nrf.domain.NfScreeningOptions;
+import com.oracle.cgbu.cne.nrf.domain.NrfEngSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.NrfSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.ProblemDetails;
+import com.oracle.cgbu.cne.nrf.domain.SlfOptions;
+import com.oracle.cgbu.cne.nrf.metrics.MetricsDimension;
+
+	@Component
+	public class NnrfManagementServiceStatus{
+		private static Logger logger = LogManager.getLogger(NnrfManagementServiceStatus.class);
+		private static final String SERVICE_OPERATION = "InternalManagementServiceStatus";
+		private static final  String VERSION = "v1";
+		@Autowired
+		MetricsDimension metricsDimension;
+		
+		public MetricsDimension getMetricsDimension() {
+			return metricsDimension;
+		}
+
+		public void setMetricsDimension(MetricsDimension metricsDimension) {
+			this.metricsDimension = metricsDimension;
+		}
+		@Autowired
+		RestClient restClient;
+		
+		@Autowired
+		private NrfSystemOptionsRepository nrfSystemOptionsRepository;
+		
+		private NrfSystemOptions nrfSystemOptions;
+		
+		private String nrfInstanceId;
+		
+		private Boolean managementsvcStatusCheck;
+		
+		@Autowired
+		public void setNrfConfig(NrfConfigurations config) {
+			if(config==null) {
+				throw new NrfConfigException("Bad NRF configuration. Missing 'nrf.*' properties.");
+			}
+			if(config.getManagementSvc()==null || config.getManagementSvc().getStatusCheck()==null) {
+				throw new NrfConfigException("Bad NRF configuration. Missing 'nrf.management-svc.status-check' property.");
+			}
+			if(config.getGlobalConfig()==null || config.getGlobalConfig().getNrfInstanceId()==null) {
+				throw new NrfConfigException("Bad NRF configuration. Missing 'nrf.global-config.nrf-instance-id' property.");
+			}
+			this.setManagementsvcStatusCheck(config.getManagementSvc().getStatusCheck());
+			this.setNrfInstanceId(config.getGlobalConfig().getNrfInstanceId());
+		}
+		
+		private int THREAD_POOL_SIZE = 2;
+		
+		public final Boolean getManagementsvcStatusCheck() {
+			return managementsvcStatusCheck;
+		}
+
+		public final void setManagementsvcStatusCheck(Boolean managementsvcStatusCheck) {
+			this.managementsvcStatusCheck = managementsvcStatusCheck;
+		}
+
+		public final String getNrfInstanceId() {
+			return this.nrfInstanceId;
+		}
+
+		public final void setNrfInstanceId(String nrfInstanceId) {
+			this.nrfInstanceId = nrfInstanceId;
+		}
+
+		@EventListener(ContextRefreshedEvent.class)
+		public final void checkNnrfManagementServiceStatus() {
+			Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+			if(managementsvcStatusCheck == false) {
+				logMsg.clear();
+				logMsg.put("logMsg", "Not starting app-info check, since it is disabled");
+				logger.info(logMsg.toString());
+				AuditManager.pauseAudit = false;
+			}
+			else {
+				ScheduledExecutorService executor = Executors.newScheduledThreadPool(THREAD_POOL_SIZE);
+				executor.scheduleWithFixedDelay(() -> {
+					setNrfSystemOptions();
+					try {
+						if(getNrfSystemOptions() == null) {
+							logMsg.clear();
+							logMsg.put("logMsg", "SystemOptions not available !! Retry in 1 second." );
+							logger.warn(logMsg.toString());
+							Thread.sleep(1000);
+						} else {
+							AuditManager.pauseAudit = !(restClient.isNnrfManagementServiceAlive());
+							Thread.sleep(getNrfSystemOptions().getGeoRedundancyOptions().getMonitorNrfServiceStatusInterval().toMillis());
+						}
+					}catch (InterruptedException e) {
+						logMsg.clear();
+						logMsg.put("logMsg", e.getMessage());
+						logMsg.put("stackTrace", e.getStackTrace());
+						logger.error(logMsg.toString());
+					}
+				}, 0, 1, TimeUnit.MILLISECONDS);
+			}
+		}
+		
+		public NrfSystemOptions getNrfSystemOptions() {
+			return this.nrfSystemOptions;
+		}
+		
+		public void setNrfSystemOptions() {
+			Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+			logMsg.clear();
+			logMsg.put("logMsg", "setNrfSystemOptions() called");
+			logger.trace(logMsg.toString());
+			this.metricsDimension.setServiceOperation(SERVICE_OPERATION);			
+			List<NrfSystemOptionsDao>  nrfSystemOptionsDaoList = null;
+			try {
+				nrfSystemOptionsDaoList = this.nrfSystemOptionsRepository.findbyRecordOwner(this.nrfInstanceId);
+				if(nrfSystemOptionsDaoList != null) {
+					prepareNrfSystemAndEngineeringOptions(nrfSystemOptionsDaoList);
+				}
+				else
+				{
+					ProblemDetails prob = ProblemDetails.forInternalError();
+					prob.setCause("Could not fetch NrfSystemOptions due to an unexpected error.");
+					logMsg.clear();
+					logMsg.put("logMsg", "setNrfSystemOptions failed. Unable to fetch NrfSystemOptions"
+							+ "for OCNRF_SYSTEM_OPTIONS");
+					logger.error(logMsg.toString());
+				}
+			}
+			catch(Exception e) {
+				ProblemDetails prob = ProblemDetails.forInternalError();
+				prob.setCause("Could not fetch NrfConfiguration due to an unexpected error.");
+				logMsg.clear();
+				logMsg.put("logMsg", e.getMessage());
+				logMsg.put("stackTrace", (Object[]) e.getStackTrace());
+				logger.error(logMsg.toString());
+			}
+			
+		}
+		
+}

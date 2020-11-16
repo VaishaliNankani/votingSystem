@@ -1,0 +1,66 @@
+// Copyright 2018 (C), Oracle and/or its affiliates. All rights reserved.
+
+package com.oracle.oci.votingservice.service;
+
+import java.net.URI;
+import java.util.ArrayList;
+import java.util.Enumeration;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.ListIterator;
+import java.util.Map;
+
+import javax.servlet.http.HttpServletRequest;
+import javax.validation.Valid;
+
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.apache.logging.log4j.ThreadContext;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.validation.BindingResult;
+import org.springframework.validation.FieldError;
+import org.springframework.validation.ObjectError;
+import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RequestMethod;
+import org.springframework.web.bind.annotation.RestController;
+
+import com.fasterxml.jackson.annotation.JsonInclude.Include;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import com.oracle.oci.votingservice.domain.CandidateData;
+import com.oracle.oci.votingservice.domain.RegistrationData;
+
+import com.oracle.oci.votingservice.domain.VoteData;
+import java.sql.Connection;
+@RestController()
+public class DBConnection  {
+	private static Logger logger = LogManager.getLogger(DBConnection.class);
+	private final ObjectMapper objectMapper = new ObjectMapper();
+      
+	Connection  getDatabaseConnection()
+	{
+		PoolDataSource pds = PoolDataSourceFactory.getPoolDataSource();
+		  // Set the connection factory first before all other properties
+		  pds.setConnectionFactoryClassName("oracle.jdbc.replay.OracleConnectionPoolDataSourceImpl");
+		  pds.setURL("jdbc:oracle:thin:@db202010231723_tp?TNS_ADMIN=/home/vagrant/wallet/");
+		  pds.setUser("admin");
+		  pds.setPassword("Passwordoci*30");
+		  pds.setConnectionPoolName("JDBC_UCP_POOL");
+		  return pds.getConnection();
+	}
+	
+	
+			
+}

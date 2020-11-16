@@ -1,0 +1,680 @@
+// Copyright 2018 (C), Oracle and/or its affiliates. All rights reserved.
+
+package com.oracle.cgbu.cne.nrf.rest;
+
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.net.URI;
+import java.net.URL;
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.springframework.http.HttpStatus;
+
+import com.oracle.cgbu.cne.nrf.NrfException;
+import com.oracle.cgbu.cne.nrf.annotations.NFTypeValidator;
+
+import com.oracle.cgbu.cne.nrf.domain.ErrorInfo;
+import com.oracle.cgbu.cne.nrf.domain.ErrorCondition;
+
+import com.oracle.cgbu.cne.nrf.domain.HeartbeatInfo;
+import com.oracle.cgbu.cne.nrf.domain.InvalidParam;
+import com.oracle.cgbu.cne.nrf.domain.NrfEngSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.NrfSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.ProblemDetails;
+
+public class ValidationHelper {
+	private static Logger logger = LogManager.getLogger(ValidationHelper.class);
+	
+	public static void validateNrfSystemOptions(NrfSystemOptions nrfSystemOptions,NrfEngSystemOptions nrfEngSystemOptions) throws NrfException {
+
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		logMsg.clear();
+		logMsg.put("logMsg", "validateNrfSystemOptions() called");
+		logger.info(logMsg.toString());
+		
+		if (nrfSystemOptions.getNfManagementSystemOptions()!=null) {
+			//Validation checks for nfManagementSystemOptions parameters
+			if(nrfSystemOptions.getNfManagementSystemOptions().getNfHeartbeatTimers()!=null
+					&& !nrfSystemOptions.getNfManagementSystemOptions().getNfHeartbeatTimers().isEmpty()) {
+				//Checks to be performed if nfHeartbeatTimers received in request
+				List<HeartbeatInfo> nfHeartbeatTimers = nrfSystemOptions.getNfManagementSystemOptions().getNfHeartbeatTimers();
+				HashSet<String> nfTypes = new HashSet<String>();
+				List<InvalidParam> invalidParams = new ArrayList<InvalidParam>();
+				int index = 0;
+				for (HeartbeatInfo nfHeartbeatTimer: nfHeartbeatTimers) {
+					//Each nfHeartbeatTimer of the list will be validated					
+					if(nfHeartbeatTimer.getNfType()!=null) {
+						//If nfType already present in list
+						if (nfTypes.add(nfHeartbeatTimer.getNfType()) == false) {
+							//Duplicate entries not allowed
+							String param = "nfManagementSystemOptions.nfHeartbeatTimers["+index+"].nfType";
+							String reason = "Duplicate entries not allowed in nfHeartbeatTimers";
+							InvalidParam invalidParam = new InvalidParam(param,reason);
+							invalidParams.add(invalidParam);
+							logMsg.clear();
+							logMsg.put("logMsg", "Duplicate entries not allowed in nfHeartbeatTimers");
+							logger.error(logMsg.toString());
+						}
+						//In addition to ALL_NF_TYPE & CUSTOM_NF_TYPE, all 3gpp nfTypes are supported 
+						if( !nfHeartbeatTimer.getNfType().equals("ALL_NF_TYPE") &&
+								!NFTypeValidator.getNftypelist().contains(nfHeartbeatTimer.getNfType()) &&
+									!nfHeartbeatTimer.getNfType().equals("CUSTOM_NF_TYPE")) {
+							String param = "nfManagementSystemOptions.nfHeartbeatTimers["+index+"].nfType";
+							String reason = "nfType mentioned in nfHeartbeatTimer is of invalid type";
+							InvalidParam invalidParam = new InvalidParam(param,reason);
+							invalidParams.add(invalidParam);
+							logMsg.clear();
+							logMsg.put("logMsg", "nfType in nfHeartbeatTimer must be a valid value");
+							logger.error(logMsg.toString());
+						}
+						
+					}
+					//Check that minHbTimer lies in range specified by minAllowedHbRange in nfManagementEngSystemOptions
+					if(nfHeartbeatTimer.getMinHbTimer()!=null) {
+						if(nfHeartbeatTimer.getMinHbTimer().compareTo(nrfEngSystemOptions.getNfManagementEngSystemOptions().getMinAllowedHbRange().getMinValue())<0
+								|| nfHeartbeatTimer.getMinHbTimer().compareTo(nrfEngSystemOptions.getNfManagementEngSystemOptions().getMinAllowedHbRange().getMaxValue())>0) {
+							String minValue = durationFormatter(nrfEngSystemOptions.getNfManagementEngSystemOptions().getMinAllowedHbRange().getMinValue());
+							String maxValue = durationFormatter(nrfEngSystemOptions.getNfManagementEngSystemOptions().getMinAllowedHbRange().getMaxValue());
+							String param = "nfManagementSystemOptions.nfHeartbeatTimers["+index+"].minHbTimer";
+							String reason = "minHbTimer in nfHeartbeatTimer must be greater than or equal to "+ minValue +" and lesser than or equal to " + maxValue;
+							InvalidParam invalidParam = new InvalidParam(param,reason);
+							invalidParams.add(invalidParam);
+							logMsg.clear();
+							logMsg.put("logMsg", "minHbTimer in nfHeartbeatTimer must be in valid range");
+							logMsg.put("minValue", minValue);
+							logMsg.put("maxValue", maxValue);
+							logger.error(logMsg.toString());
+						}
+					}					
+					//Check that maxHbTimer lies in range specified by maxAllowedHbRange in nfManagementEngSystemOptions
+					if(nfHeartbeatTimer.getMaxHbTimer()!=null) {
+						if(nfHeartbeatTimer.getMaxHbTimer().compareTo(nrfEngSystemOptions.getNfManagementEngSystemOptions().getMaxAllowedHbRange().getMinValue())<0
+								|| nfHeartbeatTimer.getMaxHbTimer().compareTo(nrfEngSystemOptions.getNfManagementEngSystemOptions().getMaxAllowedHbRange().getMaxValue())>0) {
+							String minValue = durationFormatter(nrfEngSystemOptions.getNfManagementEngSystemOptions().getMaxAllowedHbRange().getMinValue());
+							String maxValue = durationFormatter(nrfEngSystemOptions.getNfManagementEngSystemOptions().getMaxAllowedHbRange().getMaxValue());
+							String param = "nfManagementSystemOptions.nfHeartbeatTimers["+index+"].maxHbTimer";
+							String reason = "maxHbTimer in nfHeartbeatTimer must be greater than or equal to "+ minValue +" and lesser than or equal to " + maxValue;
+							InvalidParam invalidParam = new InvalidParam(param,reason);
+							invalidParams.add(invalidParam);
+							logMsg.clear();
+							logMsg.put("logMsg", "maxHbTimer in nfHeartbeatTimer must be in valid range");
+							logMsg.put("minValue", minValue);
+							logMsg.put("maxValue", maxValue);
+							logger.error(logMsg.toString());
+						}
+					}
+					//maxHbTimer shall be greater than minHbTimer
+					if (nfHeartbeatTimer.getMaxHbTimer()!=null && nfHeartbeatTimer.getMinHbTimer()!=null) {
+						if(nfHeartbeatTimer.getMaxHbTimer().compareTo(nfHeartbeatTimer.getMinHbTimer())<=0) {
+							String minHbTimer = durationFormatter(nfHeartbeatTimer.getMinHbTimer());
+							String maxHbTimer = durationFormatter(nfHeartbeatTimer.getMaxHbTimer());
+							String param = "nfManagementSystemOptions.nfHeartbeatTimers["+index+"].maxHbTimer";
+							String reason = "maxHbTimer must be greater than minHbTimer in nfHeartbeatTimer";
+							InvalidParam invalidParam = new InvalidParam(param,reason);
+							invalidParams.add(invalidParam);
+							logMsg.clear();
+							logMsg.put("logMsg", "maxHbTimer must be greater than minHbTimer in nfHeartbeatTimer");
+							logMsg.put("minHbTimer", minHbTimer);
+							logMsg.put("maxHbTimer", maxHbTimer);
+							logger.error(logMsg.toString());
+						}
+					}
+					//defaultHbTimer shall be within minHbTimer and maxHbTimer
+					if(nfHeartbeatTimer.getDefaultHbTimer()!=null) {
+						if(nfHeartbeatTimer.getDefaultHbTimer().compareTo(nfHeartbeatTimer.getMinHbTimer())<0 ||
+								nfHeartbeatTimer.getDefaultHbTimer().compareTo(nfHeartbeatTimer.getMaxHbTimer())>0) {
+							String minHbTimer = durationFormatter(nfHeartbeatTimer.getMinHbTimer());
+							String maxHbTimer = durationFormatter(nfHeartbeatTimer.getMaxHbTimer());
+							String param = "nfManagementSystemOptions.nfHeartbeatTimers["+index+"].defaultHbTimer";
+							String reason = "defaultHbTimer in nfHeartbeatTimer must be in range specified by minHbTimer and maxHbTimer";
+							InvalidParam invalidParam = new InvalidParam(param,reason);
+							invalidParams.add(invalidParam);
+							logMsg.clear();
+							logMsg.put("logMsg", "defaultHbTimer in nfHeartbeatTimer must be in valid range");
+							logMsg.put("minHbTimer", minHbTimer);
+							logMsg.put("maxHbTimer", maxHbTimer);
+							logger.error(logMsg.toString());					
+						}
+					}
+					//nfHeartbeatMissAllowed must be within range specified in generalEngSystemOptions
+					if(nfHeartbeatTimer.getNfHeartbeatMissAllowed()!=null) {
+						if(nfHeartbeatTimer.getNfHeartbeatMissAllowed() < nrfEngSystemOptions.getGeneralEngSystemOptions().getNfHeartbeatMissAllowedMinValue() ||
+								   nfHeartbeatTimer.getNfHeartbeatMissAllowed() > nrfEngSystemOptions.getGeneralEngSystemOptions().getNfHeartbeatMissAllowedMaxValue()) {
+							String reason = "nfHeartbeatMissAllowed must be greater than or equal to "+nrfEngSystemOptions.getGeneralEngSystemOptions().getNfHeartbeatMissAllowedMinValue()
+										+" and lesser than or equal to "+nrfEngSystemOptions.getGeneralEngSystemOptions().getNfHeartbeatMissAllowedMaxValue();
+							String param = "nfManagementSystemOptions.nfHeartbeatTimers["+index+"].nfHeartbeatMissAllowed";
+							InvalidParam invalidParam = new InvalidParam(param,reason);
+							invalidParams.add(invalidParam);
+							logMsg.clear();
+							logMsg.put("logMsg", "nfHeartbeatMissAllowed must be in valid range");
+							logMsg.put("minRange",nrfEngSystemOptions.getGeneralEngSystemOptions().getNfHeartbeatMissAllowedMinValue());
+							logMsg.put("maxRange", nrfEngSystemOptions.getGeneralEngSystemOptions().getNfHeartbeatMissAllowedMaxValue());
+							logger.error(logMsg.toString());
+						}
+					}
+					index = index+1;
+				}
+				
+				if (!nfTypes.contains("ALL_NF_TYPE")) {
+					//When Default configuration not specified for all nf types
+					logMsg.clear();
+					logMsg.put("logMsg", "Default global configuration for ALL_NF_TYPE is not specified");
+					logger.error(logMsg.toString());
+					String param = "nfManagementSystemOptions.nfHeartbeatTimers";
+					String reason = "Default global configuration for ALL_NF_TYPE must be specified";
+					InvalidParam invalidParam = new InvalidParam(param,reason);
+					invalidParams.add(invalidParam);					
+				}
+				
+				//If any invalid parameters detected, then return problem details
+				if (invalidParams != null && !invalidParams.isEmpty()) {
+					ProblemDetails problemDetails = ProblemDetails.forBadRequest();
+					problemDetails.setCause("Invalid input data received for nfHeartbeatTimers");
+					problemDetails.setInvalidParams(invalidParams);
+					throw new NrfException(problemDetails);
+				}
+			}
+			
+			if(nrfSystemOptions.getNfManagementSystemOptions().getNfNotifyLoadThreshold() != null) {
+				if(nrfSystemOptions.getNfManagementSystemOptions().getNfNotifyLoadThreshold() < nrfEngSystemOptions.getGeneralEngSystemOptions().getNfNotifyLoadThresholdMinValue() ||
+						nrfSystemOptions.getNfManagementSystemOptions().getNfNotifyLoadThreshold() > nrfEngSystemOptions.getGeneralEngSystemOptions().getNfNotifyLoadThresholdMaxValue()) {
+					
+					String msg = "nfNotifyLoadThreshold must be greater than "+nrfEngSystemOptions.getGeneralEngSystemOptions().getNfNotifyLoadThresholdMinValue()
+									+" and lesser than "+nrfEngSystemOptions.getGeneralEngSystemOptions().getNfNotifyLoadThresholdMaxValue();
+					logMsg.clear();
+					logMsg.put("logMsg", "nfNotifyLoadThreshold must be in valid range");
+					logMsg.put("minRange",nrfEngSystemOptions.getGeneralEngSystemOptions().getNfNotifyLoadThresholdMinValue());
+					logMsg.put("maxRange",nrfEngSystemOptions.getGeneralEngSystemOptions().getNfNotifyLoadThresholdMaxValue());
+					logger.error(logMsg.toString());
+					ProblemDetails prob = ProblemDetails.forBadRequest();
+					prob.setCause(msg);
+					throw new NrfException(prob);
+				}
+			}
+			
+			if(nrfSystemOptions.getNfManagementSystemOptions().getNfProfileSuspendDuration() != null) {
+				if(nrfSystemOptions.getNfManagementSystemOptions().getNfProfileSuspendDuration()
+						.compareTo(nrfEngSystemOptions.getGeneralEngSystemOptions().getNfProfileSuspendDurationMinValue()) < 0 ||
+					nrfSystemOptions.getNfManagementSystemOptions().getNfProfileSuspendDuration()
+						.compareTo(nrfEngSystemOptions.getGeneralEngSystemOptions().getNfProfileSuspendDurationMaxValue()) > 0 ) {
+					
+					String minValue = durationFormatter(nrfEngSystemOptions.getGeneralEngSystemOptions().getNfProfileSuspendDurationMinValue());
+					String maxValue = durationFormatter(nrfEngSystemOptions.getGeneralEngSystemOptions().getNfProfileSuspendDurationMaxValue());
+					String msg = "nfProfileSuspendDuration must be greater than " + minValue +" and lesser than "+maxValue;
+					logMsg.clear();
+					logMsg.put("logMsg", "nfProfileSuspendDuration must be in valid range");
+					logMsg.put("minValue", nrfEngSystemOptions.getGeneralEngSystemOptions().getNfProfileSuspendDurationMinValue());
+					logMsg.put("maxValue", nrfEngSystemOptions.getGeneralEngSystemOptions().getNfProfileSuspendDurationMaxValue());
+					logger.error(logMsg.toString());
+					ProblemDetails prob = ProblemDetails.forBadRequest();
+					prob.setCause(msg);
+					throw new NrfException(prob);
+				}
+			}
+			
+			if(nrfSystemOptions.getNfManagementSystemOptions().getSubscriptionValidityDuration() != null) {
+				if(nrfSystemOptions.getNfManagementSystemOptions().getSubscriptionValidityDuration()
+						.compareTo(nrfEngSystemOptions.getNfSubscriptionEngSystemOptions()
+								.getSubscriptionValidityDurationMinValue()) < 0 ||
+					nrfSystemOptions.getNfManagementSystemOptions().getSubscriptionValidityDuration()
+						.compareTo(nrfEngSystemOptions.getNfSubscriptionEngSystemOptions()
+								.getSubscriptionValidityDurationMaxValue()) > 0 ) {
+					
+					String minValue = durationFormatter(nrfEngSystemOptions.getNfSubscriptionEngSystemOptions().getSubscriptionValidityDurationMinValue());
+					String maxValue = durationFormatter(nrfEngSystemOptions.getNfSubscriptionEngSystemOptions().getSubscriptionValidityDurationMaxValue());
+					String msg = "subscriptionValidityDuration must be greater than "+ minValue
+									+" and lesser than "+maxValue;
+					logMsg.clear();
+					logMsg.put("logMsg", "subscriptionValidityDuration must be in valid range");
+					logMsg.put("minValue", minValue);
+					logMsg.put("maxValue", maxValue);
+					logger.error(logMsg.toString());
+					ProblemDetails prob = ProblemDetails.forBadRequest();
+					prob.setCause(msg);
+					throw new NrfException(prob);
+				}
+			}
+			
+			if(nrfSystemOptions.getNfManagementSystemOptions().getRetryAfter() != null) {
+				if(nrfSystemOptions.getNfManagementSystemOptions().getRetryAfter() <= 0 ) {
+					
+					String msg = "RetryAfter must be greater than 0";
+					logMsg.clear();
+					logMsg.put("logMsg", "RetryAfter must be greater than 0");
+					logger.error(logMsg.toString());
+					ProblemDetails prob = ProblemDetails.forBadRequest();
+					prob.setCause(msg);
+					throw new NrfException(prob);
+				}
+			}
+			
+			if (nrfSystemOptions.getNfManagementSystemOptions().getErrorResponseCodeForServiceUnavailable() != null) {
+
+				try {
+					HttpStatus status = HttpStatus.valueOf(nrfSystemOptions.getNfManagementSystemOptions()
+							.getErrorResponseCodeForServiceUnavailable());
+				} catch (IllegalArgumentException e) {
+					String msg = "ErrorResponseCodeForServiceUnavailable must be a valid status code";
+					logMsg.clear();
+					logMsg.put("logMsg", "ErrorResponseCodeForServiceUnavailable must be a valid status code");
+					logger.error(logMsg.toString());
+					ProblemDetails prob = ProblemDetails.forBadRequest();
+					prob.setCause(msg);
+					throw new NrfException(prob);
+				}
+			}
+		}
+		
+		if (nrfSystemOptions.getNfDiscoverSystemOptions()!=null) {
+			if(nrfSystemOptions.getNfDiscoverSystemOptions().getProfilesCountInDiscoveryResponse() != null) {
+				if(nrfSystemOptions.getNfDiscoverSystemOptions().getProfilesCountInDiscoveryResponse() < nrfEngSystemOptions.getNfDiscoveryEngSystemOptions().getProfilesCountInDiscoveryResponseMinValue() ||
+						nrfSystemOptions.getNfDiscoverSystemOptions().getProfilesCountInDiscoveryResponse() > nrfEngSystemOptions.getNfDiscoveryEngSystemOptions().getProfilesCountInDiscoveryResponseMaxValue()) {
+					
+					String msg = "profilesCountInDiscoveryResponse must be greater than "+nrfEngSystemOptions.getNfDiscoveryEngSystemOptions().getProfilesCountInDiscoveryResponseMinValue()
+									+" and lesser than "+nrfEngSystemOptions.getNfDiscoveryEngSystemOptions().getProfilesCountInDiscoveryResponseMaxValue();
+					logMsg.clear();
+					logMsg.put("logMsg", "profilesCountInDiscoveryResponse must be in valid range");
+					logMsg.put("minRange",nrfEngSystemOptions.getNfDiscoveryEngSystemOptions().getProfilesCountInDiscoveryResponseMinValue());
+					logMsg.put("maxRange",nrfEngSystemOptions.getNfDiscoveryEngSystemOptions().getProfilesCountInDiscoveryResponseMaxValue());
+					logger.error(logMsg.toString());
+					ProblemDetails prob = ProblemDetails.forBadRequest();
+					prob.setCause(msg);
+					throw new NrfException(prob);
+				}
+			}
+			
+			
+			if (nrfSystemOptions.getGeneralSystemOptions()!=null) {
+			if(nrfSystemOptions.getGeneralSystemOptions().getMaximumHopCount() != null) {
+				if(nrfSystemOptions.getGeneralSystemOptions().getMaximumHopCount() < nrfEngSystemOptions.getGeneralEngSystemOptions().getMaximumHopCountRangeMinValue() ||
+						nrfSystemOptions.getGeneralSystemOptions().getMaximumHopCount() > nrfEngSystemOptions.getGeneralEngSystemOptions().getMaximumHopCountRangeMaxValue()) {
+					
+					String msg = "maximumHopCount must be greater than "+nrfEngSystemOptions.getGeneralEngSystemOptions().getMaximumHopCountRangeMinValue()
+									+" and lesser than "+nrfEngSystemOptions.getGeneralEngSystemOptions().getMaximumHopCountRangeMaxValue();
+					logMsg.clear();
+					logMsg.put("logMsg", "maximumHopCount must be in valid range");
+					logMsg.put("minRange",nrfEngSystemOptions.getGeneralEngSystemOptions().getMaximumHopCountRangeMinValue());
+					logMsg.put("maxRange",nrfEngSystemOptions.getGeneralEngSystemOptions().getMaximumHopCountRangeMaxValue());
+					logger.error(logMsg.toString());
+					ProblemDetails prob = ProblemDetails.forBadRequest();
+					prob.setCause(msg);
+					throw new NrfException(prob);
+				}
+			}
+			
+			}
+			if(nrfSystemOptions.getNfDiscoverSystemOptions().getDiscoveryResultLoadThreshold() != null) {
+				if(nrfSystemOptions.getNfDiscoverSystemOptions().getDiscoveryResultLoadThreshold() < nrfEngSystemOptions.getNfDiscoveryEngSystemOptions().getResultLoadThresholdMinValue() ||
+						nrfSystemOptions.getNfDiscoverSystemOptions().getDiscoveryResultLoadThreshold() > nrfEngSystemOptions.getNfDiscoveryEngSystemOptions().getResultLoadThresholdMaxValue()) {
+					
+					String msg = "discoveryResultLoadThreshold must be greater than "+nrfEngSystemOptions.getNfDiscoveryEngSystemOptions().getResultLoadThresholdMinValue()
+									+" and lesser than "+nrfEngSystemOptions.getNfDiscoveryEngSystemOptions().getResultLoadThresholdMaxValue();
+					logMsg.clear();
+					logMsg.put("logMsg", "discoveryResultLoadThreshold must be in valid range");
+					logMsg.put("minRange",nrfEngSystemOptions.getNfDiscoveryEngSystemOptions().getResultLoadThresholdMinValue());
+					logMsg.put("maxRange",nrfEngSystemOptions.getNfDiscoveryEngSystemOptions().getResultLoadThresholdMinValue());
+					logger.error(logMsg.toString());
+					ProblemDetails prob = ProblemDetails.forBadRequest();
+					prob.setCause(msg);
+					throw new NrfException(prob);
+				}
+			}
+		}
+		
+		if (nrfSystemOptions.getNfAccessTokenSystemOptions()!=null) {
+			if(nrfSystemOptions.getNfAccessTokenSystemOptions().getOauthTokenExpiryTime() != null) {
+				if(nrfSystemOptions.getNfAccessTokenSystemOptions().getOauthTokenExpiryTime()
+						.compareTo(nrfEngSystemOptions.getNfAccessTokenEngSystemOptions().getTokenExpiryTimeMinRange()) < 0 ||
+					nrfSystemOptions.getNfAccessTokenSystemOptions().getOauthTokenExpiryTime()
+						.compareTo(nrfEngSystemOptions.getNfAccessTokenEngSystemOptions().getTokenExpiryTimeMaxRange()) > 0 ) {
+					
+					String minValue = durationFormatter(nrfEngSystemOptions.getNfAccessTokenEngSystemOptions().getTokenExpiryTimeMinRange());
+					String maxValue = durationFormatter(nrfEngSystemOptions.getNfAccessTokenEngSystemOptions().getTokenExpiryTimeMaxRange());
+					String msg = "oauthTokenExpiryTime must be greater than " + minValue +" and lesser than " + maxValue;
+					logMsg.clear();
+					logMsg.put("logMsg", "oauthTokenExpiryTime must be in valid range");
+					logMsg.put("minValue",minValue);
+					logMsg.put("maxValue",maxValue);
+					logger.error(logMsg.toString());
+					ProblemDetails prob = ProblemDetails.forBadRequest();
+					prob.setCause(msg);
+					throw new NrfException(prob);
+				}
+			}
+			if (nrfSystemOptions.getNfAccessTokenSystemOptions().getAuthFeatureConfig()!= null) {
+				HashSet<String> nfTypesListInAuthConfig = new HashSet<String>();
+				List<InvalidParam> invalidParamList = new ArrayList<InvalidParam>();
+				InvalidParam invalidParam;
+				ProblemDetails prob = ProblemDetails.forBadRequest();
+				if (nrfSystemOptions.getNfAccessTokenSystemOptions().getAuthFeatureConfig().getAuthConfig() != null) {
+					// validation AuthConfig
+					for (int i=0;i<nrfSystemOptions.getNfAccessTokenSystemOptions().getAuthFeatureConfig().getAuthConfig().size();i++) {
+						nfTypesListInAuthConfig.add(nrfSystemOptions.getNfAccessTokenSystemOptions().getAuthFeatureConfig().getAuthConfig().get(i).getTargetNfType()+"-"+nrfSystemOptions.getNfAccessTokenSystemOptions().getAuthFeatureConfig().getAuthConfig().get(i).getRequesterNfType());
+						//validating allowedServices
+						if (nrfSystemOptions.getNfAccessTokenSystemOptions().getAuthFeatureConfig().getAuthConfig().get(i).getServiceNames() != null) {
+							if (nrfSystemOptions.getNfAccessTokenSystemOptions().getAuthFeatureConfig().getAuthConfig().get(i).getServiceNames().contains("*") && nrfSystemOptions.getNfAccessTokenSystemOptions().getAuthFeatureConfig().getAuthConfig().get(i).getServiceNames().size() > 1) {
+								// allowedServices contain * and other service-names
+								invalidParam = new InvalidParam("authConfig["+i+"].serviceNames","serviceNames shall not contain * and serviceNames");
+								invalidParamList.add(invalidParam);
+								logMsg.clear();
+								logMsg.put("logMsg", "serviceNames shall not contain * and serviceNames");
+								logMsg.put("problemDetails", prob);
+								logger.error(logMsg.toString());
+							}
+							if (nrfSystemOptions.getNfAccessTokenSystemOptions().getAuthFeatureConfig().getAuthConfig().get(i).getServiceNames().size() == 0) {
+								//allowedServices is empty
+								invalidParam = new InvalidParam("authConfig["+i+"].serviceNames","serviceNames should not be empty");
+								invalidParamList.add(invalidParam);
+								logMsg.clear();
+								logMsg.put("logMsg", "serviceNames should not be empty");
+								logMsg.put("problemDetails", prob);
+								logger.error(logMsg.toString());
+							}
+						}
+					}
+					if (nfTypesListInAuthConfig.size() < nrfSystemOptions.getNfAccessTokenSystemOptions().getAuthFeatureConfig().getAuthConfig().size()) {
+						//duplicate targetNfType-requesterNfType combination found
+						invalidParam = new InvalidParam("authConfig","duplicate targetNfType-requesterNfType combination found");
+						invalidParamList.add(invalidParam);
+						prob.setDetail("duplicate targetNfType-requesterNfType combination found");
+						prob.setCause("duplicate targetNfType-requesterNfType combination found");
+						logMsg.clear();
+						logMsg.put("logMsg", "duplicate targetNfType-requesterNfType combination found Just to test");
+						logMsg.put("problemDetails", prob);
+						logger.error(logMsg.toString());
+					}
+				}
+				if (nrfSystemOptions.getNfAccessTokenSystemOptions().getAuthFeatureConfig().getAuthErrorResponses() != null) {
+					Integer authErrorResponsesListSize = nrfSystemOptions.getNfAccessTokenSystemOptions().getAuthFeatureConfig().getAuthErrorResponses().size();
+					if (authErrorResponsesListSize > 1) {
+						//request received to update more than one errorResponse
+						invalidParam = new InvalidParam("authErrorResponses","Cannot add errorResponse other than RequesterNf_Unauthorized");
+						invalidParamList.add(invalidParam);
+						prob.setDetail("Cannot add errorResponse other than RequesterNf_Unauthorized");
+						prob.setCause("Cannot add errorResponse other than RequesterNf_Unauthorized");
+						logMsg.clear();
+						logMsg.put("logMsg", "Cannot add errorResponse other than RequesterNf_Unauthorized");
+						logMsg.put("problemDetails", prob);
+						logger.error(logMsg.toString());
+					}
+					else {
+						if (nrfSystemOptions.getNfAccessTokenSystemOptions().getAuthFeatureConfig().getAuthErrorResponses().get(0).getErrorCondition() != null) {
+							if (!(nrfSystemOptions.getNfAccessTokenSystemOptions().getAuthFeatureConfig().getAuthErrorResponses().get(0).getErrorCondition()
+									.equals(ErrorCondition.RequesterNf_Unauthorized))) {
+								// request to update errorResponse's errorCondition
+								invalidParam = new InvalidParam("authErrorResponses[0].errorCondition","errorCondition parameter cannot be updated or removed");
+								invalidParamList.add(invalidParam);
+								logMsg.clear();
+								logMsg.put("logMsg", "errorCondition parameter cannot be updated or removed");
+								logMsg.put("problemDetails", prob);
+								logger.error(logMsg.toString());
+							}
+						}
+						
+					}
+				}
+				if (invalidParamList.size() > 0) {
+					logger.info("invalid params:- "+invalidParamList.size());
+					prob.setInvalidParams(invalidParamList);
+					throw new NrfException(prob);
+				}
+			}
+		}
+		
+		if (nrfSystemOptions.getGeneralSystemOptions()!=null) {
+			if(nrfSystemOptions.getGeneralSystemOptions().getDefaultLoad() != null) {
+				if(nrfSystemOptions.getGeneralSystemOptions().getDefaultLoad() > 100  ||
+						nrfSystemOptions.getGeneralSystemOptions().getDefaultLoad() < 0) {
+					
+					String msg = "defaultLoad must be greater than or equal to"+0
+									+" and lesser than or equal to"+100;
+					logMsg.clear();
+					logMsg.put("logMsg", "defaultLoad must be in valid range");
+					logMsg.put("minRange",0);
+					logMsg.put("maxRange",100);
+					logger.error(logMsg.toString());
+					ProblemDetails prob = ProblemDetails.forBadRequest();
+					prob.setCause(msg);
+					throw new NrfException(prob);
+				}
+			}
+			
+			if(nrfSystemOptions.getGeneralSystemOptions().getDefaultPriority() != null) {
+				if(nrfSystemOptions.getGeneralSystemOptions().getDefaultPriority() > 65535  ||
+						nrfSystemOptions.getGeneralSystemOptions().getDefaultPriority() < 0) {
+					
+					String msg = "defaultPriority must be greater than or equal to"+0
+									+" and lesser than or equal to"+65535;
+					logMsg.clear();
+					logMsg.put("logMsg", "defaultPriority must be in valid range");
+					logMsg.put("minRange",0);
+					logMsg.put("maxRange",65535);
+					logger.error(logMsg.toString());
+					ProblemDetails prob = ProblemDetails.forBadRequest();
+					prob.setCause(msg);
+					throw new NrfException(prob);
+				}
+			}
+		}
+		
+		if (nrfSystemOptions.getGeoRedundancySystemOptions() != null) {
+			
+			if(nrfSystemOptions.getGeoRedundancySystemOptions().getReplicationLatency() != null) {
+				if((nrfSystemOptions.getGeoRedundancySystemOptions().getReplicationLatency()
+						.compareTo(nrfEngSystemOptions.getGeoRedundancyEngSystemOptions().getReplicationLatencyMinValue()) < 0) ||
+					(nrfSystemOptions.getGeoRedundancySystemOptions().getReplicationLatency()
+						.compareTo(nrfEngSystemOptions.getGeoRedundancyEngSystemOptions().getReplicationLatencyMaxValue()) > 0)) {
+					String minValue = durationFormatter(nrfEngSystemOptions.getGeoRedundancyEngSystemOptions().getReplicationLatencyMinValue());
+					String maxValue = durationFormatter(nrfEngSystemOptions.getGeoRedundancyEngSystemOptions().getReplicationLatencyMaxValue());
+					String msg = "replicationLatency must be greater than or equal to "+ minValue
+							+" and lesser than or equal to "+ maxValue;
+					logMsg.clear();
+					logMsg.put("logMsg", "replicationLatency must be in valid range");
+					logMsg.put("minValue",minValue);
+					logMsg.put("maxValue",maxValue);
+					logger.error(logMsg.toString());
+					ProblemDetails prob = ProblemDetails.forBadRequest();
+					prob.setDetail(msg);
+					prob.setCause("Parameter value out of range");
+					throw new NrfException(prob);
+				}
+			}	
+			
+			if(nrfSystemOptions.getGeoRedundancySystemOptions().getMonitorNrfServiceStatusInterval() != null) {
+				if(nrfSystemOptions.getGeoRedundancySystemOptions().getMonitorNrfServiceStatusInterval()
+						.compareTo(nrfEngSystemOptions.getGeoRedundancyEngSystemOptions().getMonitorNrfServiceStatusIntervalMinValue()) < 0 ||
+					nrfSystemOptions.getGeoRedundancySystemOptions().getMonitorNrfServiceStatusInterval()
+						.compareTo(nrfEngSystemOptions.getGeoRedundancyEngSystemOptions().getMonitorNrfServiceStatusIntervalMaxValue()) > 0 ) {
+					
+					String minValue = durationFormatter(nrfEngSystemOptions.getGeoRedundancyEngSystemOptions().getMonitorNrfServiceStatusIntervalMinValue());
+					String maxValue = durationFormatter(nrfEngSystemOptions.getGeoRedundancyEngSystemOptions().getMonitorNrfServiceStatusIntervalMaxValue());
+					String msg = "MonitorNrfServiceStatusInterval must be greater than or equal to "+minValue
+							+" and lesser than or equal to " + maxValue;
+					logMsg.clear();
+					logMsg.put("logMsg", "MonitorNrfServiceStatusInterval must be in valid range");
+					logMsg.put("minValue",minValue);
+					logMsg.put("maxValue",maxValue);
+					logger.error(logMsg.toString());
+					ProblemDetails prob = ProblemDetails.forBadRequest();
+					prob.setDetail(msg);
+					prob.setCause("Parameter value out of range");
+					throw new NrfException(prob);
+				}
+			}
+			
+			if(nrfSystemOptions.getGeoRedundancySystemOptions().getMonitorDBReplicationStatusInterval() != null) {
+				if(nrfSystemOptions.getGeoRedundancySystemOptions().getMonitorDBReplicationStatusInterval()
+						.compareTo(nrfEngSystemOptions.getGeoRedundancyEngSystemOptions().getMonitorDBReplicationStatusIntervalMinValue()) < 0 ||
+					nrfSystemOptions.getGeoRedundancySystemOptions().getMonitorDBReplicationStatusInterval()
+						.compareTo(nrfEngSystemOptions.getGeoRedundancyEngSystemOptions().getMonitorDBReplicationStatusIntervalMaxValue()) > 0) {
+					
+					String minValue = durationFormatter(nrfEngSystemOptions.getGeoRedundancyEngSystemOptions().getMonitorDBReplicationStatusIntervalMinValue());
+					String maxValue = durationFormatter(nrfEngSystemOptions.getGeoRedundancyEngSystemOptions().getMonitorDBReplicationStatusIntervalMaxValue());
+					String msg = "MonitorDBReplicationStatusInterval must be greater than or equal to "+minValue
+							+" and lesser than or equal to " + maxValue;
+					logMsg.clear();
+					logMsg.put("logMsg", "MonitorDBReplicationStatusInterval must be in valid range");
+					logMsg.put("minValue",minValue);
+					logMsg.put("maxValue",maxValue);
+					logger.error(logMsg.toString());
+					ProblemDetails prob = ProblemDetails.forBadRequest();
+					prob.setDetail(msg);
+					prob.setCause("Parameter value out of range");
+					throw new NrfException(prob);
+				}
+			}
+		}
+		
+		if (nrfSystemOptions.getNfAuthenticationSystemOptions() != null) {
+			if(nrfSystemOptions.getNfAuthenticationSystemOptions().getNfAuthenticationErrorResponses() != null) {
+				List<ErrorInfo> errorInfoList=nrfSystemOptions.getNfAuthenticationSystemOptions().getNfAuthenticationErrorResponses();
+				int index = 0;
+				List<InvalidParam> invalidParams = new ArrayList<InvalidParam>();
+				for (ErrorInfo errorInfo : errorInfoList){					
+					
+					//If retryAfter present, validate the range
+					if (errorInfo.getRetryAfter() != null) {
+						if((errorInfo.getRetryAfter().compareTo(nrfEngSystemOptions.getGeneralEngSystemOptions().getRetryAfterMinValue()) < 0) ||
+								(errorInfo.getRetryAfter().compareTo(nrfEngSystemOptions.getGeneralEngSystemOptions().getRetryAfterMaxValue()) > 0)) {
+							String minValue = durationFormatter(nrfEngSystemOptions.getGeneralEngSystemOptions().getRetryAfterMinValue());
+							String maxValue = durationFormatter(nrfEngSystemOptions.getGeneralEngSystemOptions().getRetryAfterMaxValue());
+							String param = "nfAuthenticationSystemOptions.nfAuthenticationErrorResponses["+index+"].retryAfter";
+							String reason = "retryAfter must be greater than or equal to "+minValue+" and lesser than or equal to "+maxValue;
+							logMsg.clear();
+							logMsg.put("logMsg", "retryAfter must be in valid range");
+							logMsg.put("minValue",minValue);
+							logMsg.put("maxValue",maxValue);
+							logger.error(logMsg.toString());
+							InvalidParam invalidParam = new InvalidParam(param,reason);
+							invalidParams.add(invalidParam);
+						}
+					}
+					
+					//Check that redirectURL is in valid format
+					if (errorInfo.getRedirectUrl() != null) {
+						boolean isValid = false;
+						try {
+							URI redirectUri = new URL(errorInfo.getRedirectUrl()).toURI();
+							isValid = true;
+						}catch(Exception e) {
+							logMsg.clear();
+							logMsg.put("logMsg", "redirectURL is not a valid format");
+							logMsg.put("redirectURL", errorInfo.getRedirectUrl());
+							logger.error(logMsg.toString());
+						}
+						if(!isValid) {
+							String param = "nfAuthenticationSystemOptions.nfAuthenticationErrorResponses["+index+"].redirectURL";
+							String reason = "redirectURL is not valid";
+							InvalidParam invalidParam = new InvalidParam(param,reason);
+							invalidParams.add(invalidParam);
+						}
+					}
+					index = index+1;
+				}
+				if(invalidParams!=null && !invalidParams.isEmpty()) {
+					ProblemDetails problemDetails = ProblemDetails.forBadRequest();
+					problemDetails.setCause("Invalid Input Parameters");
+					problemDetails.setInvalidParams(invalidParams);
+					throw new NrfException(problemDetails);
+				}
+			}
+		}
+		
+	}
+	
+	public static void validateNrfEngSystemOptions(NrfEngSystemOptions nrfEngSystemOptions,NrfEngSystemOptions nrfEngSystemOptionsOld ) throws NrfException {
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		logMsg.clear();
+		logMsg.put("logMsg", "validateNrfEngSystemOptions() called");
+		logger.info(logMsg.toString());
+		if (nrfEngSystemOptions.getGeneralEngSystemOptions()!=null) {
+			List<InvalidParam> invalidParams = new ArrayList<InvalidParam>();
+			InvalidParam invalidParam;
+			if(nrfEngSystemOptions.getGeneralEngSystemOptions().getRetryAfterMinValue()!=null &&
+					nrfEngSystemOptions.getGeneralEngSystemOptions().getRetryAfterMaxValue()!=null) {
+				if(nrfEngSystemOptions.getGeneralEngSystemOptions().getRetryAfterMinValue().compareTo(nrfEngSystemOptions.getGeneralEngSystemOptions().getRetryAfterMaxValue())>0) {
+					logMsg.clear();
+					logMsg.put("logMsg", "retryAfterMinValue must be lesser than retryAfterMaxValue");
+					logger.error(logMsg.toString());
+					invalidParam = new InvalidParam("retryAfterMinValue","retryAfterMinValue must be lesser than retryAfterMaxValue");
+					invalidParams.add(invalidParam);
+					invalidParam = new InvalidParam("retryAfterMaxValue","retryAfterMaxValue must be greater than retryAfterMinValue");
+					invalidParams.add(invalidParam);
+				}
+			}
+			else if(nrfEngSystemOptions.getGeneralEngSystemOptions().getRetryAfterMinValue()!=null) {
+				if(nrfEngSystemOptions.getGeneralEngSystemOptions().getRetryAfterMinValue().compareTo(nrfEngSystemOptionsOld.getGeneralEngSystemOptions().getRetryAfterMaxValue())>0) {
+					String minValue = durationFormatter(nrfEngSystemOptions.getGeneralEngSystemOptions().getRetryAfterMinValue());
+					String maxValue = durationFormatter(nrfEngSystemOptionsOld.getGeneralEngSystemOptions().getRetryAfterMaxValue());
+					logMsg.clear();
+					logMsg.put("logMsg", "retryAfterMinValue must be lesser than retryAfterMaxValue");
+					logMsg.put("minValue",minValue);
+					logMsg.put("maxValue",maxValue);
+					logger.error(logMsg.toString());
+					invalidParam = new InvalidParam("retryAfterMinValue","retryAfterMinValue must be lesser than retryAfterMaxValue");
+					invalidParams.add(invalidParam);
+				}
+			}
+			else if(nrfEngSystemOptions.getGeneralEngSystemOptions().getRetryAfterMaxValue()!=null) {
+				if(nrfEngSystemOptionsOld.getGeneralEngSystemOptions().getRetryAfterMinValue().compareTo(nrfEngSystemOptions.getGeneralEngSystemOptions().getRetryAfterMaxValue())>0) {
+					String minValue = durationFormatter(nrfEngSystemOptionsOld.getGeneralEngSystemOptions().getRetryAfterMinValue());
+					String maxValue = durationFormatter(nrfEngSystemOptions.getGeneralEngSystemOptions().getRetryAfterMaxValue());
+					logMsg.clear();
+					logMsg.put("logMsg", "retryAfterMaxValue must be greater than retryAfterMinValue");
+					logMsg.put("minValue",minValue);
+					logMsg.put("maxValue",maxValue);
+					logger.error(logMsg.toString());
+					invalidParam = new InvalidParam("retryAfterMaxValue","retryAfterMaxValue must be greater than retryAfterMinValue");
+					invalidParams.add(invalidParam);
+				}
+			}
+			if(invalidParams!=null && !invalidParams.isEmpty()) {
+				ProblemDetails problemDetails = ProblemDetails.forBadRequest();
+				problemDetails.setCause("Invalid Input Parameters");
+				problemDetails.setInvalidParams(invalidParams);
+				throw new NrfException(problemDetails);
+			}
+		}
+	}
+
+	/*
+	public static void validateNrfSystemOptionsForOauth(NrfSystemOptionsForOauth nrfSystemOptionsForOauth, NrfConfigurations nrfConfig) throws NrfException {
+		List<String> keys = new ArrayList<String>();
+		List<Object> values = new ArrayList<Object>();
+		keys.clear();
+		values.clear();
+		keys.add("logMsg");
+		values.add("validateNrfSystemOptionsForOauth() called");
+		loggerMessage(keys,values,"info");
+				
+		if(nrfSystemOptionsForOauth.getOauthTokenExpiryTime() != null) {
+			if(nrfSystemOptionsForOauth.getOauthTokenExpiryTime() < nrfConfig.getAccSvc().getOauthTokenExpiryTimeMinRange() ||
+					nrfSystemOptionsForOauth.getOauthTokenExpiryTime() > nrfConfig.getAccSvc().getOauthTokenExpiryTimeMaxRange()) {
+				
+				String msg = "oauthTokenExpiryTime must be greater than "+nrfConfig.getAccSvc().getOauthTokenExpiryTimeMinRange()
+								+" and lesser than "+nrfConfig.getAccSvc().getOauthTokenExpiryTimeMaxRange();
+				logger.error(msg);
+				ProblemDetails prob = ProblemDetails.forBadRequest();
+				prob.setCause(msg);
+				throw new NrfException(prob);
+			}
+		}
+		
+	}*/
+	
+	private static String durationFormatter(Duration duration) {
+		String retValue = duration.toString();
+		retValue = retValue.replaceAll("[PT]", "");
+		retValue = retValue.toLowerCase(Locale.ROOT);
+		return retValue;
+	}
+	
+}

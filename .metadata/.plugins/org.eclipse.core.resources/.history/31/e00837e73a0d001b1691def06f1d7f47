@@ -1,0 +1,128 @@
+package com.oracle.cgbu.cne.nrf.config;
+
+import java.util.List;
+
+import javax.annotation.PostConstruct;
+
+import org.apache.logging.log4j.Level;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.apache.logging.log4j.ThreadContext;
+import org.apache.logging.log4j.core.config.Configurator;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Component;
+import org.springframework.web.bind.annotation.RequestMethod;
+
+import com.oracle.cgbu.cne.nrf.dao.NrfSystemOptionsDao;
+import com.oracle.cgbu.cne.nrf.dao.NrfSystemOptionsRepository;
+import com.oracle.cgbu.cne.nrf.domain.NrfEngSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.NrfSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.SystemOptionsEvent;
+import com.oracle.cgbu.cne.nrf.metrics.CommonNrfMetrics;
+
+@Component
+public class NrfSystemOptionsManager {
+	
+	private static Logger logger = LogManager.getLogger(NrfSystemOptionsManager.class);
+	
+	
+	private static final String NRF_SYSTEMOPTIONS = "NrfSystemOptions";
+	private static final String FIND = "find";
+	private static final String VERSION = "v1";
+	private static final String INTERNAL_CONFIGURATION_CACHE = "InternalConfigurationCache";
+	
+	@Autowired
+	private NrfConfigurations nrfConfigurations;
+     
+	@Autowired
+	private NrfSystemOptionsRepository nrfSystemOptionsRepository;
+	
+	@Autowired
+	private CommonNrfMetrics commonNrfMetrics;
+	
+	private NrfSystemOptions nrfSystemOptions;
+	
+	private NrfEngSystemOptions nrfEngSystemOptions;
+
+	Boolean publishSystemOptions = true;
+	
+	@Autowired
+    private ApplicationEventPublisher applicationEventPublisher;
+	
+	public NrfSystemOptions getNrfSystemOptions() {
+		return nrfSystemOptions;
+	}
+
+	public void setNrfSystemOptions(NrfSystemOptions nrfSystemOptions) {
+		this.nrfSystemOptions = nrfSystemOptions;
+	}
+
+	public NrfEngSystemOptions getNrfEngSystemOptions() {
+		return nrfEngSystemOptions;
+	}
+
+	public void setNrfEngSystemOptions(NrfEngSystemOptions nrfEngSystemOptions) {
+		this.nrfEngSystemOptions = nrfEngSystemOptions;
+	}
+	
+	@PostConstruct
+	public void fillThreadContext() {
+		String nrfTxId = "nrf-tx-" + (int) (Math.random() * Integer.MAX_VALUE);
+		ThreadContext.clearMap();
+		ThreadContext.put("nrfTxId", nrfTxId);
+		ThreadContext.put("subsystem", "reloadNrfSystemOptions");
+		ThreadContext.put("hostname", System.getenv("HOSTNAME"));
+	}
+	
+	@Scheduled(fixedRateString = "${nrf.disc-svc.system-options-fetch-interval}")
+	public void reloadNrfSystemOptions() {
+
+		logger.trace("reloadNrfSystemOptions() invoked.");
+		
+		List<NrfSystemOptionsDao> nrfSystemOptionsDaoList = null;
+		try {
+			nrfSystemOptionsDaoList = nrfSystemOptionsRepository.findbyRecordOwner(nrfConfigurations
+																					.getGlobalConfig()
+																					.getNrfInstanceId());
+		}
+		catch(Exception e) {
+			logger.error("Something went wrong while fetching NrfSystemOptions. Exception: "+e.getMessage());
+			commonNrfMetrics.pegNrfDbMetricsFailuresTotal(RequestMethod.GET, FIND, INTERNAL_CONFIGURATION_CACHE, e, NRF_SYSTEMOPTIONS);
+		}
+
+		if(nrfSystemOptionsDaoList != null) {
+			
+			commonNrfMetrics.pegNrfDbMetricsSuccessTotal(RequestMethod.GET, FIND, INTERNAL_CONFIGURATION_CACHE, NRF_SYSTEMOPTIONS);
+			NrfSystemOptions nrfSystemOptions = new NrfSystemOptions();
+			NrfEngSystemOptions nrfEngSystemOptions = new NrfEngSystemOptions();
+
+			for(NrfSystemOptionsDao nrfSystemOptionsDao : nrfSystemOptionsDaoList) {
+				switch(nrfSystemOptionsDao.getConfigType())
+				{
+					
+				}
+			}
+			if(nrfSystemOptions.getLogLevelOptions()!=null) {
+				if(nrfSystemOptions.getLogLevelOptions().getNfDiscoveryLogLevel()!=null) {
+					if(!(nrfSystemOptions.getLogLevelOptions().getNfDiscoveryLogLevel().equals(LogManager.getLogger("com.oracle.cgbu.cne.nrf").getLevel().toString())))
+					{
+						Configurator.setLevel("com.oracle.cgbu.cne.nrf", Level.toLevel(nrfSystemOptions.getLogLevelOptions().getNfDiscoveryLogLevel()));
+					}
+				}
+			}
+			this.nrfSystemOptions = nrfSystemOptions;
+			this.nrfEngSystemOptions = nrfEngSystemOptions;
+			logger.trace("Loaded nrfSystemoptions: " + this.nrfSystemOptions.toString());
+			logger.trace("Loaded nrfEngSystemOptions: " + this.nrfEngSystemOptions.toString());
+			logger.trace("publishSystemOptions : {}",publishSystemOptions);
+			if((this.nrfSystemOptions != null) && (this.nrfEngSystemOptions != null) && (publishSystemOptions== true)) {
+				publishSystemOptions = false;
+				SystemOptionsEvent customSpringEvent = new SystemOptionsEvent(this);
+				applicationEventPublisher.publishEvent(customSpringEvent);
+				
+			}
+		}
+	}
+}

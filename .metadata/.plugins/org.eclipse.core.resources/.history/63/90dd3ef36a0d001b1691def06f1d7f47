@@ -1,0 +1,210 @@
+package com.oracle.cgbu.cne.nrf.service;
+
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.event.ContextRefreshedEvent;
+import org.springframework.context.event.EventListener;
+import org.springframework.stereotype.Component;
+
+import com.oracle.cgbu.cne.nrf.NrfConfigException;
+import com.oracle.cgbu.cne.nrf.audit.AuditManager;
+import com.oracle.cgbu.cne.nrf.config.NrfConfigurations;
+import com.oracle.cgbu.cne.nrf.dao.NrfSystemOptionsDao;
+import com.oracle.cgbu.cne.nrf.dao.NrfSystemOptionsRepository;
+import com.oracle.cgbu.cne.nrf.domain.FeatureStatus;
+import com.oracle.cgbu.cne.nrf.domain.NrfSystemOptions;
+import com.oracle.cgbu.cne.nrf.metrics.MetricsDimension;
+import com.oracle.cgbu.cne.nrf.metrics.NrfMetrics;
+import com.oracle.cgbu.cne.nrf.service.RestClient;
+
+@Component
+public class ReplicationStatus {
+	private static Logger logger = LogManager.getLogger(ReplicationStatus.class);
+	static Boolean replicationStatus = false;
+	private static final  String VERSION = "v1";
+	private static final String SERVICE_OPERATION = "InternalReplicationServiceStatus";
+	@Autowired
+	MetricsDimension metricsDimension;
+	@Autowired
+	NrfMetrics nrfMetrics;
+	
+	public MetricsDimension getMetricsDimension() {
+		return metricsDimension;
+	}
+
+	public void setMetricsDimension(MetricsDimension metricsDimension) {
+		this.metricsDimension = metricsDimension;
+	}
+	
+	public NrfMetrics getNrfMetrics() {
+		return nrfMetrics;
+	}
+
+	public void setNrfMetrics(NrfMetrics nrfMetrics) {
+		this.nrfMetrics = nrfMetrics;
+	}
+
+	@Autowired
+	RestClient restClient;
+	
+	@Autowired
+	private NrfSystemOptionsRepository nrfSystemOptionsRepository;
+	
+	private NrfSystemOptions nrfSystemOptions;
+	
+	private String nrfInstanceId;
+	
+	private Boolean overrideReplicationCheck;
+	
+	@Autowired
+	public void setNrfConfig(NrfConfigurations config) {
+		if(config==null) {
+			throw new NrfConfigException("Bad NRF configuration. Missing 'nrf*' properties.");
+		}
+		if(config.getGlobalConfig()==null || config.getGlobalConfig().getNrfInstanceId()==null) {
+			throw new NrfConfigException("Bad NRF configuration. Missing 'nrf.global-config.nrf-instance-id' property.");
+		}
+		this.setNrfInstanceId(config.getGlobalConfig().getNrfInstanceId());
+		if(config.getReplicationSvc()==null || config.getReplicationSvc().getOverrideReplicationCheck()==null) {
+			this.setOverrideReplicationCheck(false);
+		}
+		else{
+			this.setOverrideReplicationCheck(config.getReplicationSvc().getOverrideReplicationCheck());
+		}	
+	}
+	
+	private int THREAD_POOL_SIZE = 2;
+	
+	public final static Boolean getReplicationStatus() {
+		return replicationStatus;
+	}
+
+	public final static void setReplicationStatus(Boolean replicationStatus) {
+		ReplicationStatus.replicationStatus = replicationStatus;
+	}
+
+	public final String getNrfInstanceId() {
+		return this.nrfInstanceId;
+	}
+
+	public final void setNrfInstanceId(String nrfInstanceId) {
+		this.nrfInstanceId = nrfInstanceId;
+	}
+	
+	public final Boolean getOverrideReplicationCheck() {
+		return overrideReplicationCheck;
+	}
+	
+	public final void setOverrideReplicationCheck(Boolean overrideReplicationCheck) {
+		this.overrideReplicationCheck = overrideReplicationCheck;
+	}
+
+	@EventListener(ContextRefreshedEvent.class)
+	public final void checkReplicationStatus() {
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		if(getOverrideReplicationCheck() == true) {
+			logMsg.clear();
+			logMsg.put("logMsg", "Replication check overriden, replication shall be considered active");
+			logger.warn(logMsg.toString());
+			ReplicationStatus.replicationStatus = true;
+			AuditManager.pauseRemoteAuditor = false;
+			nrfMetrics.getActive().getAndSet(1);
+			nrfMetrics.getInactive().getAndSet(0);
+			nrfMetrics.pegDbReplicationStatus("ACTIVE");
+		}
+		else {			
+			ScheduledExecutorService executor = Executors.newScheduledThreadPool(THREAD_POOL_SIZE);
+			executor.scheduleWithFixedDelay(() -> {
+				try {
+					setNrfSystemOptions();
+					if(getNrfSystemOptions() == null) {
+						logMsg.clear();
+						logMsg.put("logMsg", "SystemOptions not available !! Retry in 1 second." );
+						logger.warn(logMsg.toString());
+						Thread.sleep(1000);
+					} else {
+						if(nrfSystemOptions.getGeoRedundancyOptions().getGeoRedundancyFeatureStatus().equals(FeatureStatus.DISABLED)) {
+							logMsg.clear();
+							logMsg.put("logMsg", "GeoRedundancy feature disabled, replication shall be considered inactive");
+							logger.trace(logMsg.toString());
+							ReplicationStatus.replicationStatus = false;
+							AuditManager.pauseRemoteAuditor = true;
+							nrfMetrics.getInactive().getAndSet(1);
+							nrfMetrics.getActive().getAndSet(0);
+							nrfMetrics.pegDbReplicationStatus("INACTIVE");
+						}
+						else {
+							ReplicationStatus.replicationStatus = restClient.getReplicationStatus();	
+							if(ReplicationStatus.replicationStatus == false) {
+								logMsg.clear();
+								logMsg.put("logMsg", "Replication status is considered inactive");
+								AuditManager.pauseRemoteAuditor = true;
+								logger.warn(logMsg.toString());
+								AuditManager.pauseRemoteAuditor = true;
+								nrfMetrics.getInactive().getAndSet(1);
+								nrfMetrics.getActive().getAndSet(0);
+								nrfMetrics.pegDbReplicationStatus("INACTIVE");
+							}
+							else {
+								nrfMetrics.getActive().getAndSet(1);
+								nrfMetrics.getInactive().getAndSet(0);
+								nrfMetrics.pegDbReplicationStatus("ACTIVE");
+								AuditManager.pauseRemoteAuditor = false;
+							}
+						}
+						Thread.sleep(nrfSystemOptions.getGeoRedundancyOptions().getMonitorDBReplicationStatusInterval().toMillis());
+					}
+
+				} catch (InterruptedException e) {
+					logMsg.clear();
+					logMsg.put("logMsg", e.getMessage());
+					logMsg.put("stackTrace", e.getStackTrace());
+					logger.error(logMsg.toString());
+				} catch (Exception e) {
+					logMsg.clear();
+					logMsg.put("logMsg", "Unknown exception occurred");
+					logMsg.put("exception", e.toString());
+					logger.error(logMsg.toString());
+				}
+
+			}, 0, 1, TimeUnit.MILLISECONDS);					
+		}
+	}
+	
+	public NrfSystemOptions getNrfSystemOptions() {
+		return this.nrfSystemOptions;
+	}
+	
+	public void setNrfSystemOptions() {
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		logMsg.clear();
+		logMsg.put("logMsg", "setNrfSystemOptions() called");
+		logger.trace(logMsg.toString());
+		this.metricsDimension.setServiceOperation(SERVICE_OPERATION);
+		List<NrfSystemOptionsDao>  nrfSystemOptionsDaoList = null;
+		try {
+			nrfSystemOptionsDaoList = this.nrfSystemOptionsRepository.findbyRecordOwner(this.nrfInstanceId);
+			this.nrfSystemOptions = (NrfSystemOptions) nrfSystemOptionsDao.toDomain(VERSION,NrfSystemOptions.class);
+		}
+		catch(Exception e) {
+			logMsg.clear();
+			logMsg.put("logMsg", e.getMessage());
+			logMsg.put("stackTrace", (Object[]) e.getStackTrace());
+			logger.error(logMsg.toString());
+		}
+		if(nrfSystemOptionsDao == null) {
+			logMsg.clear();
+			logMsg.put("logMsg", "setNrfSystemOptions failed. Unable to fetch NrfSystemOptions"
+					+ "for OCNRF_SYSTEM_OPTIONS");
+			logger.error(logMsg.toString());
+		}
+	}
+}

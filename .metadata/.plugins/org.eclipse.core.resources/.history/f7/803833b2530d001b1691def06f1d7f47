@@ -1,0 +1,27 @@
+// Copyright 2018 (C), Oracle and/or its affiliates. All rights reserved.
+
+package com.oracle.cgbu.cne.nrf.dao;
+
+
+import java.util.List;
+
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.stereotype.Repository;
+
+import com.oracle.cgbu.cne.nrf.domain.NfScreeningRulesListStatus;
+import com.oracle.cgbu.cne.nrf.domain.NfScreeningRulesListType;
+
+@Repository
+public interface NfScreeningRepository extends JpaRepository<NfScreening, String> {
+	
+	
+	public NfScreening findByRecordOwnerAndNfScreeningRulesListTypeAndNfScreeningRulesListStatus(String recordOwner, NfScreeningRulesListType nfScreeningRulesListType,
+																				NfScreeningRulesListStatus nfScreeningRulesListStatus);
+
+	public NfScreening findByRecordOwnerAndNfScreeningRulesListType(String recordOwner, NfScreeningRulesListType nfScreeningRulesListType);
+
+	public List<NfScreening> findByRecordOwnerAndNfScreeningRulesListStatus(String recordOwner, NfScreeningRulesListStatus nfScreeningRulesListStatus);
+	
+   
+	public List<NfScreening> findByRecordOwner(String recordOwner);
+}

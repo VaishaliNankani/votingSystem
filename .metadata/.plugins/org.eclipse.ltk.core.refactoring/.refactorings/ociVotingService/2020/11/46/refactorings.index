@@ -1,0 +1,27 @@
+1604903066505	Rename package 'com.oracle.oci'
+1604903091437	Rename package 'com.oracle.oci'
+1604903120067	Copy package
+1604903151076	Copy package
+1604903193843	Copy package
+1604903236656	Copy package
+1604903253609	Copy package
+1604903273833	Rename package 'com.oracle.oci.votingservice.domain.config'
+1604904762769	Delete element
+1604904813813	Rename type 'NfSubscriptionApi'
+1604904838480	Rename type 'NFSubscriptionController'
+1604904964005	Delete element
+1604905533557	Rename type 'SubscriptionData'
+1604933809971	Delete element
+1604933921116	Delete element
+1604994708821	Rename type 'NfDbServiceImpl'
+1604995313321	Rename type 'NfDiscService'
+1604995777313	Copy compilation unit
+1604995856575	Rename type 'OciVotingServiceApiController'
+1604997077869	Delete element
+1605000285447	Rename type 'NFStatus'
+1605001445719	Rename type 'ociVotingServiceImpl'
+1605001458852	Rename type 'ociVotingService'
+1605002791730	Copy compilation unit
+1605002798320	Delete element
+1605031166529	Rename type 'RegistrationData'
+1605031246916	Rename type 'VoterData'

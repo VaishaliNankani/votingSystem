@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Configuration status="INFO" >
+<!--  <Configuration xmlns="http://logging.apache.org/log4j/2.0/config" status="INFO" monitorInterval="30">
+<Properties>
+    <Property name="baseDir" value="$${env:LOG_BASE_PATH}"></Property>
+    <Property name="fileName" value="$${env:LOG_FILE_NAME}"></Property>
+    <Property name="filePattern" value="$${env:LOG_FILE_PATTERN}"></Property>
+    <Property name="sizeBasedTriggeringPolicy" value="$${env:SIZE_BASED_TRIGGERING_POLICY_SIZE}"></Property>
+    <Property name="deletionFilePattern" value="$${env:DELETION_FILE_PATTERN}"></Property>
+    <Property name="deletionCriteriaLastModifiedTime" value="$${env:DELETION_CRITERIA_LAST_MODIFIED_TIME}"></Property>
+    <Property name="deletionCriteriaFileSize" value="$${env:DELETION_CRITERIA_FILE_SIZE}"></Property>
+  </Properties> -->
+
+   <Appenders>
+      <Console name="console" target="SYSTEM_OUT">
+         <JsonLayout compact="true" eventEol="true" stacktraceAsString="true">
+             <KeyValuePair key="messageTimeStamp" value="$${date:YY-MM-dd HH:mm:ss.SSSZ}" />
+            <KeyValuePair key="level" value="$${env:LOG_LEVEL}" /> 
+            <KeyValuePair key="application" value="$${env:APP_NAME}" />
+            <KeyValuePair key="eng_version" value="$${env:ENGINEERING_VERSION}" />
+            <KeyValuePair key="mktg_version" value="$${env:MARKETING_VERSION}" />          
+            <KeyValuePair key="microservice" value="$${env:MICROSERVICE_NAME}" />           
+            <KeyValuePair key="namespace" value="$${env:K8S_NAMESPACE}" />
+            <KeyValuePair key="node" value="$${env:K8S_NODE}" />
+            <KeyValuePair key="pod" value="$${ctx:hostname}" />
+           
+            <KeyValuePair key="subsystem" value="$${ctx:subsystem}" />
+            <KeyValuePair key="instanceType" value="prod" />
+            <KeyValuePair key="processId" value="$${sys:PID}" />
+            <KeyValuePair key="nrfTxId" value="$${ctx:nrfTxId}" />
+            <KeyValuePair key="vendor" value="$${env:VENDOR}" />
+            <KeyValuePair key="ocLogId" value="$${ctx:ocLogId}" />
+            
+            
+         </JsonLayout>
+      </Console>
+      
+     <!--   <RollingFile name="logFile" fileName="${baseDir}${fileName}" filePattern="${baseDir}${filePattern}">
+          <JsonLayout complete="true">
+            <KeyValuePair key="messageTimeStamp" value="$${date:YY-MM-dd HH:mm:ss.SSSZ}" />
+            <KeyValuePair key="level" value="$${env:LOG_LEVEL}" />
+            <KeyValuePair key="application" value="$${env:APP_NAME}" />
+            <KeyValuePair key="eng_version" value="$${env:ENGINEERING_VERSION}" />
+            <KeyValuePair key="mktg_version" value="$${env:MARKETING_VERSION}" />          
+            <KeyValuePair key="microservice" value="$${env:MICROSERVICE_NAME}" />           
+            <KeyValuePair key="namespace" value="$${env:K8S_NAMESPACE}" />
+            <KeyValuePair key="node" value="$${env:K8S_NODE}" />
+            <KeyValuePair key="pod" value="$${ctx:hostname}" />
+            <KeyValuePair key="subsystem" value="$${ctx:subsystem}" />
+            <KeyValuePair key="instanceType" value="prod" />
+            <KeyValuePair key="processId" value="$${sys:PID}" />
+            <KeyValuePair key="nrfTxId" value="$${ctx:nrfTxId}" />
+            <KeyValuePair key="vendor" value="$${env:VENDOR}" />
+            <KeyValuePair key="ocLogId" value="$${ctx:ocLogId}" />
+         </JsonLayout>
+            <Policies>
+               <SizeBasedTriggeringPolicy size="${sizeBasedTriggeringPolicy}" />
+            </Policies>
+            
+          <DefaultRolloverStrategy>
+            <Delete basePath="${baseDir}">
+              <IfFileName glob="${deletionFilePattern}" />
+                <IfAny>
+                  <IfLastModified age="${deletionCriteriaLastModifiedTime}" />
+                  <IfAccumulatedFileSize exceeds="${deletionCriteriaFileSize}" />
+                </IfAny>
+            </Delete>
+          </DefaultRolloverStrategy>
+      </RollingFile> -->
+
+   </Appenders> 
+   <Loggers>
+      <Root level="info" additivity="false">
+         <AppenderRef ref="console" />
+         <!--  <AppenderRef ref="logFile"/>-->
+      </Root>
+   </Loggers>
+</Configuration>

@@ -1,0 +1,16 @@
+hook.configuration.plmnList=${HPLMN_LIST:[map[mcc:410 mnc:11]]}
+hook.configuration.app-endpoint=${APP_ENDPOINT:ocnrf-ingressgateway.ocnrf}
+hook.configuration.app-endpoint-port=${APP_ENDPOINT_PORT:80}
+hook.configuration.tokenAlgorithm=${TOKEN_ALGORITHM:ES256}
+hook.config-svc.read-timeout=${READ_TIMEOUT:10}
+hook.config-svc.wait-time=${WAIT_TIME:60000}
+hook.config-svc.max-retries=${MAX_RETRIES:10}
+hook.config-svc.host=${CONFIG_SERVICE_NAME:ocnrf-nrfConfiguration}
+hook.config-svc.port=${CONFIG_SERVICE_PORT:8080}
+hook.config-svc.resource-uri=${CONFIG_SERVICE_RESOURCE_URI:/nrf-configuration/v1/system-options}
+nrf.global-config.vendor=${VENDOR:oracle}
+nrf.global-config.app_name=${APP_NAME:ocnrf}
+hook.site-info.network-database=${MYSQL_RELEASE_DATABASE}
+hook.site-info.application-database=${MYSQL_DATABASE}
+hook.site-info.nrf-instance-id =${NF_INSTANCE_ID}
+

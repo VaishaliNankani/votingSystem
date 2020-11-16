@@ -1,0 +1,53 @@
+package com.oracle.oci.votingservice.domain;
+
+public class VoteData extends AbstractDto{
+	
+	public VoteData(String voterId, String voterName, String address, String phoneNumber, String voteCasted) {
+		super();
+		this.voterId = voterId;
+		this.voterName = voterName;
+		this.address = address;
+		this.phoneNumber = phoneNumber;
+		this.voteCasted = voteCasted;
+	}
+	private String voterId  = null;	
+	
+	private String  voterName = null;
+
+	private String address  = null;
+
+	private String phoneNumber  = null;
+	//wont be received as input
+	private boolean voteCasted  = null;
+	
+	public String getVoterName() {
+		return voterName;
+	}
+	public void setVoterName(String voterName) {
+		this.voterName = voterName;
+	}
+	public String getAddress() {
+		return address;
+	}
+	public void setAddress(String address) {
+		this.address = address;
+	}
+	public String getPhoneNumber() {
+		return phoneNumber;
+	}
+	public void setPhoneNumber(String phoneNumber) {
+		this.phoneNumber = phoneNumber;
+	}
+	public String getVoteCasted() {
+		return voteCasted;
+	}
+	public void setVoteCasted(String voteCasted) {
+		this.voteCasted = voteCasted;
+	}
+	public String getVoterId() {
+		return voterId;
+	}
+	public void setVoterId(String voterId) {
+		this.voterId = voterId;
+	}
+}

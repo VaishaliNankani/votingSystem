@@ -1,0 +1,23 @@
+// Copyright 2020 (C), Oracle and/or its affiliates. All rights reserved.
+package com.oracle.cgbu.cne.nrf.hooks;
+
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration;
+import com.oracle.cgbu.cne.nrf.hooks.CommonUpgradeRollback;
+import com.oracle.releasemanagement.ReleaseManager;
+
+@SpringBootApplication(exclude={DataSourceAutoConfiguration.class})
+public class ServiceHookEntryPoint {
+	public static void main(String[] args) {
+
+		SpringApplication.run(ServiceHookEntryPoint.class, args);
+		CommonUpgradeRollback.getInstance().handlePreConfigData();
+		ReleaseManager.getInstance().init();
+		CommonUpgradeRollback.getInstance().handlePostConfigData();
+	}
+
+}
+
+

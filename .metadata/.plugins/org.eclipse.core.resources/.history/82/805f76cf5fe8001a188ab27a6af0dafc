@@ -1,0 +1,256 @@
+// Copyright 2020 (C), Oracle and/or its affiliates. All rights reserved.
+package com.oracle.cgbu.cne.nrf.hooks.releases;
+import com.oracle.utils.DbConnectionFactory;
+import java.sql.SQLException;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import com.oracle.cgbu.cne.nrf.domain.TimeRange;
+import java.sql.Connection;
+import java.sql.ResultSet;
+import java.sql.Statement;
+import com.oracle.cgbu.cne.nrf.domain.NrfSystemOptions;
+import com.oracle.cgbu.cne.nrf.hooks.HookConfigException;
+import com.oracle.cgbu.cne.nrf.hooks.HookException;
+import com.oracle.cgbu.cne.nrf.hooks.config.HookConfiguration;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Component;
+import com.oracle.cgbu.cne.nrf.domain.AuthFeatureConfig;
+import com.oracle.cgbu.cne.nrf.domain.ErrorCondition;
+import com.oracle.cgbu.cne.nrf.domain.ErrorInfo;
+import com.oracle.cgbu.cne.nrf.domain.FeatureStatus;
+import com.oracle.cgbu.cne.nrf.domain.GeneralEngSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.HeartbeatInfo;
+import com.oracle.cgbu.cne.nrf.domain.LoggingLevelSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.NfAuthenticationSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.NfManagementEngSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.NfManagementSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.NrfEngSystemOptions;
+
+import com.oracle.releasemanagement.ReleaseHooks;
+import com.oracle.releasemanagement.ReleaseVersion;
+
+@Component
+public class ReleaseHelmHook_1_8_0 extends NrfRelease implements ReleaseHooks {
+
+	private static final Logger logger = LogManager.getLogger(ReleaseHelmHook_1_8_0.class);
+	private DbConnectionFactory dbConnectionFactory = new DbConnectionFactory();
+	@Autowired
+	private HookConfiguration hookConfig;
+	public HookConfiguration getHookConfig() {
+		return hookConfig;
+	}
+	@Autowired
+	public void setHookConfig(HookConfiguration hookConfig) {
+		this.applicationDatabase = hookConfig.getSiteInfo()
+				.getApplicationDatabase();
+		if (applicationDatabase == null || applicationDatabase.isEmpty()) {
+			throw new HookConfigException("Bad Hook configuration,"
+					+ "ApplicationDatabase not configured.");
+		}
+		this.nrfInstanceId = hookConfig.getSiteInfo().getNrfInstanceId();
+		if (nrfInstanceId == null ||  nrfInstanceId.isEmpty()) {
+			throw new HookConfigException("Bad Hook configuration,"
+					+ "NrfInstanceId not configured.");
+		}
+	}
+
+	/*
+     * Assigned the release-version (1,8,0) based on the ReadMe file mentioned
+     * in the upgrade-common jar.
+     */
+	@Override
+	public ReleaseVersion getReleaseVersion() {
+	
+		return new ReleaseVersion(1, 8, 0);
+	}	
+	
+	@Override
+	public void preUpgrade()
+	{	       
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();			
+		logMsg.clear();
+		logMsg.put("logMsg","Entering function preUpgrade()");
+		logMsg.put("hookConfig",hookConfig);
+		logger.info(logMsg.toString());		
+        /*for pre-install as well as pre-upgrade same 
+		function is called as per upgrade-common framework*/
+		if (hookConfig.getSiteInfo().getHookType().equals("pre-install"))
+		{
+			logMsg.clear();
+			logMsg.put("logMsg","Nothing to be done in pre-install hook for 1.8.0 ");
+			logMsg.put("HookType",hookConfig.getSiteInfo().getHookType());
+			logger.info(logMsg.toString());	
+		}
+		else
+		{
+			try (Connection con = dbConnectionFactory.createConnection();
+					Statement stmt = con.createStatement();) {	
+				String sql = "SELECT configType,configurationJsonDocList from `" + 
+						getApplicationDatabase() + "`.`NrfSystemOptions` where recordOwner='"+getNrfInstanceId()+"'"
+						+ " and configType in  ('OCNRF_SYSTEM_OPTIONS','OCNRF_ENG_SYSTEM_OPTIONS');";	
+				logMsg.clear();
+				logMsg.put("logMsg","Executing the SQL query");
+				logMsg.put("sql",sql);
+				logger.info(logMsg.toString());
+				//fetch entries from database
+				ResultSet resultSet = stmt.executeQuery(sql);
+				//update the json stored in fetched entries
+				ArrayList <String> batchSqls =  updateConfigJson(resultSet);
+				//save the updates json in database so as to make them complaint to 1.8
+				updateDatabaseRecords(batchSqls,stmt);
+			} catch (SQLException e) {
+				logMsg.clear();
+				logMsg.put("logMsg","Not able to execute the SQL query. Exiting...");
+				logMsg.put("stacktrace",Arrays.toString(e.getStackTrace()));					
+				logger.error(logMsg.toString());
+				System.exit(1);
+			}catch (HookException e) {
+				logMsg.clear();
+				logMsg.put("logMsg"," Exiting due to Exception...");
+				logMsg.put("stacktrace",e.getMessage());					
+				logger.error(logMsg.toString());
+				System.exit(1);
+			}
+		}
+	}
+	/*This functions adds the preloaded parameters in OCNRF_ENG_SYSTEM_OPTIONS specific to Release1.8*/
+	@Override
+	NrfEngSystemOptions addEngSystemOptionsPreloadedParameters(NrfEngSystemOptions  nrfEngSystemOptions)
+	{
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();	
+		GeneralEngSystemOptions  generalEngSystemOptions = nrfEngSystemOptions.getGeneralEngSystemOptions();
+		logMsg.clear();
+		logMsg.put("logMsg","Entering function addEngSystemOptionsPreloadedParameters");
+		logMsg.put("nrfEngSystemOptions",nrfEngSystemOptions);
+		logger.info(logMsg.toString());			
+		generalEngSystemOptions.setRetryAfterMinValue(Duration.ofSeconds(60));
+		generalEngSystemOptions.setRetryAfterMaxValue(Duration.ofHours(1));
+		List<String> retryAfterErrorCodes = new ArrayList<>(List.of("3xx","413","429","503"));
+		generalEngSystemOptions.setRetryAfterErrorCodes(retryAfterErrorCodes);
+		List<String> redirectURLErrorCodes = new ArrayList<>(List.of("3xx"));
+		generalEngSystemOptions.setRedirectUrlErrorCodes(redirectURLErrorCodes);
+		NfManagementEngSystemOptions nfManagementEngSystemOptions = new NfManagementEngSystemOptions();             
+		TimeRange timeRange = new TimeRange();
+		timeRange.setMinValue(Duration.ofSeconds(10));
+		timeRange.setMaxValue(Duration.ofHours(24));
+		nfManagementEngSystemOptions.setMaxAllowedHbRange(timeRange);
+		nfManagementEngSystemOptions.setMinAllowedHbRange(timeRange);
+		nrfEngSystemOptions.setNfManagementEngSystemOptions(nfManagementEngSystemOptions);		
+		logMsg.clear();
+		logMsg.put("logMsg","Exit from function addEngSystemOptionsPreloadedParameters");
+		logMsg.put("nrfEngSystemOptions",nrfEngSystemOptions);
+		logger.info(logMsg.toString());	
+		return nrfEngSystemOptions;
+	}
+	/*This functions adds the preloaded parameters in OCNRF_SYSTEM_OPTIONS json specific to Release1.8*/
+	@Override
+	NrfSystemOptions addSystemOptionsPreloadedParameters(NrfSystemOptions  nrfSystemOptions
+			,NrfEngSystemOptions  nrfEngSystemOptions)
+	{
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();	
+		logMsg.clear();
+		logMsg.put("logMsg","Entering function addSystemOptionsPreloadedParameters");
+		logMsg.put("nrfSystemOptions",nrfSystemOptions);
+		logMsg.put("nrfEngSystemOptions",nrfEngSystemOptions);
+		logger.info(logMsg.toString());	
+		NfAuthenticationSystemOptions nfAuthenticationSystemOptions = 
+				prepareNfAuthSystemOptionsPreloadedValue();
+		List<HeartbeatInfo> nfHeartbeatTimers = prepareHeartBeatPreloadedValue(nrfSystemOptions.
+				getNfManagementSystemOptions(),nrfEngSystemOptions.getGeneralEngSystemOptions());
+		AuthFeatureConfig authFeatureConfig= prepareAuthFeatureConfigPreloadedValue();
+		nrfSystemOptions.setNfAuthenticationSystemOptions(nfAuthenticationSystemOptions);
+		nrfSystemOptions.getNfManagementSystemOptions().setNfHeartbeatTimers(nfHeartbeatTimers);
+		nrfSystemOptions.getNfAccessTokenSystemOptions().setAuthFeatureConfig(authFeatureConfig);
+		nrfSystemOptions.setLoggingLevelSystemOptions(loggingLevelSystemOptions);
+		logMsg.clear();
+		logMsg.put("logMsg","Exit from function addSystemOptionsPreloadedParameters");
+		logMsg.put("nrfSystemOptions",nrfSystemOptions);
+		logger.info(logMsg.toString());	
+		return nrfSystemOptions;
+	}
+	public LoggingLevelSystemOptions   prepareLoggingLevelSystemOptionsPreloadedValue()
+	{
+		LoggingLevelSystemOptions loggingLevel = new LoggingLevelSystemOptions();
+		loggingLevel.setNfAccessTokenLogLevel("WARN");
+		loggingLevel.setNfDiscoveryLogLevel("WARN");
+		loggingLevel.setNfRegistrationLogLevel("WARN");
+		loggingLevel.setNfSubscriptionLogLevel("WARN");
+		loggingLevel.setNrfAuditorLogLevel("WARN");
+		loggingLevel.setNrfConfigurationLogLevel("WARN");
+		
+		
+	}
+	public NfAuthenticationSystemOptions prepareNfAuthSystemOptionsPreloadedValue()
+	{	
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();	
+		ErrorInfo nfAuthenticationErrorResponse = new ErrorInfo();
+		nfAuthenticationErrorResponse.setErrorCondition(ErrorCondition.Nf_Fqdn_Authentication_Failure);
+		nfAuthenticationErrorResponse.setErrorCode(401);
+		nfAuthenticationErrorResponse.setErrorResponse("Failed to authenticate NF using FQDN");
+		nfAuthenticationErrorResponse.setRetryAfter(Duration.ofMinutes(5));
+		List<ErrorInfo> nfAuthenticationErrorInfoList = new ArrayList<ErrorInfo>();
+		nfAuthenticationErrorInfoList.add(nfAuthenticationErrorResponse);
+		NfAuthenticationSystemOptions nfAuthenticationSystemOptions = new NfAuthenticationSystemOptions();
+		nfAuthenticationSystemOptions.setNfRegistrationAuthenticationStatus(FeatureStatus.DISABLED);
+		nfAuthenticationSystemOptions.setNfSubscriptionAuthenticationStatus(FeatureStatus.DISABLED);
+		nfAuthenticationSystemOptions.setNfDiscoveryAuthenticationStatus(FeatureStatus.DISABLED);
+		nfAuthenticationSystemOptions.setAccessTokenAuthenticationStatus(FeatureStatus.DISABLED);
+		nfAuthenticationSystemOptions.setNfProfileRetrievalAuthenticationStatus(FeatureStatus.DISABLED);
+		nfAuthenticationSystemOptions.setNfListRetrievalAuthenticationStatus(FeatureStatus.DISABLED);
+		nfAuthenticationSystemOptions.setCheckIfNfIsRegistered(FeatureStatus.DISABLED);
+		nfAuthenticationSystemOptions.setNfAuthenticationErrorResponses(nfAuthenticationErrorInfoList);	
+		logMsg.clear();
+		logMsg.put("logMsg","Exit function prepareNfAuthSystemOptionsPreloadedValue");
+		logMsg.put("nfAuthenticationSystemOptions",nfAuthenticationSystemOptions);		
+		logger.info(logMsg.toString());	
+		return nfAuthenticationSystemOptions;
+	}
+	public List<HeartbeatInfo>  prepareHeartBeatPreloadedValue(NfManagementSystemOptions nfManagementSystemOptions,
+			GeneralEngSystemOptions generalEngSystemOptions )
+	{
+		/*nfHeartbeatTimers needs to populated with rel 1.7 parameters 
+		 * in nfManagementSystemOptions/engsysteogeneralEngSystemOptionsptions
+		 */
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();	
+		HeartbeatInfo heartbeatInfo = new HeartbeatInfo();
+		heartbeatInfo.setNfType("ALL_NF_TYPE");
+		heartbeatInfo.setMinHbTimer(generalEngSystemOptions.getHeartBeatTimerMinValue());
+		heartbeatInfo.setMaxHbTimer(generalEngSystemOptions.getHeartBeatTimerMinValue());
+		heartbeatInfo.setDefaultHbTimer(nfManagementSystemOptions.getNfHeartBeatTimer());
+		heartbeatInfo.setNfHeartbeatMissAllowed(nfManagementSystemOptions.getNfHeartBeatMissAllowed());
+		List<HeartbeatInfo> nfHeartbeatTimers = new ArrayList<HeartbeatInfo>();
+		nfHeartbeatTimers.add(heartbeatInfo); 
+		logMsg.clear();
+		logMsg.put("logMsg","Exit function prepareHeartBeatPreloadedValue");
+		logMsg.put("nfHeartbeatTimers",nfHeartbeatTimers);		
+		logger.info(logMsg.toString());	
+		return nfHeartbeatTimers;
+	}	
+	
+	public AuthFeatureConfig prepareAuthFeatureConfigPreloadedValue()
+	{
+		Map<String, Object> logMsg = new LinkedHashMap<String, Object>();
+		AuthFeatureConfig authFeatureConfig = new AuthFeatureConfig();
+		authFeatureConfig.setAuthFeatureStatus(FeatureStatus.DISABLED);
+		List<ErrorInfo> authErrorResponsesList = new ArrayList<ErrorInfo>();
+		ErrorInfo authErrorResponse = new ErrorInfo();
+		authErrorResponse.setErrorCode(400);
+		authErrorResponse.setErrorCondition(ErrorCondition.RequesterNf_Unauthorized);
+		authErrorResponse.setErrorResponse("The Consumer NfType is not authorized to"
+				+ " receive access token for the requested Nftype.");
+		authErrorResponsesList.add(authErrorResponse);
+		authFeatureConfig.setAuthErrorResponses(authErrorResponsesList);
+		logMsg.clear();
+		logMsg.put("logMsg","Exit function prepareAuthFeatureConfigPreloadedValue");
+		logMsg.put("authFeatureConfig",authFeatureConfig);		
+		logger.info(logMsg.toString());	
+		return authFeatureConfig;
+	}
+
+}

@@ -1,0 +1,85 @@
+package com.oracle.cgbu.cne.nrf.domain;
+
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.List;
+
+/**
+ * A utility POJO(plain-old java object) to facilitate forwarding
+ */
+public class ForwardingData {
+
+	private Boolean loopDetected = false;
+
+	private List<String> forwardedFrom = new ArrayList<String>();
+
+	private Boolean isForwardingPossible = false;
+
+	private String viaHeader = "";
+
+	public Boolean isForwarded() {
+		return forwardedFrom.isEmpty() ? false : true;
+	}
+
+	public Boolean isForwardedFromPrimaryNrf() {
+		if (forwardedFrom != null) {
+			return forwardedFrom.contains("primary") ? true : false;
+		} else {
+			return false;
+		}
+	}
+
+	public Boolean isForwardedFromSecondaryNrf() {
+		if (forwardedFrom != null) {
+			return forwardedFrom.contains("secondary") ? true : false;
+		} else {
+			return false;
+		}
+	}
+
+	public Boolean isLoop() {
+		return loopDetected;
+	}
+
+	public void setLoopDetected(Boolean loopDetected) {
+		this.loopDetected = loopDetected;
+	}
+
+	public List<String> getForwardedFrom() {
+		return forwardedFrom;
+	}
+
+	public void setForwardedFrom(List<String> forwardedFrom) {
+		this.forwardedFrom = forwardedFrom;
+	}
+
+	public Boolean isForwardingPossible() {
+		return isForwardingPossible;
+	}
+
+	public void setIsForwardingPossible(Boolean isForwardingPossible) {
+		this.isForwardingPossible = isForwardingPossible;
+	}
+
+	public String getViaHeader() {
+		return viaHeader;
+	}
+
+	public void setViaHeader(Iterator<String> viaHeader) {
+		this.viaHeader = "";
+		List<String> viaHeaderList = new ArrayList<String>();
+		if (viaHeader != null) {
+			while (viaHeader.hasNext()) {
+				viaHeaderList.add(viaHeader.next());
+			}
+			this.viaHeader = String.join(", ",viaHeaderList)+", ";
+		}
+	}
+
+	@Override
+	public String toString() {
+		return "ForwardingData [loopDetected=" + loopDetected + ", forwardedFrom=" + forwardedFrom
+				+ ", isForwardingPossible=" + isForwardingPossible + ", viaHeader=" + viaHeader + "]";
+	}
+
+}

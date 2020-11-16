@@ -1,0 +1,202 @@
+// Copyright 2020 (C), Oracle and/or its affiliates. All rights reserved.
+
+package com.oracle.cgbu.cne.nrf.domain;
+
+import java.util.Date;
+
+import org.springframework.validation.annotation.Validated;
+
+import com.oracle.cgbu.cne.nrf.dao.NfStatusMonitor;
+import com.oracle.cgbu.cne.nrf.dao.NfStatusMonitorDoc;
+
+@Validated
+public class NfAuditUtils extends SimpleAbstractDto {
+	private String nfInstanceId;
+		
+	private NFStatus nfStatus;
+	
+	private Integer load;
+	
+	private long lastHbTimeStamp;
+	
+	private int numHbMissed;
+
+	private long suspendedTimestamp;
+		
+	private Integer lastNotifLoad;
+	
+	private Integer heartBeatTimer;
+	
+	private int numHbMissedBeforeAudit;
+	
+	public int getNumHbMissedBeforeAudit() {
+		return numHbMissedBeforeAudit;
+	}
+
+	public void setNumHbMissedBeforeAudit(int numHbMissedBeforeAudit) {
+		this.numHbMissedBeforeAudit = numHbMissedBeforeAudit;
+	}
+
+	public NfAuditUtils(String nfInstanceId, NFStatus nfStatus, Integer load, Integer heartBeatTimer) {
+		this.nfInstanceId = nfInstanceId;
+		this.nfStatus = nfStatus;
+		this.load = load;
+		this.setLastHbTimeStamp(new Date());
+		this.numHbMissed = 0;
+		this.numHbMissedBeforeAudit = 0;
+		if (nfStatus == NFStatus.SUSPENDED ) {
+			this.setSuspendedTimestamp(new Date());			
+		}
+		else {
+			this.setSuspendedTimestamp(0L);
+		}
+		this.lastNotifLoad = load;
+		this.heartBeatTimer = heartBeatTimer;
+	}
+
+	public NfAuditUtils() {
+	}
+	
+	public NfAuditUtils(NfStatusMonitor nfStatusMonitor,NfStatusMonitorDoc nfStatusMonitorDoc)  {
+		
+		this.setLoad(nfStatusMonitorDoc.getNfLoad());
+		this.setNumHbMissed(nfStatusMonitorDoc.getNumHbMissed());
+		this.setNumHbMissedBeforeAudit(nfStatusMonitorDoc.getNumHbMissedBeforeAudit());
+		this.setLastNotifLoad(nfStatusMonitorDoc.getLastNotifLoad());
+		this.setHeartBeatTimer(nfStatusMonitorDoc.getHeartBeatTimer());
+		this.setNfInstanceId(nfStatusMonitor.getNfInstanceId());
+		this.setNfStatus(nfStatusMonitor.getNfStatus());
+		this.setLastHbTimeStamp(nfStatusMonitor.getLastUpdateFromNFTimestamp());
+		this.setSuspendedTimestamp(nfStatusMonitor.getSuspendedTimestamp());
+	}
+	
+	public Integer getHeartBeatTimer() {
+		return heartBeatTimer;
+	}
+
+	public void setHeartBeatTimer(Integer heartBeatTimer) {
+		this.heartBeatTimer = heartBeatTimer;
+	}
+
+	public String getNfInstanceId() {
+		return nfInstanceId;
+	}
+
+	public void setNfInstanceId(String nfInstanceId) {
+		this.nfInstanceId = nfInstanceId;
+	}
+	
+	public NFStatus getNfStatus() {
+		return nfStatus;
+	}
+
+	public void setNfStatus(NFStatus nfStatus) {
+		this.nfStatus = nfStatus;
+	}
+
+	public Integer getLoad() {
+		return load;
+	}
+
+	public void setLoad(Integer load) {
+		this.load = load;
+	}
+
+	public int getNumHbMissed() {
+		return numHbMissed;
+	}
+
+	public void setNumHbMissed(int numHbMissed) {
+		this.numHbMissed = numHbMissed;
+	}
+
+	public Integer getLastNotifLoad() {
+		return lastNotifLoad;
+	}
+
+	public void setLastNotifLoad(Integer lastNotifLoad) {
+		this.lastNotifLoad = lastNotifLoad;
+	}
+	
+	public long getLastHbTimeStamp() {
+		return lastHbTimeStamp;
+	}
+	
+	public void setLastHbTimeStamp(Object lastHbTimeStamp) {
+		if(lastHbTimeStamp instanceof Date) {
+			this.lastHbTimeStamp = EpochTime.fetchEpochFromDate((Date) lastHbTimeStamp);
+		}else {
+			this.lastHbTimeStamp = (long)lastHbTimeStamp;
+		}
+	}
+
+	public long getSuspendedTimestamp() {
+		return suspendedTimestamp;
+	}
+
+	public void setSuspendedTimestamp(Object suspendedTimestamp) {
+		if(suspendedTimestamp instanceof Date) {
+			this.suspendedTimestamp = EpochTime.fetchEpochFromDate((Date) suspendedTimestamp);
+		}else {
+			this.suspendedTimestamp = (long)suspendedTimestamp;
+		}
+	}
+	
+	@Override
+	public int hashCode() {
+		final int prime = 31;
+		int result = 1;
+		result = prime * result + ((heartBeatTimer == null) ? 0 : heartBeatTimer.hashCode());
+		result = prime * result + (int) (lastHbTimeStamp ^ (lastHbTimeStamp >>> 32));
+		result = prime * result + ((lastNotifLoad == null) ? 0 : lastNotifLoad.hashCode());
+		result = prime * result + ((load == null) ? 0 : load.hashCode());
+		result = prime * result + ((nfInstanceId == null) ? 0 : nfInstanceId.hashCode());
+		result = prime * result + ((nfStatus == null) ? 0 : nfStatus.hashCode());
+		result = prime * result + numHbMissed;
+		result = prime * result + numHbMissedBeforeAudit;
+		result = prime * result + (int) (suspendedTimestamp ^ (suspendedTimestamp >>> 32));
+		return result;
+	}
+
+	@Override
+	public boolean equals(Object obj) {
+		if (this == obj)
+			return true;
+		if (obj == null)
+			return false;
+		if (getClass() != obj.getClass())
+			return false;
+		NfAuditUtils other = (NfAuditUtils) obj;
+		if (heartBeatTimer == null) {
+			if (other.heartBeatTimer != null)
+				return false;
+		} else if (!heartBeatTimer.equals(other.heartBeatTimer))
+			return false;
+		if (lastHbTimeStamp != other.lastHbTimeStamp)
+			return false;
+		if (lastNotifLoad == null) {
+			if (other.lastNotifLoad != null)
+				return false;
+		} else if (!lastNotifLoad.equals(other.lastNotifLoad))
+			return false;
+		if (load == null) {
+			if (other.load != null)
+				return false;
+		} else if (!load.equals(other.load))
+			return false;
+		if (nfInstanceId == null) {
+			if (other.nfInstanceId != null)
+				return false;
+		} else if (!nfInstanceId.equals(other.nfInstanceId))
+			return false;
+		if (nfStatus != other.nfStatus)
+			return false;
+		if (numHbMissed != other.numHbMissed)
+			return false;
+		if (numHbMissedBeforeAudit != other.numHbMissedBeforeAudit)
+			return false;
+		if (suspendedTimestamp != other.suspendedTimestamp)
+			return false;
+		return true;
+	}
+}

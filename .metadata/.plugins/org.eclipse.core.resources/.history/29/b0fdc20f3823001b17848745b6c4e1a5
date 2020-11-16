@@ -1,0 +1,13 @@
+package com.oracle.oci.votingservice.domain;
+
+import javax.validation.constraints.NotNull;
+
+public class VoteData extends AbstractDto{
+	
+	@NotNull
+	private long voterId;	
+	@NotNull
+	private long candidateId;	
+	
+	
+}

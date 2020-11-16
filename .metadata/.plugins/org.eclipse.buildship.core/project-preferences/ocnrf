@@ -1,0 +1,12 @@
+#
+#Fri Nov 13 05:34:28 UTC 2020
+derivedResources=.gradle\:build\:common/build\:nfAccessToken/build\:nfDiscovery/build\:nfRegistration/build\:nfSubscription/build\:nrfAuditor/build\:nrfConfiguration/build\:nfAccessToken/upgradeNfAccessToken/build\:nfDiscovery/upgradeNfDiscovery/build\:nfRegistration/upgradeNfRegistration/build\:nfSubscription/upgradeNfSubscription/build\:nrfAuditor/upgradeNrfAuditor/build\:nrfConfiguration/upgradeNrfConfiguration/build
+linkedResources=
+classpath=<?xml version\="1.0" encoding\="UTF-8"?>\n<classpath>\n</classpath>\n
+managedNatures=
+buildDir=build
+managedBuilders=<?xml version\="1.0" encoding\="UTF-8" standalone\="no"?><commands/>
+buildScriptPath=build.gradle
+subprojectPaths=common\:nfAccessToken\:nfDiscovery\:nfRegistration\:nfSubscription\:nrfAuditor\:nrfConfiguration\:nfAccessToken/upgradeNfAccessToken\:nfDiscovery/upgradeNfDiscovery\:nfRegistration/upgradeNfRegistration\:nfSubscription/upgradeNfSubscription\:nrfAuditor/upgradeNrfAuditor\:nrfConfiguration/upgradeNrfConfiguration
+hasAutoBuildTasks=false
+gradleVersion=6.5.1

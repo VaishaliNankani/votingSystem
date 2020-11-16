@@ -1,0 +1,1022 @@
+// Copyright 2018 (C), Oracle and/or its affiliates. All rights reserved.
+
+package com.oracle.cgbu.cne.nrf.test;
+
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.PrintStream;
+import java.net.URI;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Calendar;
+import java.util.Date;
+import java.util.List;
+import java.util.Random;
+import java.util.UUID;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.oracle.cgbu.cne.nrf.annotations.NFType;
+import com.oracle.cgbu.cne.nrf.dao.NrfSystemOptionsDao;
+import com.oracle.cgbu.cne.nrf.dao.SiteJsonSchemaVersionInfo;
+import com.oracle.cgbu.cne.nrf.domain.AmfInfo;
+import com.oracle.cgbu.cne.nrf.domain.AudienceType;
+import com.oracle.cgbu.cne.nrf.domain.AusfInfo;
+import com.oracle.cgbu.cne.nrf.domain.AuthorizeRequesterNf;
+import com.oracle.cgbu.cne.nrf.domain.BsfInfo;
+import com.oracle.cgbu.cne.nrf.domain.DataSetId;
+import com.oracle.cgbu.cne.nrf.domain.DefaultNotificationSubscription;
+import com.oracle.cgbu.cne.nrf.domain.DnnSmfInfoItem;
+import com.oracle.cgbu.cne.nrf.domain.DnnUpfInfoItem;
+import com.oracle.cgbu.cne.nrf.domain.ErrorCondition;
+import com.oracle.cgbu.cne.nrf.domain.ErrorInfo;
+import com.oracle.cgbu.cne.nrf.domain.ErrorResponses;
+import com.oracle.cgbu.cne.nrf.domain.FeatureStatus;
+import com.oracle.cgbu.cne.nrf.domain.ForwardingOptions;
+import com.oracle.cgbu.cne.nrf.domain.GeneralEngSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.GeneralOptions;
+import com.oracle.cgbu.cne.nrf.domain.GeoRedundancyEngSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.GeoRedundancyOptions;
+import com.oracle.cgbu.cne.nrf.domain.Guami;
+import com.oracle.cgbu.cne.nrf.domain.HeartbeatInfo;
+import com.oracle.cgbu.cne.nrf.domain.IdentityRange;
+import com.oracle.cgbu.cne.nrf.domain.InterfaceUpfInfoItem;
+import com.oracle.cgbu.cne.nrf.domain.IpEndPoint;
+import com.oracle.cgbu.cne.nrf.domain.Ipv4AddressRange;
+import com.oracle.cgbu.cne.nrf.domain.Ipv6PrefixRange;
+import com.oracle.cgbu.cne.nrf.domain.LogLevelOptions;
+import com.oracle.cgbu.cne.nrf.domain.LogicalOperatorForScope;
+import com.oracle.cgbu.cne.nrf.domain.N1MessageClass;
+import com.oracle.cgbu.cne.nrf.domain.N2InformationClass;
+import com.oracle.cgbu.cne.nrf.domain.N2InterfaceAmfInfo;
+import com.oracle.cgbu.cne.nrf.domain.NFStatus;
+import com.oracle.cgbu.cne.nrf.domain.NfAccessTokenEngSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.NfAccessTokenOptions;
+import com.oracle.cgbu.cne.nrf.domain.NfAuthenticationOptions;
+import com.oracle.cgbu.cne.nrf.domain.NfConfig;
+import com.oracle.cgbu.cne.nrf.domain.NfDiscoveryOptions;
+import com.oracle.cgbu.cne.nrf.domain.NfDiscoveryEngSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.NfHeartBeat;
+import com.oracle.cgbu.cne.nrf.domain.NfManagementEngSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.NfManagementOptions;
+import com.oracle.cgbu.cne.nrf.domain.NfProfile;
+import com.oracle.cgbu.cne.nrf.domain.NfRegistrationEngSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.NfScreeningFeatureStatus;
+import com.oracle.cgbu.cne.nrf.domain.NfScreeningOptions;
+import com.oracle.cgbu.cne.nrf.domain.NfService;
+import com.oracle.cgbu.cne.nrf.domain.NfServiceStatus;
+import com.oracle.cgbu.cne.nrf.domain.NfServiceVersion;
+import com.oracle.cgbu.cne.nrf.domain.NfServiceVersionConfig;
+import com.oracle.cgbu.cne.nrf.domain.NfSubscriptionEngSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.NotificationEventType;
+import com.oracle.cgbu.cne.nrf.domain.NotificationType;
+import com.oracle.cgbu.cne.nrf.domain.NrfAuditorEngSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.NrfEngSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.NrfSystemOptions;
+import com.oracle.cgbu.cne.nrf.domain.OauthTokenAlgorithm;
+import com.oracle.cgbu.cne.nrf.domain.PcfInfo;
+import com.oracle.cgbu.cne.nrf.domain.Plmn;
+import com.oracle.cgbu.cne.nrf.domain.ResponseHttpStatusCodes;
+import com.oracle.cgbu.cne.nrf.domain.SingleNssai;
+import com.oracle.cgbu.cne.nrf.domain.SlfOptions;
+import com.oracle.cgbu.cne.nrf.domain.SmfInfo;
+import com.oracle.cgbu.cne.nrf.domain.SnssaiSmfInfoItem;
+import com.oracle.cgbu.cne.nrf.domain.SnssaiUpfInfoItem;
+import com.oracle.cgbu.cne.nrf.domain.SubscrCond;
+import com.oracle.cgbu.cne.nrf.domain.SubscriberIdType;
+import com.oracle.cgbu.cne.nrf.domain.SubscriptionData;
+import com.oracle.cgbu.cne.nrf.domain.SupiRange;
+import com.oracle.cgbu.cne.nrf.domain.TacRange;
+import com.oracle.cgbu.cne.nrf.domain.Tai;
+import com.oracle.cgbu.cne.nrf.domain.TaiRange;
+import com.oracle.cgbu.cne.nrf.domain.TimeRange;
+import com.oracle.cgbu.cne.nrf.domain.UPInterfaceType;
+import com.oracle.cgbu.cne.nrf.domain.UdmInfo;
+import com.oracle.cgbu.cne.nrf.domain.UdrInfo;
+import com.oracle.cgbu.cne.nrf.domain.UpfInfo;
+import com.oracle.cgbu.cne.nrf.domain.UriScheme;
+import com.oracle.cgbu.cne.nrf.domain.VersionedJsonDoc;
+import com.oracle.cgbu.cne.nrf.domain.VersionedJsonDocList;
+
+public class TestDataGenerator {
+
+	static NfProfile profile;
+	
+	public static void main(String[] argv){
+		PrintStream fw;
+		try {
+			fw = new PrintStream(new FileOutputStream("d:\\nrfprofiles.json",false));
+			
+			for (int i=0;i<2;i++) {
+				generateNF("AMF");
+				//fw.println(profile.toString()+System.lineSeparator());
+				System.out.println(profile.toString()+System.lineSeparator());
+				generateNF("AUSF");
+				//fw.println(profile.toString()+System.lineSeparator());
+				generateNF("BSF");
+				//fw.println(profile.toString()+System.lineSeparator());
+				generateNF("SMF");
+				//fw.println(profile.toString()+System.lineSeparator());
+				generateNF("PCF");
+				//fw.println(profile.toString()+System.lineSeparator());
+				generateNF("UDM");
+				//fw.println(profile.toString()+System.lineSeparator());
+				generateNF("UDR");
+			}
+			fw.close();
+		} catch (IOException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+
+	}
+
+	private static String getDigitString(int min, int max, boolean hex) {
+		String s = null;
+		int i = (int)(Math.random()*max);
+		if(i<min)
+			i += min;
+		s = hex?Integer.toHexString(i):Integer.toString(i);
+		return s;
+	}
+	
+	public static NfProfile generateNF(String type) throws IOException {
+			profile = null;
+			profile = new NfProfile();
+			profile.setNfType(type);
+			profile.setNfInstanceId(UUID.randomUUID().toString());
+			profile.setNfStatus(NFStatus.REGISTERED);
+			List<Plmn> plmnList = new ArrayList<>();
+			plmnList.add(new Plmn("310", "14"));
+			profile.setPlmnList(plmnList);
+			List<SingleNssai> aList1 = new ArrayList<SingleNssai>();
+			aList1.add(new SingleNssai(getDigitString(2097151, 16777215,true),(int)(Math.random()*255)));
+			aList1.add(new SingleNssai(getDigitString(2097151, 16777215,true),(int)(Math.random()*255)));
+			aList1.add(new SingleNssai(getDigitString(2097151, 16777215,true),(int)(Math.random()*255)));
+			profile.setsNssais(aList1);
+			profile.setCapacity(2000);
+			profile.setFqdn(type+".d5g.oracle.com");
+			profile.setInterPlmnFqdn(type+"-d5g.oracle.com");
+			profile.setPriority(0);
+			profile.setLoad(0);
+			profile.setHeartBeatTimer(30);
+			List<String> aList2 = new ArrayList<String>();
+			aList2.add("192.168.2.100");
+			aList2.add("192.168.3.100");
+			aList2.add("192.168.3.110");
+			profile.setIpv4Addresses(aList2);
+			List<String> aList3 = new ArrayList<String>();
+			aList3.add("2001:db8:85a3::8a2e:370:7334");
+			aList3.add("2001:db8:85a3::8a2e:371:7334");
+			aList3.add("2001:db8:85a3::8a2e:372:7334");
+			profile.setIpv6Addresses(aList3);
+			profile.setLocality("US East");
+			ObjectMapper om = new ObjectMapper();
+			Date date = om.convertValue("2018-04-28T23:20:50Z", Date.class);
+			profile.setRecoveryTime(date);
+			List<String> aList5 = new ArrayList<String>();
+			aList5.add("slice-1");aList5.add("slice-2");
+			profile.setNsiList(aList5);
+			List<NfService> aList6 = new ArrayList<NfService>();
+			for (int i=0;i<2;i++)
+				aList6.add(generateService(profile.getNfType()));
+ 				
+			profile.setNfServices(aList6);
+			
+			List<String> routingIndicators = new ArrayList<String>();
+			for(int j=1;j<=5;j++) {
+				routingIndicators.add(Integer.toString(j));
+			}
+			switch (type) {
+				case "AMF":
+					AmfInfo amfInfo = new AmfInfo();
+					amfInfo.setAmfRegionId("amf-region-"+(int)(Math.random()*100));
+					amfInfo.setAmfSetId(getDigitString(2097151, 16777215, true));
+					List<Guami> gList = new ArrayList<Guami>();
+					gList.add(new Guami(new Plmn(getDigitString(100,999,false), getDigitString(10,99,false)), getDigitString(2097151, 16777215, true)));
+					gList.add(new Guami(new Plmn(getDigitString(100,999,false), getDigitString(10,99,false)), getDigitString(2097151, 16777215, true)));
+					amfInfo.setGuamiList(gList);
+					List<Tai> tList = new ArrayList<Tai>();
+					tList.add(new Tai(new Plmn(getDigitString(100,999,false), getDigitString(10,99,false)), Integer.toHexString((int)(Math.round(Math.random()*0xEFFF))+0x1000)));
+					tList.add(new Tai(new Plmn(getDigitString(100,999,false), getDigitString(10,99,false)), Integer.toHexString((int)(Math.round(Math.random()*0xEFFF))+0x1000)));
+					amfInfo.setTaiList(tList);
+					List<Guami> gList1 = new ArrayList<Guami>();
+					gList.add(new Guami(new Plmn(getDigitString(100,999,false), getDigitString(10,99,false)), getDigitString(2097151, 16777215, true)));
+					gList.add(new Guami(new Plmn(getDigitString(100,999,false), getDigitString(10,99,false)), getDigitString(2097151, 16777215, true)));
+					amfInfo.setBackupInfoAmfFailure(gList1);
+					amfInfo.setBackupInfoAmfRemoval(gList1);
+					
+					List<String> ipv4EndpointAddress = new ArrayList<String>();
+					ipv4EndpointAddress.add("192.168.2.100");
+					ipv4EndpointAddress.add("192.168.3.100");
+					ipv4EndpointAddress.add("192.168.3.110");
+					
+					List<String> ipv6EndpointAddress = new ArrayList<String>();
+					ipv6EndpointAddress.add("2001:db8:85a3::8a2e:370:7334");
+					ipv6EndpointAddress.add("2001:db8:85a3::8a2e:371:7334");
+					ipv6EndpointAddress.add("2001:db8:85a3::8a2e:372:7334");
+					
+					N2InterfaceAmfInfo nfInterfaceAmfInfo = new N2InterfaceAmfInfo();
+					nfInterfaceAmfInfo.setAmfName("amf1.cluster1.net2.amf.5gc.mnc012.mcc345.3gppnetwork.org");
+					nfInterfaceAmfInfo.setIpv4EndpointAddress(ipv4EndpointAddress);
+					nfInterfaceAmfInfo.setIpv6EndpointAddress(ipv6EndpointAddress);
+					amfInfo.setN2InterfaceAmfInfo(nfInterfaceAmfInfo);
+					profile.setAmfInfo(amfInfo);
+					break;
+				case "AUSF":
+					AusfInfo ausfInfo = new AusfInfo();
+					ausfInfo.setGroupId("ausf-grp-"+(int)(Math.random()*100));				
+					ausfInfo.setRoutingIndicators(routingIndicators);
+					List<SupiRange> lst = new ArrayList<SupiRange>();
+					SupiRange sr = new SupiRange();
+					int i = (int)(Math.random()*100);
+					sr.setStart(i+"3450000000000");
+					sr.setEnd(i+"3450000009999");
+					sr.setPattern("");
+					lst.add(sr);
+					lst.add(new SupiRange(i+"45000000","", "imsi-\"+i+\"345.*"));
+					i = (int)(Math.random()*1000000);
+					lst.add(new SupiRange(i+"11234000000",i+"2300000000", "nai-"+(int)(i/1000)+".*"));
+					ausfInfo.setSupiRanges(lst);
+					profile.setAusfInfo(ausfInfo);
+					break;
+				case "BSF":
+					BsfInfo bsfInfo = new BsfInfo();
+					List<Ipv4AddressRange> v4Lst = new ArrayList<Ipv4AddressRange>();
+					List<Ipv6PrefixRange> v6Lst = new ArrayList<Ipv6PrefixRange>();
+					v4Lst.add(new Ipv4AddressRange("1.1.1.1", "1.1.1."+(int)(Math.random()*255)));
+					v4Lst.add(new Ipv4AddressRange("1.1.2.1", "1.1.2."+(int)(Math.random()*255)));
+					v4Lst.add(new Ipv4AddressRange("1.1.3.1", "1.1.3."+(int)(Math.random()*255)));
+					bsfInfo.setIpv4AddressRanges(v4Lst);
+					String r = Integer.toHexString((int)(Math.random()*255));
+					v6Lst.add(new Ipv6PrefixRange("abcd:"+r+"f0::/64", "abcd:"+r+"ff::/64"));
+					bsfInfo.setIpv6PrefixRanges(v6Lst);
+					profile.setBsfInfo(bsfInfo);
+					break;
+				case "PCF":
+					List<String> dnnList = new ArrayList<String>();
+					dnnList.add("dnn-"+Integer.toHexString((int)(Math.random()*255)));
+					dnnList.add("dnn-"+Integer.toHexString((int)(Math.random()*255)));
+					dnnList.add("dnn-"+Integer.toHexString((int)(Math.random()*255)));
+					List<SupiRange> supiList = new ArrayList<SupiRange>();
+					i = (int)(Math.random()*1000000);
+					supiList.add(new SupiRange(Integer.toString(i), Integer.toString(i+1000), "imsi-"+(int)(i/1000)+".*"));
+					i = (int)(Math.random()*1000000);
+					supiList.add(new SupiRange(Integer.toString(i),"", "nai-"+(int)(i/1000)+".*"));
+					i = (int)(Math.random()*1000000);
+					supiList.add(new SupiRange("", "", "imsi-\\\"+i+\\\"345.*"));
+
+					PcfInfo pcfInfo = new PcfInfo();
+					pcfInfo.setDnnList(dnnList);
+					pcfInfo.setSupiRanges(supiList);
+					profile.setPcfInfo(pcfInfo);
+					break;
+				case "SMF":
+					SmfInfo smfInfo = new SmfInfo();
+					smfInfo.setPgwFqdn("pgw-"+(int)(Math.random()*255)+".cne.oracle.com");
+					List<Tai> sList = new ArrayList<Tai>();
+					Tai tai1 = new Tai();
+                    tai1.setPlmnId(new Plmn(getDigitString(100,999,false), getDigitString(10,99,false)));
+                    tai1.setTac("a234");
+                    sList.add(tai1);
+                    smfInfo.setTaiList(sList);
+                    List<SnssaiSmfInfoItem> sNssaiSmfInfoList = new ArrayList<>();
+                    List<DnnSmfInfoItem> dnnSmfInfoList = new ArrayList<>();
+                    dnnSmfInfoList.add(new DnnSmfInfoItem("dnn-"+Integer.toHexString((int)(Math.random()*255))));
+                    dnnSmfInfoList.add(new DnnSmfInfoItem("dnn-"+Integer.toHexString((int)(Math.random()*255))));
+                    SnssaiSmfInfoItem snssaiSmfInfoItem = new SnssaiSmfInfoItem();
+                    snssaiSmfInfoItem.setDnnSmfInfoList(dnnSmfInfoList);
+                    snssaiSmfInfoItem.setsNssai(new SingleNssai("432023", 2));
+                    sNssaiSmfInfoList.add(snssaiSmfInfoItem);
+                    smfInfo.setsNssaiSmfInfoList(sNssaiSmfInfoList);
+                    List<TaiRange> taiRangeList = new ArrayList<TaiRange>();
+                    TaiRange taiRange = new TaiRange();
+                    taiRange.setPlmnId(new Plmn(getDigitString(100,999,false), getDigitString(10,99,false)));
+                    List<TacRange> tacRangeList = new ArrayList<TacRange>();
+                    TacRange tacRange = new TacRange();
+                    tacRange.setStart("a333");
+                    tacRange.setEnd("b334");
+                    tacRangeList.add(tacRange);
+                    taiRange.setTacRangeList(tacRangeList);
+                    taiRangeList.add(taiRange);
+                    smfInfo.setTaiRangeList(taiRangeList);
+
+					profile.setSmfInfo(smfInfo);
+					break;
+				case "UDM":
+					UdmInfo udmInfo = new UdmInfo();
+       				udmInfo.setGroupId("udm-grp-"+(int)(Math.random()*100));					
+					udmInfo.setRoutingIndicators(routingIndicators);
+
+					List<SupiRange> ulst = new ArrayList<SupiRange>();
+					i = (int)(Math.random()*1000000); 
+					ulst.add(new SupiRange(Integer.toString(i), Integer.toString(i+1000), "imsi-"+(int)(i/1000)+".*"));
+					i = (int)(Math.random()*1000000);
+					ulst.add(new SupiRange(Integer.toString(i), "", "nai-"+(int)(i/1000)+".*"));
+					i = (int)(Math.random()*1000000);
+					ulst.add(new SupiRange(Integer.toString(i), Integer.toString(i+1000), ""));
+					udmInfo.setSupiRanges(ulst);
+					
+					List<IdentityRange> iLst = new ArrayList<IdentityRange>();
+					i = (int)(Math.random()*1000000);
+					iLst.add(new IdentityRange(i+"000", i+"999", i+""));
+					udmInfo.setGpsiRanges(iLst);
+					udmInfo.setExternalGroupIdentifiersRanges(iLst);
+					profile.setUdmInfo(udmInfo);
+					break;
+				case "UDR":
+					UdrInfo udrInfo = new UdrInfo();
+					udrInfo.setGroupId("udr-grp-"+(int)(Math.random()*100));
+					List<SupiRange> splst = new ArrayList<SupiRange>();
+					i = (int)(Math.random()*1000000);
+					splst.add(new SupiRange(Integer.toString(i), Integer.toString(i+1000), ""));
+					i = (int)(Math.random()*1000000);
+					splst.add(new SupiRange(Integer.toString(i),Integer.toString(i+1000), "nai-"+(int)(i/1000)+".*"));
+					i = (int)(Math.random()*1000000);
+					splst.add(new SupiRange(Integer.toString(i), "", "imsi-"+(int)(i/1000)+".*"));
+
+					udrInfo.setSupiRanges(splst);
+					
+					List<IdentityRange> irLst = new ArrayList<IdentityRange>();
+					i = (int)(Math.random()*1000000);
+					irLst.add(new IdentityRange(i+"000", i+"999", i+""));
+					irLst.add(new IdentityRange("", "", i+""));
+					udrInfo.setGpsiRanges(irLst);
+					udrInfo.setExternalGroupIdentifiersRanges(irLst);
+					
+					List<DataSetId> dsLst = new ArrayList<DataSetId>();
+					dsLst.add(DataSetId.APPLICATION);
+					dsLst.add(DataSetId.SUBSCRIPTION);
+					udrInfo.setSupportedDataSets(dsLst);
+					profile.setUdrInfo(udrInfo);
+					break;
+				case "UPF":
+					UpfInfo upfInfo = new UpfInfo();
+					
+					List<SnssaiUpfInfoItem> snssailst = new ArrayList<SnssaiUpfInfoItem>();
+					SnssaiUpfInfoItem item1 = new SnssaiUpfInfoItem();
+					item1.setsNssai(new SingleNssai(Integer.toHexString((int)(Math.random()*256)+16776959), 1));
+					List<DnnUpfInfoItem> dnnlst = new ArrayList<DnnUpfInfoItem>();
+					DnnUpfInfoItem dnn = new DnnUpfInfoItem();
+					dnn.setDnn("dnn1.oracle.com");
+					dnnlst.add(dnn);
+					dnn = new DnnUpfInfoItem();
+					dnn.setDnn("dnn2.oracle.com");
+					dnnlst.add(dnn);
+					item1.setDnnUpfInfoList(dnnlst);
+					snssailst.add(item1);
+					SnssaiUpfInfoItem item2 = new SnssaiUpfInfoItem();
+					item2.setsNssai(new SingleNssai(Integer.toHexString((int)(Math.random()*256)+16776959), 2));
+					List<DnnUpfInfoItem> dLst1 = new ArrayList<DnnUpfInfoItem>();
+					dnn = new DnnUpfInfoItem();
+					dnn.setDnn("dnn1.oracle.com");
+					dLst1.add(dnn);
+					dnn = new DnnUpfInfoItem();
+					dnn.setDnn("dnn2.oracle.com");
+					dLst1.add(dnn);
+					item2.setDnnUpfInfoList(dLst1);
+					snssailst.add(item2);
+					upfInfo.setsNssaiUpfInfoList(snssailst);
+					
+					List<InterfaceUpfInfoItem> iflst = new ArrayList<InterfaceUpfInfoItem>();
+					List<String> ipv4Lst = new ArrayList<String>();
+					ipv4Lst.add("1.1.1.1");
+					ipv4Lst.add("1.2.1.2");
+					
+					List<String> ipv6Lst = new ArrayList<String>();
+					ipv6Lst.add("80ab:4588::000a");
+					ipv6Lst.add("80ab:4588::000b");
+					
+					InterfaceUpfInfoItem ii1 = new InterfaceUpfInfoItem();
+					ii1.setInterfaceType(UPInterfaceType.N3);
+					ii1.setIpv4EndpointAddresses(ipv4Lst);
+					ii1.setNetworkInstance("ni-1");
+					ii1.setEndpointFqdn("ep1.upf.oracle.com");
+					
+					InterfaceUpfInfoItem ii2 = new InterfaceUpfInfoItem();
+					ii2.setInterfaceType(UPInterfaceType.N6);
+					ii2.setIpv6EndpointAddresses(ipv6Lst);
+					ii2.setNetworkInstance("ni-2");
+					ii2.setEndpointFqdn("ep2.upf.oracle.com");
+					
+					iflst.add(ii1);
+					iflst.add(ii2);
+					upfInfo.setInterfaceUpfInfoList(iflst);
+					
+					List<String> saLst = new ArrayList<String>();
+					saLst.add("sa-01");
+					saLst.add("sa-02");
+					upfInfo.setSmfServingArea(saLst);
+				
+					profile.setUpfInfo(upfInfo);
+					break;
+				default:
+			}
+			return profile;
+	}
+
+	private static NfService generateService(String nfType) {
+		NfService svc = new NfService();
+		svc.setServiceInstanceId(UUID.randomUUID().toString());
+		svc.setServiceName("nnrf-nfm");
+		svc.setScheme(UriScheme.HTTP);
+		svc.setNfServiceStatus(NfServiceStatus.REGISTERED);
+		List<NfServiceVersion> aList1 = new ArrayList<NfServiceVersion>();
+		aList1.add(new NfServiceVersion("v1", "1.R15.0.0", new Date()));
+		svc.setVersions(aList1);
+		svc.setSupportedFeatures("80000000");
+		List<String> aList2 = new ArrayList<String>();
+		aList2.add("oracle.com"); aList2.add("att.com");
+		svc.setAllowedNfDomains(aList2);
+		List<String> aList3 = new ArrayList<String>();
+		aList3.add("NRF");aList3.add("AMF");aList3.add("AUSF");aList3.add("BSF");aList3.add("UDM");aList3.add("UDR");aList3.add("PCF"); 
+		svc.setAllowedNfTypes(aList3);
+		List<SingleNssai> aList4 = new ArrayList<SingleNssai>();
+		aList4.add(new SingleNssai(getDigitString(2097151, 16777215,true),(int)(Math.random()*255)));
+		aList4.add(new SingleNssai(getDigitString(2097151, 16777215,true),(int)(Math.random()*255)));
+		aList4.add(new SingleNssai(getDigitString(2097151, 16777215,true),(int)(Math.random()*255)));
+		svc.setAllowedNssais(aList4);
+		List<Plmn> aList5 = new ArrayList<Plmn>();
+		aList5.add(new Plmn(getDigitString(100,999,false), getDigitString(10,99,false)));
+		aList5.add(new Plmn(getDigitString(100,999,false), getDigitString(10,99,false)));
+		aList5.add(new Plmn(getDigitString(100,999,false), getDigitString(10,99,false)));
+		aList5.add(new Plmn(getDigitString(100,999,false), getDigitString(10,99,false)));
+		svc.setAllowedPlmns(aList5);
+		svc.setApiPrefix("");
+		svc.setCapacity(500);
+		Random random = new Random();
+		svc.setPriority(random.nextInt(65536));
+		List<DefaultNotificationSubscription> aList6 = new ArrayList<DefaultNotificationSubscription>();
+		aList6.add(new DefaultNotificationSubscription(NotificationType.LOCATION_NOTIFICATION, URI.create("http://somehost.oracle.com/callback-uri")));
+		aList6.add(new DefaultNotificationSubscription(NotificationType.N1_MESSAGES, URI.create("http://somehost.oracle.com/callback-uri"),N1MessageClass.FIVE_GMM));
+		aList6.add(new DefaultNotificationSubscription(NotificationType.N2_INFORMATION, URI.create("http://somehost.oracle.com/callback-uri"), N2InformationClass.NRPPA));
+		aList6.add(new DefaultNotificationSubscription(NotificationType.DATA_REMOVAL_NOTIFICATION, URI.create("http://somehost.oracle.com/callback-uri")));
+		aList6.add(new DefaultNotificationSubscription(NotificationType.DATA_CHANGE_NOTIFICATION, URI.create("http://somehost.oracle.com/callback-uri")));
+		svc.setDefaultNotificationSubscriptions(aList6);
+		svc.setFqdn(nfType+".d5g.oracle.com");
+		svc.setInterPlmnFqdn(nfType+"-d5g.oracle.com");
+		List<IpEndPoint> aList7 = new ArrayList<IpEndPoint>();
+		IpEndPoint ipEndPoint = new IpEndPoint();
+		ipEndPoint.setIpv4Address("192.168.2.122");
+		ipEndPoint.setTransport("TCP");
+		ipEndPoint.setPort(8005);
+		aList7.add(ipEndPoint);
+		ipEndPoint = new IpEndPoint();
+		ipEndPoint.setIpv6Address("2001:db8:85a3::8a2e:370:7334");
+		ipEndPoint.setTransport("TCP");
+		ipEndPoint.setPort(8005);
+		aList7.add(ipEndPoint);
+		svc.setIpEndPoints(aList7);
+		svc.setLoad(0);
+		ObjectMapper om = new ObjectMapper();
+		Date date = om.convertValue("2018-04-28T23:20:50+00:00", Date.class);
+		svc.setRecoveryTime(date);
+		return svc;
+	}
+	
+	public static NfHeartBeat generateHeartBeatRecord(NFStatus status) throws IOException {
+		NfHeartBeat nfHeartBeat = new NfHeartBeat();
+		
+		nfHeartBeat.setNfInstanceId(UUID.randomUUID().toString());
+		nfHeartBeat.setNfStatus(status);
+		nfHeartBeat.setLoad(50);
+		nfHeartBeat.setLastHbTimeStamp(new Date());
+		nfHeartBeat.setNumHbMissed(0);
+		nfHeartBeat.setHeartBeatTimer(30);
+		if (status == NFStatus.SUSPENDED) {
+			nfHeartBeat.setSuspendedTimestamp(new Date());
+		}
+		else {			
+			nfHeartBeat.setSuspendedTimestamp(0L);
+		}
+		nfHeartBeat.setLastNotifLoad(50);	
+		return nfHeartBeat;		
+	}
+	
+	public static SmfInfo generateSmfInfo() throws IOException {
+		SmfInfo smfInfo = new SmfInfo();
+		smfInfo.setPgwFqdn("pgw-174.cne.oracle.com");
+		List<Tai> sList = new ArrayList<Tai>();
+		Tai tai1 = new Tai();
+        tai1.setPlmnId(new Plmn("611","124"));
+        tai1.setTac("a234");
+        sList.add(tai1);
+		smfInfo.setTaiList(sList);
+		List<String> dLst = new ArrayList<String>();
+		dLst.add("dnn-e0");
+		dLst.add("dnn-e1");
+        List<SnssaiSmfInfoItem> sNssaiSmfInfoList = new ArrayList<>();
+        List<DnnSmfInfoItem> dnnSmfInfoList = new ArrayList<>();
+        dnnSmfInfoList.add(new DnnSmfInfoItem("dnn-e0"));
+        dnnSmfInfoList.add(new DnnSmfInfoItem("dnn-e1"));
+        SnssaiSmfInfoItem snssaiSmfInfoItem = new SnssaiSmfInfoItem();
+        snssaiSmfInfoItem.setDnnSmfInfoList(dnnSmfInfoList);
+        snssaiSmfInfoItem.setsNssai(new SingleNssai("432023", 2));
+        sNssaiSmfInfoList.add(snssaiSmfInfoItem);
+		smfInfo.setsNssaiSmfInfoList(sNssaiSmfInfoList);
+		List<TaiRange> taiRangeList = new ArrayList<TaiRange>();
+        TaiRange taiRange = new TaiRange();
+        taiRange.setPlmnId(new Plmn("612", "125"));
+        List<TacRange> tacRangeList = new ArrayList<TacRange>();
+        TacRange tacRange = new TacRange();
+        tacRange.setStart("a333");
+        tacRange.setEnd("b334");
+        tacRangeList.add(tacRange);
+        taiRange.setTacRangeList(tacRangeList);
+        taiRangeList.add(taiRange);
+        smfInfo.setTaiRangeList(taiRangeList);
+        return smfInfo;
+	}
+	
+	public static SubscriptionData generateSubscriptionDataWithNfInstanceId() {
+		SubscriptionData subscriptionData = new SubscriptionData();
+		subscriptionData.setNfStatusNotificationUri(URI.create("http://abc.def.com/callback"));
+		SubscrCond cond = new SubscrCond();
+		cond.setNfInstanceId(UUID.randomUUID().toString());
+		subscriptionData.setSubscrCond(cond);
+		subscriptionData.setSubscriptionId(UUID.randomUUID().toString().replaceAll("[\\s\\-()]", ""));
+		
+		List<NotificationEventType> evList = new ArrayList<NotificationEventType>();
+		evList.add(NotificationEventType.NF_PROFILE_CHANGED);
+		evList.add(NotificationEventType.NF_DEREGISTERED);
+		subscriptionData.setReqNotifEvents(evList);
+		Calendar c = Calendar.getInstance();
+		c.add(Calendar.DATE, 90);
+		subscriptionData.setValidityTime(c.getTime());
+		return subscriptionData;
+	}
+	
+	public static SubscriptionData generateSubscriptionDataWithNoNfInstanceId() {
+		SubscriptionData subscriptionData = new SubscriptionData();
+		subscriptionData.setNfStatusNotificationUri(URI.create("http://abc.def.com/callback"));
+		List<NotificationEventType> evList = new ArrayList<NotificationEventType>();
+		evList.add(NotificationEventType.NF_REGISTERED);
+		evList.add(NotificationEventType.NF_DEREGISTERED);
+		subscriptionData.setReqNotifEvents(evList);
+		
+		SubscrCond cond = new SubscrCond();
+		cond.setServiceName("some-pcf-service");
+		subscriptionData.setSubscrCond(cond);
+
+		
+
+		Calendar c = Calendar.getInstance();
+		c.add(Calendar.DATE, 90);
+		subscriptionData.setValidityTime(c.getTime());
+		return subscriptionData;
+	}
+	
+	public static NrfSystemOptions generateNrfSystemOptions() {
+		return (NrfSystemOptions) generateNrfSystemOptionsDao().toDomain("v1");
+	}
+	
+	public static NrfEngSystemOptions generateNrfEngSystemOptions() {
+		return (NrfEngSystemOptions) generateNrfEngSystemOptionsDao().toDomain_NrfEngSystemOptions("v1");
+	}
+	
+	public static NrfSystemOptionsDao generateForwardingSystemOptionsDao() {
+		NrfSystemOptionsDao nrfSystemOptionsDao = new NrfSystemOptionsDao();
+		nrfSystemOptionsDao.setRecordOwner("6fbf1bbd-6f4a-4454-a507-b14ef8e1bc6f");
+		nrfSystemOptionsDao.setConfigType("FORWARDING_OPTIONS");
+		ForwardingOptions ForwardingOptions = new ForwardingOptions();
+		List<NfConfig> nfConfigList = new ArrayList<>();
+		NfConfig nfConfig = new NfConfig();
+		nfConfig.setPort(8090);
+		nfConfig.setFqdn("oracle.com");
+		nfConfig.setScheme(UriScheme.HTTPS);
+		nfConfigList.add(nfConfig);
+		ForwardingOptions.setNrfHostConfig(nfConfigList);
+		ForwardingOptions.setAccessTokenForwardingStatus(FeatureStatus.DISABLED);
+		ResponseHttpStatusCodes nrfRerouteOnResponseHttpStatusCodes = new ResponseHttpStatusCodes();
+		nrfRerouteOnResponseHttpStatusCodes.setPattern("^[3,5][0-9]{2}$");
+		ForwardingOptions.setNrfRerouteOnResponseHttpStatusCodes(nrfRerouteOnResponseHttpStatusCodes);
+		List<VersionedJsonDoc> list = new ArrayList<>();
+		VersionedJsonDoc versionJsonDoc = new VersionedJsonDoc();
+		versionJsonDoc.setVersion("v1");
+		versionJsonDoc.setDoc(ForwardingOptions.toString());
+		list.add(versionJsonDoc);
+		VersionedJsonDocList versionJsonDocList = new VersionedJsonDocList();
+		versionJsonDocList.setVersionedJsonDocList(list);
+		nrfSystemOptionsDao.setConfigurationJsonDocList(versionJsonDocList.toString());
+		return nrfSystemOptionsDao;
+	}
+	public static NrfSystemOptionsDao generateGeneralSystemOptionsDao() {
+		NrfSystemOptionsDao nrfSystemOptionsDao = new NrfSystemOptionsDao();
+		nrfSystemOptionsDao.setRecordOwner("6fbf1bbd-6f4a-4454-a507-b14ef8e1bc6f");
+		nrfSystemOptionsDao.setConfigType("FORWARDING_OPTIONS");
+		ForwardingOptions ForwardingOptions = new ForwardingOptions();
+		List<NfConfig> nfConfigList = new ArrayList<>();
+		NfConfig nfConfig = new NfConfig();
+		nfConfig.setPort(8090);
+		nfConfig.setFqdn("oracle.com");
+		nfConfig.setScheme(UriScheme.HTTPS);
+		nfConfigList.add(nfConfig);
+		ForwardingOptions.setNrfHostConfig(nfConfigList);
+		ForwardingOptions.setAccessTokenForwardingStatus(FeatureStatus.DISABLED);
+		ResponseHttpStatusCodes nrfRerouteOnResponseHttpStatusCodes = new ResponseHttpStatusCodes();
+		nrfRerouteOnResponseHttpStatusCodes.setPattern("^[3,5][0-9]{2}$");
+		ForwardingOptions.setNrfRerouteOnResponseHttpStatusCodes(nrfRerouteOnResponseHttpStatusCodes);
+		List<VersionedJsonDoc> list = new ArrayList<>();
+		VersionedJsonDoc versionJsonDoc = new VersionedJsonDoc();
+		versionJsonDoc.setVersion("v1");
+		versionJsonDoc.setDoc(ForwardingOptions.toString());
+		list.add(versionJsonDoc);
+		VersionedJsonDocList versionJsonDocList = new VersionedJsonDocList();
+		versionJsonDocList.setVersionedJsonDocList(list);
+		nrfSystemOptionsDao.setConfigurationJsonDocList(versionJsonDocList.toString());
+		return nrfSystemOptionsDao;
+	}
+	public static NrfSystemOptionsDao generateNrfSystemOptionsDao() {
+		NrfSystemOptionsDao nrfSystemOptionsDao = new NrfSystemOptionsDao();
+		nrfSystemOptionsDao.setRecordOwner("6fbf1bbd-6f4a-4454-a507-b14ef8e1bc6f");
+		nrfSystemOptionsDao.setConfigType("OCNRF_SYSTEM_OPTIONS");
+		NrfSystemOptions systemOptions = new NrfSystemOptions();
+		NfScreeningOptions NfScreeningOptions = new NfScreeningOptions();
+		NfScreeningOptions.setNfScreeningFeatureStatus(NfScreeningFeatureStatus.DISABLED);
+		NfScreeningOptions.setNfScreeningFailureHttpCode(403);
+		systemOptions.setNfScreeningOptions(NfScreeningOptions);
+		List<Plmn> nrfPlmnList = new ArrayList<>();
+		Plmn add = new Plmn("310","14");
+		nrfPlmnList.add(add);
+		GeneralOptions general = new GeneralOptions();
+		general.setNrfPlmnList(nrfPlmnList);
+		general.setEnableF3(true);
+		general.setEnableF5(true);
+		general.setMaximumHopCount(3);
+		systemOptions.setGeneralOptions(general);
+		HeartbeatInfo heartbeatInfo = new HeartbeatInfo();
+		heartbeatInfo.setNfType("ALL_NF_TYPE");
+		heartbeatInfo.setMinHbTimer(Duration.ofSeconds(30));
+		heartbeatInfo.setMaxHbTimer(Duration.ofMinutes(5));
+		heartbeatInfo.setDefaultHbTimer(Duration.ofSeconds(30));
+		heartbeatInfo.setNfHeartbeatMissAllowed(3);
+		List<HeartbeatInfo> nfHeartbeatTimers = new ArrayList<HeartbeatInfo>();
+		nfHeartbeatTimers.add(heartbeatInfo);
+		NfManagementOptions nfManagement = new NfManagementOptions();
+		nfManagement.setNfHeartbeatTimers(nfHeartbeatTimers);
+		nfManagement.setNfNotifyLoadThreshold(5);
+		nfManagement.setNrfSupportForProfileChangesInResponse(true);
+		nfManagement.setSubscriptionValidityDuration(Duration.ofHours(2160));
+		nfManagement.setNrfSupportForProfileChangesInNotification(false);
+		nfManagement.setNfProfileSuspendDuration(Duration.ofHours(168));
+		nfManagement.setAcceptAdditionalAttributes(false);
+		systemOptions.setNfManagementOptions(nfManagement);
+		NfDiscoveryOptions nfDiscover = new NfDiscoveryOptions(); 
+		nfDiscover.setDiscoveryValidityPeriod(Duration.ofSeconds(3600));
+		nfDiscover.setProfilesCountInDiscoveryResponse(8);
+		nfDiscover.setDiscoveryResultLoadThreshold(null);
+		systemOptions.setNfDiscoveryOptions(nfDiscover);
+		NfAccessTokenOptions nfAccessToken = generateNfAccessTokenSystemOptions();
+		systemOptions.setNfAccessTokenOptions(nfAccessToken);
+		LogLevelOptions loggingLevel = new LogLevelOptions(); 
+		loggingLevel.setNfAccessTokenLogLevel("INFO");
+		loggingLevel.setNfDiscoveryLogLevel("INFO");
+		loggingLevel.setNfRegistrationLogLevel("INFO");
+		loggingLevel.setNfSubscriptionLogLevel("INFO");
+		loggingLevel.setNrfAuditorLogLevel("INFO");
+		loggingLevel.setNrfConfigurationLogLevel("INFO");
+		systemOptions.setLogLevelOptions(loggingLevel);
+		nrfSystemOptionsDao.setLastUpdateTimestamp(new Date());
+		SlfOptions SlfOptions =new SlfOptions();
+		List<@NFType String> supportedNfTypeList = new ArrayList<@NFType String> (Arrays.asList("UDR","UDM","PCF","AUSF"));
+		SlfOptions.setSupportedNfTypeList(supportedNfTypeList);
+		SlfOptions.setPreferredSubscriberIdType(SubscriberIdType.SUPI);
+		List<NfConfig> slfHostConfigList=new ArrayList<NfConfig>();
+		NfConfig slfHostConfig =new NfConfig();
+		List<NfServiceVersionConfig> apiVersions =new ArrayList<NfServiceVersionConfig>();
+		NfServiceVersionConfig version =new NfServiceVersionConfig();
+		version.setApiFullVersion("15.5.0");
+		version.setApiVersionInUri("v1");
+		apiVersions.add(version);
+		slfHostConfig.setApiVersions( apiVersions);
+		slfHostConfig.setFqdn("abc");
+		slfHostConfig.setPort(80);
+		slfHostConfig.setPriority(100);
+		slfHostConfig.setScheme(UriScheme.HTTP);
+		slfHostConfigList.add(slfHostConfig);
+		SlfOptions.setSlfHostConfig(slfHostConfigList);
+		ResponseHttpStatusCodes rerouteOnResponseHttpStatusCodes = new ResponseHttpStatusCodes();
+		rerouteOnResponseHttpStatusCodes.setPattern("^[3,5][0-9]{2}$");
+		SlfOptions.setRerouteOnResponseHttpStatusCodes(rerouteOnResponseHttpStatusCodes);
+		systemOptions.setSlfOptions(SlfOptions);
+		ForwardingOptions ForwardingOptions = new ForwardingOptions();
+		List<NfConfig> nfConfigList = new ArrayList<>();
+		NfConfig nfConfig = new NfConfig();
+		nfConfig.setPort(8090);
+		nfConfig.setFqdn("oracle.com");
+		nfConfig.setScheme(UriScheme.HTTPS);
+		nfConfigList.add(nfConfig);
+		ForwardingOptions.setNrfHostConfig(nfConfigList);
+		ForwardingOptions.setAccessTokenForwardingStatus(FeatureStatus.DISABLED);
+		ResponseHttpStatusCodes nrfRerouteOnResponseHttpStatusCodes = new ResponseHttpStatusCodes();
+		nrfRerouteOnResponseHttpStatusCodes.setPattern("^[3,5][0-9]{2}$");
+		ForwardingOptions.setNrfRerouteOnResponseHttpStatusCodes(nrfRerouteOnResponseHttpStatusCodes);
+		systemOptions.setForwardingOptions(ForwardingOptions);
+		GeoRedundancyOptions GeoRedundancyOptions = new GeoRedundancyOptions();
+		GeoRedundancyOptions.setGeoRedundancyFeatureStatus(FeatureStatus.DISABLED);
+		GeoRedundancyOptions.setReplicationLatency(Duration.ofSeconds(5));
+		GeoRedundancyOptions.setMonitorNrfServiceStatusInterval(Duration.ofSeconds(1));
+		GeoRedundancyOptions.setMonitorDBReplicationStatusInterval(Duration.ofSeconds(5));
+		systemOptions.setGeoRedundancyOptions(GeoRedundancyOptions);
+		NfAuthenticationOptions NfAuthenticationOptions = new NfAuthenticationOptions();
+		NfAuthenticationOptions.setNfRegistrationAuthenticationStatus(FeatureStatus.DISABLED);
+		NfAuthenticationOptions.setNfSubscriptionAuthenticationStatus(FeatureStatus.DISABLED);
+		NfAuthenticationOptions.setNfDiscoveryAuthenticationStatus(FeatureStatus.DISABLED);
+		NfAuthenticationOptions.setAccessTokenAuthenticationStatus(FeatureStatus.DISABLED);
+		NfAuthenticationOptions.setNfProfileRetrievalAuthenticationStatus(FeatureStatus.DISABLED);
+		NfAuthenticationOptions.setNfListRetrievalAuthenticationStatus(FeatureStatus.DISABLED);
+		NfAuthenticationOptions.setCheckIfNfIsRegistered(FeatureStatus.DISABLED);
+		ErrorInfo nfAuthenticationErrorResponse = new ErrorInfo();
+		nfAuthenticationErrorResponse.setErrorCondition(ErrorCondition.Nf_Fqdn_Authentication_Failure);
+		nfAuthenticationErrorResponse.setResponseCode(403);
+		nfAuthenticationErrorResponse.setErrorResponse("Failed to authenticate NF using FQDN");
+		nfAuthenticationErrorResponse.setRetryAfter(Duration.ofMinutes(5));
+		List<ErrorInfo> nfAuthenticationErrorInfoList = new ArrayList<ErrorInfo>();
+		nfAuthenticationErrorInfoList.add(nfAuthenticationErrorResponse);
+		NfAuthenticationOptions.setNfAuthenticationErrorResponses(nfAuthenticationErrorInfoList);
+		systemOptions.setNfAuthenticationOptions(NfAuthenticationOptions);
+		List<VersionedJsonDoc> list = new ArrayList<>();
+		VersionedJsonDoc versionJsonDoc = new VersionedJsonDoc();
+		versionJsonDoc.setVersion("v1");
+		versionJsonDoc.setDoc(systemOptions.toString());
+		list.add(versionJsonDoc);
+		VersionedJsonDocList versionJsonDocList = new VersionedJsonDocList();
+		versionJsonDocList.setVersionedJsonDocList(list);
+		nrfSystemOptionsDao.setConfigurationJsonDocList(versionJsonDocList.toString());
+		return nrfSystemOptionsDao;
+	}
+	
+	public static NfAccessTokenOptions generateNfAccessTokenSystemOptions() {
+		NfAccessTokenOptions nfAccessToken = new NfAccessTokenOptions();
+		nfAccessToken.setOauthTokenAlgorithm(OauthTokenAlgorithm.ES256);
+		nfAccessToken.setOauthTokenExpiryTime(Duration.ofSeconds(3600));
+		nfAccessToken.setAuthorizeRequesterNf(AuthorizeRequesterNf.ENABLED);
+		nfAccessToken.setAudienceType(AudienceType.NF_INSTANCE_ID);
+		nfAccessToken.setLogicalOperatorForScope(LogicalOperatorForScope.AND);
+		return nfAccessToken;
+	}
+	
+	public static NrfSystemOptionsDao generateNrfSystemOptionsDao_errorResponses() {
+		NrfSystemOptionsDao nrfSystemOptionsDao = new NrfSystemOptionsDao();
+		nrfSystemOptionsDao.setConfigType("OCNRF_ERROR_RESPONSES");
+		NrfSystemOptions systemOptions = new NrfSystemOptions();
+		ErrorResponses errorResponses =new ErrorResponses();
+		List<ErrorInfo> errorInfoList =new ArrayList<ErrorInfo>();
+		ErrorInfo errorInfo =new ErrorInfo();
+		errorInfo.setErrorCondition(ErrorCondition.SLF_Missing_Mandatory_Parameters);
+		errorInfo.setResponseCode(400);
+		errorInfo.setUseErrorCodeReturned(false);
+		errorInfo.setErrorResponse("Mandatory parameter missing in discovery request for SLF Lookup");
+		errorInfo.setRetryAfter(Duration.ofMinutes(5));
+		errorInfo.setRedirectUrl("");
+		ErrorInfo errorInfo3 =new ErrorInfo();
+		errorInfo3.setUseErrorCodeReturned(false);
+		errorInfo3.setErrorCondition(ErrorCondition.SLF_Subscriber_Not_Provisioned);
+		errorInfo3.setErrorDetectionResultCode("404");
+		errorInfo3.setResponseCode(404);
+		errorInfo3.setErrorResponse("Group Id Not found for SLF");
+		errorInfo3.setRetryAfter(Duration.ofMinutes(5));
+		errorInfo3.setRedirectUrl("");
+		ErrorInfo errorInfo4 =new ErrorInfo();
+		errorInfo4.setErrorCondition(ErrorCondition.SLF_Not_Reachable);
+		errorInfo4.setErrorDetectionResultCode("503");
+		errorInfo4.setResponseCode(504);
+		errorInfo4.setUseErrorCodeReturned(false);
+		errorInfo4.setErrorResponse("SLF not reachable");
+		errorInfo4.setRetryAfter(Duration.ofMinutes(5));
+		errorInfo4.setRedirectUrl("");
+		
+		List<ErrorInfo> nrfForwardingErrorResponses = new ArrayList<ErrorInfo>();
+		ErrorInfo errorInfo5 =new ErrorInfo();
+		errorInfo5.setErrorCondition(ErrorCondition.NRF_Forwarding_Loop_Detection);
+		errorInfo5.setErrorDetectionResultCode("508");
+		errorInfo5.setResponseCode(508);
+		errorInfo5.setUseErrorCodeReturned(false);
+		errorInfo5.setErrorResponse("Loop Detected");
+		errorInfo5.setRetryAfter(Duration.ofMinutes(5));
+		errorInfo5.setRedirectUrl("");
+		ErrorInfo errorInfo7 = new ErrorInfo();
+		errorInfo7.setErrorCondition(ErrorCondition.NRF_Not_Reachable);
+		errorInfo7.setResponseCode(504);
+		errorInfo7.setErrorDetectionResultCode("503");
+		errorInfo7.setErrorResponse("NRF not reachable");
+		errorInfo7.setRetryAfter(Duration.ofMinutes(5));
+		errorInfo7.setRedirectUrl("");
+		
+		errorInfoList.add(errorInfo);	
+		errorInfoList.add(errorInfo3);	
+		errorInfoList.add(errorInfo4);	
+		nrfForwardingErrorResponses.add(errorInfo5);
+		nrfForwardingErrorResponses.add(errorInfo7);				
+			    
+		/*List<ErrorInfo> generalErrorInfoList= new ArrayList<ErrorInfo>();
+		ErrorInfo generalErrorInfo = new ErrorInfo();
+		generalErrorInfo.setErrorCondition("Service_Unavailable");
+		generalErrorInfo.setErrorCode(503);
+		generalErrorInfoList.add(generalErrorInfo);
+		generalErrorInfo = new ErrorInfo();
+		generalErrorInfo.setErrorCondition("Service_Degraded_Or_Congested");
+		generalErrorInfo.setErrorCode(503);
+		generalErrorInfoList.add(generalErrorInfo);
+		generalErrorInfo = new ErrorInfo();
+		generalErrorInfo.setErrorCondition("Service_Internal_Error");
+		generalErrorInfo.setErrorCode(503);
+		generalErrorInfoList.add(generalErrorInfo);
+		generalErrorInfo = new ErrorInfo();
+		generalErrorInfo.setErrorCondition("Exception_In_Service_Request_Processing");
+		generalErrorInfo.setErrorCode(503);
+		generalErrorInfoList.add(generalErrorInfo);
+		generalErrorInfo = new ErrorInfo();
+		generalErrorInfo.setErrorCondition("Network_Error");
+		generalErrorInfo.setErrorCode(503);
+		generalErrorInfoList.add(generalErrorInfo);
+		errorResponses.setGeneralErrorResponses(generalErrorInfoList);
+		*/
+		errorResponses.setSlfErrorResponses(errorInfoList);
+		errorResponses.setNrfForwardingErrorResponses(nrfForwardingErrorResponses);
+		systemOptions.setErrorResponses(errorResponses);
+		
+		List<VersionedJsonDoc> list = new ArrayList<>();
+		VersionedJsonDoc versionJsonDoc = new VersionedJsonDoc();
+		versionJsonDoc.setVersion("v1");
+		versionJsonDoc.setDoc(systemOptions.toString());
+		list.add(versionJsonDoc);
+		VersionedJsonDocList versionJsonDocList = new VersionedJsonDocList();
+		versionJsonDocList.setVersionedJsonDocList(list);
+		nrfSystemOptionsDao.setConfigurationJsonDocList(versionJsonDocList.toString());
+
+		return nrfSystemOptionsDao;
+	}
+	
+	public static NrfSystemOptionsDao generateNrfSystemOptionsDao_engErrorResponses() {
+		NrfSystemOptionsDao nrfSystemOptionsDao = new NrfSystemOptionsDao();
+		nrfSystemOptionsDao.setConfigType("OCNRF_ENG_ERROR_RESPONSES");
+		NrfEngSystemOptions engSystemOptions = new NrfEngSystemOptions();
+		ErrorResponses errorResponses =new ErrorResponses();
+		List<ErrorInfo> errorInfoList =new ArrayList<ErrorInfo>();
+		ErrorInfo errorInfo =new ErrorInfo();
+		errorInfo.setErrorCondition(ErrorCondition.SLF_3xx_responses);
+		errorInfo.setErrorDetectionResultCode("3xx");
+		errorInfo.setResponseCode(504);
+		errorInfo.setUseErrorCodeReturned(true);
+		errorInfo.setErrorResponse("Received 3xx responses from SLF");
+		errorInfo.setRetryAfter(Duration.ofMinutes(5));
+		errorInfo.setRedirectUrl("");
+		ErrorInfo errorInfo2 =new ErrorInfo();
+		errorInfo2.setErrorCondition(ErrorCondition.SLF_4xx_responses);
+		errorInfo2.setErrorDetectionResultCode("4xx");
+		errorInfo2.setResponseCode(500);
+		errorInfo2.setErrorResponse("Received 4xx responses from SLF");
+		errorInfo2.setUseErrorCodeReturned(true);
+		errorInfo2.setRetryAfter(Duration.ofMinutes(5));
+		errorInfo2.setRedirectUrl("");
+		ErrorInfo errorInfo3 =new ErrorInfo();
+		errorInfo3.setErrorCondition(ErrorCondition.SLF_5xx_responses);
+		errorInfo3.setErrorDetectionResultCode("5xx");
+		errorInfo3.setResponseCode(503);
+		errorInfo3.setUseErrorCodeReturned(false);
+		errorInfo3.setErrorResponse("Received 5xx responses from SLF");
+		errorInfo3.setRetryAfter(Duration.ofMinutes(5));
+		errorInfo3.setRedirectUrl("");
+		ErrorInfo errorInfo4 =new ErrorInfo();
+		errorInfo4.setErrorCondition(ErrorCondition.Egress_Gateway_Error);
+		errorInfo4.setResponseCode(500);
+		errorInfo4.setUseErrorCodeReturned(false);
+		errorInfo4.setErrorResponse("NRF Internal Error");
+		errorInfo4.setRetryAfter(Duration.ofMinutes(5));
+		errorInfo4.setRedirectUrl("");
+		errorInfoList.add(errorInfo);	
+		errorInfoList.add(errorInfo2);	
+		errorInfoList.add(errorInfo3);
+		errorInfoList.add(errorInfo4);
+		errorResponses.setSlfErrorResponses(errorInfoList);
+		engSystemOptions.setErrorResponses(errorResponses);
+		List<VersionedJsonDoc> list = new ArrayList<>();
+		VersionedJsonDoc versionJsonDoc = new VersionedJsonDoc();
+		versionJsonDoc.setVersion("v1");
+		versionJsonDoc.setDoc(engSystemOptions.toString());
+		list.add(versionJsonDoc);
+		VersionedJsonDocList versionJsonDocList = new VersionedJsonDocList();
+		versionJsonDocList.setVersionedJsonDocList(list);
+		nrfSystemOptionsDao.setConfigurationJsonDocList(versionJsonDocList.toString());
+		return nrfSystemOptionsDao;
+	}
+
+	
+	public static NrfSystemOptionsDao generateNrfEngSystemOptionsDao() {
+		NrfSystemOptionsDao nrfSystemOptionsDao = new NrfSystemOptionsDao();
+		NfRegistrationEngSystemOptions nfRegistrationEngSystemOptions = new NfRegistrationEngSystemOptions();
+		nfRegistrationEngSystemOptions.setMaxRetriesToPeer((short) 3);
+		nfRegistrationEngSystemOptions.setRetryInterval(Duration.ofMillis(2));
+		ArrayList<String> retryOnErrorList = new ArrayList<String>() { 
+            { 
+                add("UnknownHostException"); 
+                add("SocketTimeoutException"); 
+                add("NoRouteToHostException"); 
+            } 
+        }; 
+		nfRegistrationEngSystemOptions.setRetryOnErrorList(retryOnErrorList);
+		nfRegistrationEngSystemOptions.setHttpClientPingInterval(Duration.ofSeconds(60));
+		
+		
+		NfSubscriptionEngSystemOptions nfSubscriptionEngSystemOptions = new NfSubscriptionEngSystemOptions();
+		nfSubscriptionEngSystemOptions.setSubscriptionValidityDurationMaxValue(Duration.ofHours(4320));
+		nfSubscriptionEngSystemOptions.setSubscriptionValidityDurationMinValue(Duration.ofHours(1));
+		nfSubscriptionEngSystemOptions.setMaxRetriesToPeer(1);
+		nfSubscriptionEngSystemOptions.setHttpClientPingInterval(Duration.ofSeconds(60));
+		
+		NfDiscoveryEngSystemOptions nfDiscoveryEngSystemOptions = new NfDiscoveryEngSystemOptions();
+		nfDiscoveryEngSystemOptions.setProfilesCountInDiscoveryResponseMaxValue(20);
+		nfDiscoveryEngSystemOptions.setProfilesCountInDiscoveryResponseMinValue(0);
+		nfDiscoveryEngSystemOptions.setResultLoadThresholdMaxValue(100);
+		nfDiscoveryEngSystemOptions.setResultLoadThresholdMinValue(0);
+		nfDiscoveryEngSystemOptions.setValidityPeriodMaxValue(Duration.ofSeconds(604800));
+		nfDiscoveryEngSystemOptions.setValidityPeriodMinValue(Duration.ofSeconds(1));
+		nfDiscoveryEngSystemOptions.setMaxRetriesToPeer(2);
+		nfDiscoveryEngSystemOptions.setHttpClientPingInterval(Duration.ofSeconds(60));
+		
+		NfAccessTokenEngSystemOptions nfAccessTokenEngSystemOptions = new NfAccessTokenEngSystemOptions();
+		nfAccessTokenEngSystemOptions.setTokenExpiryTimeMaxRange(Duration.ofSeconds(604800));
+		nfAccessTokenEngSystemOptions.setTokenExpiryTimeMinRange(Duration.ofSeconds(1));
+		nfAccessTokenEngSystemOptions.setHttpClientPingInterval(Duration.ofSeconds(60));
+		
+		NrfAuditorEngSystemOptions nrfAuditorEngSystemOptions = new NrfAuditorEngSystemOptions();
+		nrfAuditorEngSystemOptions.setMaxRetriesToPeer((short) 3);
+		nrfAuditorEngSystemOptions.setRetryInterval(Duration.ofMillis(2));
+		nrfAuditorEngSystemOptions.setRetryOnErrorList(retryOnErrorList);
+		nrfAuditorEngSystemOptions.setHttpClientPingInterval(Duration.ofSeconds(60));
+		
+		GeneralEngSystemOptions generalEngSystemOptions = new GeneralEngSystemOptions();
+		generalEngSystemOptions.setNfNotifyLoadThresholdMaxValue(99);
+		generalEngSystemOptions.setNfNotifyLoadThresholdMinValue(0);
+		generalEngSystemOptions.setNfHeartBeatMissAllowedMaxValue(15);
+		generalEngSystemOptions.setNfHeartBeatMissAllowedMinValue(0);
+		generalEngSystemOptions.setMaximumHopCountRangeMinValue(1);
+		generalEngSystemOptions.setMaximumHopCountRangeMaxValue(5);
+		generalEngSystemOptions.setMaxEventRetentionTime(Duration.ofHours(240));
+		generalEngSystemOptions.setRetryAfterMinValue(Duration.ofSeconds(60));
+		generalEngSystemOptions.setRetryAfterMaxValue(Duration.ofHours(1));
+		List<String> retryAfterErrorCodes = new ArrayList<>(List.of("3xx","413","429","503"));
+		generalEngSystemOptions.setRetryAfterErrorCodes(retryAfterErrorCodes);
+		List<String> redirectURLErrorCodes = new ArrayList<>(List.of("3xx"));
+		generalEngSystemOptions.setRedirectUrlErrorCodes(redirectURLErrorCodes);
+		generalEngSystemOptions.setDbSchemaFetchInterval(Duration.ofSeconds(1));
+		
+		GeoRedundancyEngSystemOptions geoRedundancyEngSystemOptions = new GeoRedundancyEngSystemOptions();
+		geoRedundancyEngSystemOptions.setReplicationLatencyMinValue(Duration.ofSeconds(1));
+		geoRedundancyEngSystemOptions.setReplicationLatencyMaxValue(Duration.ofSeconds(600));
+		geoRedundancyEngSystemOptions.setMonitorNrfServiceStatusIntervalMinValue(Duration.ofSeconds(1));
+		geoRedundancyEngSystemOptions.setMonitorNrfServiceStatusIntervalMaxValue(Duration.ofSeconds(10));
+		geoRedundancyEngSystemOptions.setMonitorDBReplicationStatusIntervalMinValue(Duration.ofSeconds(1));
+		geoRedundancyEngSystemOptions.setMonitorDBReplicationStatusIntervalMaxValue(Duration.ofSeconds(10));
+		
+		NfManagementEngSystemOptions nfManagementEngSystemOptions = new NfManagementEngSystemOptions();
+		TimeRange timeRange = new TimeRange();
+		timeRange.setMinValue(Duration.ofSeconds(10));
+		timeRange.setMaxValue(Duration.ofHours(24));
+		nfManagementEngSystemOptions.setMaxAllowedHbRange(timeRange);
+		nfManagementEngSystemOptions.setMinAllowedHbRange(timeRange);
+		
+		NrfEngSystemOptions nrfRestEngSystemOptions = new NrfEngSystemOptions();
+		nrfRestEngSystemOptions.setGeneralEngSystemOptions(generalEngSystemOptions);
+		nrfRestEngSystemOptions.setNfAccessTokenEngSystemOptions(nfAccessTokenEngSystemOptions);
+		nrfRestEngSystemOptions.setNfDiscoveryEngSystemOptions(nfDiscoveryEngSystemOptions);
+		nrfRestEngSystemOptions.setNfRegistrationEngSystemOptions(nfRegistrationEngSystemOptions);
+		nrfRestEngSystemOptions.setNfSubscriptionEngSystemOptions(nfSubscriptionEngSystemOptions);
+		nrfRestEngSystemOptions.setNrfAuditorEngSystemOptions(nrfAuditorEngSystemOptions);
+		nrfRestEngSystemOptions.setGeoRedundancyEngSystemOptions(geoRedundancyEngSystemOptions);
+		nrfRestEngSystemOptions.setNfManagementEngSystemOptions(nfManagementEngSystemOptions);
+		nrfSystemOptionsDao.setConfigType("OCNRF_ENG_SYSTEM_OPTIONS");
+		nrfSystemOptionsDao.setRecordOwner("6fbf1bbd-6f4a-4454-a507-b14ef8e1bc6f");
+		List<VersionedJsonDoc> list = new ArrayList<>();
+		VersionedJsonDoc versionJsonDoc = new VersionedJsonDoc();
+		versionJsonDoc.setVersion("v1");
+		versionJsonDoc.setDoc(nrfRestEngSystemOptions.toString());
+		list.add(versionJsonDoc);
+		VersionedJsonDocList versionJsonDocList = new VersionedJsonDocList();
+		versionJsonDocList.setVersionedJsonDocList(list);
+		nrfSystemOptionsDao.setConfigurationJsonDocList(versionJsonDocList.toString());
+		return nrfSystemOptionsDao;
+	}
+	
+	public static Iterable<SiteJsonSchemaVersionInfo> generateSiteJsonSchemaVersionInfoList() {
+		var siteJsonSchemaVersionInfoList = new ArrayList<SiteJsonSchemaVersionInfo>();
+		var tableNames = Arrays.asList("NfInstances", "NfStatusMonitor","NrfEventTransactions",
+										"NfScreening", "NrfSystemOptions", "NfSubscriptions");
+		for(String tableName:tableNames) {
+			SiteJsonSchemaVersionInfo siteJsonSchemaVersionInfo = new SiteJsonSchemaVersionInfo();
+			siteJsonSchemaVersionInfo.setSiteId("6fbf1bbd-6f4a-4454-a507-b14ef8e1bc6f");
+			siteJsonSchemaVersionInfo.setTableName(tableName);
+			siteJsonSchemaVersionInfo.setVersion("v2");
+			siteJsonSchemaVersionInfoList.add(siteJsonSchemaVersionInfo);
+		}
+		for(String tableName:tableNames) {
+			SiteJsonSchemaVersionInfo siteJsonSchemaVersionInfo = new SiteJsonSchemaVersionInfo();
+			siteJsonSchemaVersionInfo.setSiteId("Network");
+			siteJsonSchemaVersionInfo.setTableName(tableName);
+			siteJsonSchemaVersionInfo.setVersion("v1");
+			siteJsonSchemaVersionInfoList.add(siteJsonSchemaVersionInfo);
+		}
+		return siteJsonSchemaVersionInfoList;
+	}
+}
